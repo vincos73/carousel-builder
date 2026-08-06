@@ -2,11 +2,9 @@
   <img src="assets/icon.svg" width="80" alt="Icona Carousel Builder">
 </p>
 
-# Carousel Builder
+# Carousel Builder by Vincos
 
-Skill per ChatGPT e Claude che trasforma URL, articoli, newsletter, note e testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social.
-
-La versione **1.7.0** è disponibile per il test pubblico.
+Skill pubblica e portabile per trasformare URL, articoli, newsletter, note e testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social.
 
 ## Cosa fa
 
@@ -27,15 +25,11 @@ La versione **1.7.0** è disponibile per il test pubblico.
 5. **Produzione**: sequenza completa soltanto dopo la seconda approvazione.
 6. **Controllo finale**: verifica di tutti gli artefatti prodotti.
 
-## Modalità editoriali
+## Compatibilità
 
-### Narrativa
+Questa build non presume la presenza di Canvas, di un server locale o di un editor HTML interattivo. Se l'ambiente non offre una superficie di revisione, l'approvazione avviene direttamente nella conversazione.
 
-Per articoli e contenuti che sviluppano un'unica tesi. Le slide interne non hanno titoli, numerazioni o etichette tecniche. La sequenza costruisce un flusso continuo.
-
-### Sezionale
-
-Per newsletter, raccolte e contenuti composti da sezioni autonome. Ogni slide può avere un titolo quando deve essere comprensibile anche isolata.
+Per il flusso Codex con editor HTML locale, approvazioni automatiche e gestione degli artefatti, usa la [Carousel Builder Agent Edition](https://github.com/vincos73/carousel-builder-agent).
 
 ## Sistema visivo
 
@@ -46,56 +40,26 @@ Per newsletter, raccolte e contenuti composti da sezioni autonome. Ogni slide pu
 - visuale generato in copertina, con slide interne pulite per impostazione predefinita;
 - font e pesi derivati dal profilo approvato, senza imporre un carattere fisso.
 
-## Installazione dalla Release
+## Installazione
 
-1. Scarica `carousel-builder-1.7.0.zip` dalla sezione **Releases**.
-2. Estrai l'archivio mantenendo la cartella principale `carousel-builder`.
-3. Copia la cartella in:
-
-   ```text
-   ~/.codex/skills/carousel-builder
-   ```
-
-4. Apri una nuova attività in Codex e richiama la skill con `$carousel-builder`.
-
-Il file deve risultare disponibile in:
-
-```text
-~/.codex/skills/carousel-builder/SKILL.md
-```
-
-## Installazione con Git
+Per installare la build pubblica come skill `carousel-builder`:
 
 ```bash
 git clone https://github.com/vincos73/carousel-builder.git ~/.codex/skills/carousel-builder
 ```
 
-## Esempi
+Poi invoca `$carousel-builder`.
 
-```text
-$carousel-builder Trasforma questo articolo in un carosello: https://example.com/articolo
-```
+In alternativa, scarica una release dalla sezione **Releases** e copia la cartella nella directory delle skill.
 
-```text
-$carousel-builder Crea un carosello a partire da queste note e guidami nella configurazione del brand.
-```
+## Modalità editoriali
 
-```text
-$carousel-builder Usa il profilo JSON allegato e prepara prima l'anteprima dei testi.
-```
-
-## Principi
-
-- La fonte editoriale e il brand sono input separati.
-- Il brand non viene ricavato dalla memoria o dall'identità personale dell'utente.
-- I testi vengono approvati prima della prova visuale.
-- Il rendering completo richiede una seconda approvazione.
-- Il testo non viene ridotto oltre l'8% per forzarlo dentro una slide.
-- Logo, sito, firma e font non vengono inventati o sostituiti in modo invisibile.
+- **Narrativa**: per una tesi sviluppata in passaggi dipendenti.
+- **Sezionale**: per raccolte e contenuti composti da sezioni autonome.
 
 ## Feedback
 
-Questa release è destinata al test. Per segnalare problemi o proporre miglioramenti, apri una Issue indicando:
+Per segnalare problemi o proporre miglioramenti, apri una Issue indicando:
 
 - tipo di fonte utilizzata;
 - modalità narrativa o sezionale;
@@ -110,4 +74,3 @@ Da definire.
 ## Autore
 
 [Vincenzo Cosenza](https://github.com/vincos73)
-
