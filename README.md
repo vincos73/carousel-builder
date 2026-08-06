@@ -4,7 +4,7 @@
 
 # Carousel Builder
 
-Skill per Codex che trasforma URL, articoli, newsletter, note e testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social.
+Skill per ChatGPT e Claude che trasforma URL, articoli, newsletter, note e testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social.
 
 La versione **1.7.0** è disponibile per il test pubblico.
 
