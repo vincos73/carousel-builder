@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "carousel-builder",
+  "version": "1.7.0",
+  "description": "Trasforma fonti editoriali in caroselli 4:5 per social media.",
+  "author": {
+    "name": "Vincenzo Cosenza",
+    "url": "https://github.com/vincos73"
+  },
+  "homepage": "https://github.com/vincos73/carousel-builder",
+  "repository": "https://github.com/vincos73/carousel-builder",
+  "keywords": ["carousel", "editorial", "social-media", "italian"]
+}

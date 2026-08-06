@@ -1,0 +1,14 @@
+interface:
+  display_name: "Carousel Builder by Vincos"
+  short_description: "Caroselli 4:5 narrativi o sezionali con brand configurabile"
+  default_prompt: "Usa $carousel-builder per trasformare questo contenuto in un carosello e guidarmi nella scelta o nel riuso del profilo visivo."
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+  brand_color: '#FEBD08'
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
