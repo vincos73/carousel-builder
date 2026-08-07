@@ -64,7 +64,7 @@ La scelta dipende dalle capacità effettivamente rilevate, non dal nome del prod
 
 ## Installazione locale
 
-Questa procedura serve soltanto per installare la skill nella directory locale di Codex:
+Questa procedura serve soltanto per installare la skill nella directory locale di Codex. Apri il terminale e scrivi:
 
 ```bash
 curl -L https://github.com/vincos73/carousel-builder/archive/refs/heads/main.zip -o carousel-builder.zip
