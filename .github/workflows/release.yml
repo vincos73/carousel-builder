@@ -12,7 +12,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Determina il tag da pubblicare
         id: version
@@ -59,4 +59,4 @@ jobs:
               dist/carousel-builder.zip \
               dist/carousel-builder-agent-plugin.zip
           fi
-          gh release view "$TAG" --json tagName,isLatest,assets
+          gh release view "$TAG"
