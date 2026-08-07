@@ -1,0 +1,44 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: La versione dichiarata deve coincidere con il tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          skill_version=$(grep -oP '(?<=^Versione: \*\*)[^*]+' SKILL.md)
+          plugin_version=$(python3 -c "import json;print(json.load(open('agent-plugin/plugin.json'))['version'])")
+          echo "tag=$tag SKILL.md=$skill_version plugin.json=$plugin_version"
+          test "$tag" = "$skill_version"
+          test "$tag" = "$plugin_version"
+
+      - name: Costruisci il pacchetto della skill
+        run: |
+          mkdir -p dist/carousel-builder
+          tar --exclude=./agent-plugin --exclude=./tests --exclude=./.github \
+              --exclude=./.git --exclude=./.gitignore --exclude=./dist \
+              -cf - . | tar -xf - -C dist/carousel-builder
+          (cd dist && zip -qr carousel-builder.zip carousel-builder)
+          (cd agent-plugin && zip -qr ../dist/carousel-builder-agent-plugin.zip .)
+          unzip -l dist/carousel-builder.zip | tail -1
+
+      - name: Pubblica la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Carousel Builder ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            --latest \
+            dist/carousel-builder.zip \
+            dist/carousel-builder-agent-plugin.zip

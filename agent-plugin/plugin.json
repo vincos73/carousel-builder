@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "carousel-builder",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Crea caroselli editoriali 4:5 con editor locale quando disponibile e fallback conversazionale.",
   "author": {
     "name": "Vincenzo Cosenza",
@@ -9,5 +9,10 @@
   },
   "homepage": "https://github.com/vincos73/carousel-builder",
   "repository": "https://github.com/vincos73/carousel-builder",
-  "keywords": ["carousel", "editorial", "social-media", "italian"]
+  "keywords": [
+    "carousel",
+    "editorial",
+    "social-media",
+    "italian"
+  ]
 }
