@@ -353,11 +353,12 @@ input:focus {
   top: 118px;
   display: flex;
   aspect-ratio: 4 / 5;
+  container-type: inline-size;
   min-height: 280px;
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  padding: clamp(26px, 4vw, 56px);
+  padding: clamp(26px, 10cqw, 56px);
   border-radius: 16px;
   color: var(--preview-text, #fff);
   background: var(--preview-bg, #172033);
@@ -386,13 +387,13 @@ input:focus {
 }
 
 .preview-title {
-  font-size: clamp(24px, 3vw, 48px);
+  font-size: clamp(24px, 10.4cqw, 48px);
   line-height: 0.98;
   letter-spacing: -0.045em;
 }
 
 .preview-summary {
-  font-size: clamp(18px, 2.15vw, 33px);
+  font-size: clamp(18px, 5.95cqw, 33px);
   font-weight: 620;
   line-height: 1.12;
   letter-spacing: -0.025em;
