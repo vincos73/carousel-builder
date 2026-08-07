@@ -1,7 +1,7 @@
 interface:
   display_name: "Carousel Builder by Vincos"
-  short_description: "Caroselli 4:5 narrativi o sezionali con brand configurabile"
-  default_prompt: "Usa $carousel-builder per trasformare questo contenuto in un carosello e guidarmi nella scelta o nel riuso del profilo visivo."
+  short_description: "Caroselli adattivi con editor locale quando disponibile"
+  default_prompt: "Usa $carousel-builder per trasformare questo contenuto in un carosello, guidarmi nella scelta del profilo visivo e farmi revisionare i testi nell'editor locale quando disponibile."
   icon_small: "./assets/icon.svg"
   icon_large: "./assets/icon.svg"
   brand_color: '#FEBD08'

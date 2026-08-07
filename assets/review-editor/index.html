@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Carousel Builder Editor</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">CAROUSEL BUILDER</p>
+        <h1>Revisione editoriale</h1>
+      </div>
+      <div class="topbar-meta">
+        <span id="workflow-badge" class="badge">Caricamento</span>
+        <span id="revision-label" class="meta-label"></span>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section id="loading" class="loading" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Sto preparando le slide.</p>
+      </section>
+
+      <section id="editor" class="editor hidden">
+        <aside class="sidebar">
+          <section class="panel brand-panel">
+            <p class="panel-kicker">PROFILO</p>
+            <h2 id="brand-name">Profilo del carosello</h2>
+            <dl id="brand-details" class="brand-details"></dl>
+            <div id="palette" class="palette" aria-label="Palette del profilo"></div>
+            <label class="field-label" for="brand-note">Commento sul profilo</label>
+            <textarea id="brand-note" rows="3" placeholder="Per esempio: usa un fondo più chiaro"></textarea>
+          </section>
+
+          <section class="panel guidance-panel">
+            <p class="panel-kicker">COME REVISIONARE</p>
+            <ol>
+              <li>Correggi direttamente i testi.</li>
+              <li>Seleziona una frase per commentarla.</li>
+              <li>Sposta o elimina le slide interne.</li>
+              <li>Invia tutto insieme oppure approva.</li>
+            </ol>
+          </section>
+
+          <section class="panel comments-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="panel-kicker">COMMENTI</p>
+                <h2>Selezioni annotate</h2>
+              </div>
+              <span id="comment-count" class="count">0</span>
+            </div>
+            <div id="comments-list" class="comments-list">
+              <p class="empty-state">Nessun commento su una selezione.</p>
+            </div>
+          </section>
+        </aside>
+
+        <div class="content">
+          <div class="content-header">
+            <div>
+              <p id="sequence-label" class="panel-kicker"></p>
+              <h2 id="slide-count">Slide</h2>
+            </div>
+            <p class="content-help">Le anteprime sono indicative e servono a leggere ritmo e densità.</p>
+          </div>
+          <div id="slides" class="slides"></div>
+
+          <section class="panel overall-panel">
+            <label class="field-label" for="overall-note">Nota generale</label>
+            <textarea id="overall-note" rows="4" placeholder="Un'osservazione sull'intera sequenza"></textarea>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <footer id="actionbar" class="actionbar hidden">
+      <div class="change-summary">
+        <span id="dirty-dot" class="dirty-dot" aria-hidden="true"></span>
+        <span id="change-label">Nessuna modifica</span>
+      </div>
+      <div class="actions">
+        <button id="reset-button" class="button button-ghost" type="button">Ripristina</button>
+        <button id="send-button" class="button button-secondary" type="button">Invia correzioni</button>
+        <button id="approve-button" class="button button-primary" type="button">Approva profilo e testi</button>
+      </div>
+    </footer>
+
+    <dialog id="comment-dialog" class="comment-dialog">
+      <form method="dialog">
+        <p class="panel-kicker">COMMENTA LA SELEZIONE</p>
+        <blockquote id="comment-quote"></blockquote>
+        <label class="field-label" for="comment-feedback">Che cosa vuoi cambiare?</label>
+        <textarea id="comment-feedback" rows="4" required></textarea>
+        <div class="dialog-actions">
+          <button class="button button-ghost" value="cancel">Annulla</button>
+          <button id="save-comment" class="button button-primary" value="default">Aggiungi commento</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="approval-dialog" class="comment-dialog">
+      <form method="dialog">
+        <p class="panel-kicker">RICHIESTA DI APPROVAZIONE</p>
+        <h2>Confermi profilo e testi?</h2>
+        <p class="dialog-copy">Le modifiche e i commenti saranno inviati insieme. L’agente eseguirà ancora i controlli editoriali prima di avanzare lo stato.</p>
+        <div class="dialog-actions">
+          <button class="button button-ghost" value="cancel">Torna alla revisione</button>
+          <button id="confirm-approval" class="button button-primary" type="button">Conferma approvazione</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

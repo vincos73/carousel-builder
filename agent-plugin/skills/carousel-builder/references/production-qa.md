@@ -96,6 +96,7 @@ Verificare:
 - testi tagliati, sovrapposti o troppo vicini ai bordi;
 - contrasto tra testo e sfondo;
 - logo corretto per il fondo oppure firma testuale prevista;
+- numerazione progressiva delle pagine nell'angolo superiore destro di ogni card, inclusi copertina e chiusura, dentro la safe area e senza interferire con testo, logo o visuale;
 - coerenza dell'alternanza cromatica;
 - enfasi serif e accenti cromatici approvati;
 - illustrazioni che non interferiscano con la lettura;

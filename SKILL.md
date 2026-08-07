@@ -1,15 +1,15 @@
 ---
 name: carousel-builder
-description: Trasforma URL, articoli, newsletter, note e testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social. Usare per ideare, sintetizzare, impaginare, modificare o rigenerare carousel e social card; configurare o riutilizzare un'identità visiva tramite sito, brand kit, indicazioni manuali, profilo JSON o brand pack; revisionare i testi prima della produzione; creare PNG, PDF o layout dettagliati in base agli strumenti disponibili.
+description: Trasforma URL, articoli, newsletter, note e testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social. Configura o riutilizza un'identità visiva, guida l'approvazione editoriale, usa un editor HTML locale quando la sessione supporta Python, browser locale e ricezione degli eventi, e passa automaticamente alla revisione conversazionale negli altri ambienti.
 ---
 
 # Carousel Builder
 
-Versione: **1.7.0**
+Versione: **2.0.0**
 
-Creare caroselli editoriali separando fonte, profilo visivo, approvazione dei testi e produzione grafica.
+Creare caroselli editoriali separando fonte, profilo visivo, revisione editoriale, approvazione dei testi e produzione grafica. Adattare la superficie di revisione alle capacità effettive della sessione, mantenendo invariati metodo editoriale e checkpoint.
 
-Usare soltanto strumenti già disponibili nella sessione. Non installare pacchetti, non scaricare browser, font o dipendenze e non eseguire script inclusi nella skill. Recuperare risorse esterne soltanto quando l'utente fornisce o approva esplicitamente la fonte e lo strumento lo consente.
+Usare soltanto strumenti già disponibili nella sessione. Non installare pacchetti e non scaricare browser, font o dipendenze. Nel percorso locale eseguire esclusivamente `scripts/review_server.py` e `scripts/apply_review.py`, inclusi e verificati nella skill. Non eseguire altri script della skill. Recuperare risorse esterne soltanto quando l'utente fornisce o approva esplicitamente la fonte e lo strumento lo consente.
 
 Non incorporare identità, logo, URL, firma o attribuzioni della skill nei caroselli senza approvazione esplicita. Non ricavare il brand dalla fonte, dalla memoria o dal profilo personale dell'utente.
 
@@ -17,11 +17,21 @@ Richiedere due approvazioni distinte prima del rendering completo: prima profilo
 
 Gestire il lavoro con questi stati: `bozza` → `testi_approvati` → `prova_visuale_approvata` → `rendering` → `qa` → `consegnato`. Non avanzare di stato senza il relativo via libera o senza aver completato il controllo previsto.
 
+## Selezione del percorso di revisione
+
+Adattarsi alle capacità effettivamente disponibili, non al solo nome del prodotto o a un'ipotesi sull'ambiente:
+
+1. Usare `local-editor` soltanto quando è possibile eseguire Python 3, aprire un indirizzo `127.0.0.1` nel browser dell'utente e ricevere il batch dal server locale.
+2. Usare `conversation` quando Python, browser locale o ricezione del batch non sono disponibili. Mostrare normali sezioni Markdown modificabili attraverso la chat, senza code fence, blocchi monospazio o HTML stampato come testo.
+
+Se l'ambiente espone esplicitamente le proprie capacità, usarle. Altrimenti verificare prima le capacità necessarie con controlli non invasivi. Non dichiarare disponibile un editor finché non è stato effettivamente aperto.
+
 ## Fase 0: preflight e orientamento
 
 1. Leggere [references/production-qa.md](references/production-qa.md) e determinare quali risultati sono realisticamente producibili nella sessione: immagini di copertina, card con tipografia controllata, PNG, PDF o solo layout dettagliato.
 2. Descrivere i risultati previsti in una frase, senza esporre nomi tecnici degli strumenti.
 3. Leggere [references/brand-onboarding.md](references/brand-onboarding.md). Se la richiesta è incompleta, mostrare l'introduzione operativa prevista. Se contiene già fonte e profilo JSON, brand pack, tema neutro o indicazioni visive sufficienti, evitare l'introduzione estesa e procedere.
+4. Selezionare `local-editor` o `conversation` con le regole precedenti. Leggere [references/visual-review.md](references/visual-review.md) per il percorso locale. Dichiarare il fallback conversazionale quando il percorso locale non è disponibile.
 
 ## Fase 1: fonte, brand e anteprima
 
@@ -43,7 +53,7 @@ Gestire il lavoro con questi stati: `bozza` → `testi_approvati` → `prova_vis
    - usare il profilo neutro di [references/brand-profile.md](references/brand-profile.md) solo dopo una scelta esplicita.
 5. Leggere [references/editorial-workflow.md](references/editorial-workflow.md) e costruire copertina e sequenza secondo `sequence_mode`.
 6. Leggere [references/semantic-emphasis.md](references/semantic-emphasis.md). Proporre massimo due enfasi per card soltanto se il profilo approvato prevede un secondo carattere o un accento pertinente. Gli asterischi sono comandi tipografici temporanei, non un obbligo stilistico.
-7. Nel percorso rapido, mostrare nella stessa risposta prima `Anteprima profilo brand` e poi `Anteprima testi`. Usare un solo checkpoint editoriale che richiede l'approvazione di entrambi; accettare correzioni o approvazioni separate senza creare due passaggi obbligatori.
+7. Nel percorso rapido, preparare nella stessa revisione prima `Anteprima profilo brand` e poi `Anteprima testi`. Usare un solo checkpoint editoriale che richiede l'approvazione di entrambi; accettare correzioni o approvazioni separate senza creare due passaggi obbligatori.
 8. Nel percorso guidato, ottenere prima l'approvazione del profilo e poi mostrare `Anteprima testi`.
 9. Nell'anteprima testuale indicare:
    - profilo usato;
@@ -53,8 +63,12 @@ Gestire il lavoro con questi stati: `bozza` → `testi_approvati` → `prova_vis
    - chiusura esatta, quando prevista;
    - ogni frase compiuta su una nuova riga.
 10. Mostrare soltanto contenuti destinati alle slide, oltre alle informazioni minime su profilo, formato, fonte, `sequence_mode` e approvazione. Non esporre manifest, prompt visuali o note tecniche.
-11. Invitare l'utente a scegliere `Approva profilo e testi`, `Modifica il profilo` oppure `Modifica i testi`. Procedere soltanto quando entrambi risultano approvati. Fermarsi e attendere.
-12. Dopo qualsiasi modifica testuale, mostrare prima le slide cambiate e poi l'intera anteprima aggiornata. Chiedere nuovamente conferma.
+11. Se è selezionato `local-editor`, creare il manifest in stato `bozza`, avviare l'editor secondo [references/visual-review.md](references/visual-review.md) e aprirlo nel browser. Non limitarsi a stampare il codice HTML nella chat e non duplicare l'intera anteprima, salvo richiesta dell'utente o fallback.
+12. Nell'editor invitare l'utente a scegliere `Invia correzioni` oppure `Approva profilo e testi`. Trattare l'invio delle correzioni come feedback, mai come approvazione implicita. Nel percorso `local-editor`, non terminare il turno e non chiedere all'utente di tornare in chat con messaggi come «fatto»: mantenere il task in ascolto dell'evento del server secondo [references/visual-review.md](references/visual-review.md).
+13. Appena il server segnala il batch, applicare le modifiche dirette con `scripts/apply_review.py`, quindi esaminare e risolvere tutti i commenti ricevuti. Conservare esattamente il testo scritto dall'utente salvo incompatibilità dichiarata con fonte, modalità `verbatim` o vincoli di produzione.
+14. Dopo ogni batch, ripetere i controlli editoriali, aggiornare il manifest e far ricaricare l'editor. Non avanzare oltre `bozza` finché l'utente non ha richiesto esplicitamente l'approvazione e tutti i controlli sono superati.
+15. Se l'utente richiede l'approvazione ma resta un problema bloccante, mantenere `bozza`, mostrare il problema nell'editor o in chat e chiedere una correzione.
+16. Nel fallback conversazionale, usare il flusso originale: mostrare prima le slide cambiate e poi l'intera anteprima aggiornata; invitare a scegliere `Approva profilo e testi`, `Modifica il profilo` oppure `Modifica i testi`. Usare titoli e paragrafi Markdown normali; non racchiudere i testi delle slide in code fence o blocchi monospazio.
 
 ## Fase 2: prova visuale
 
@@ -87,7 +101,7 @@ Gestire il lavoro con questi stati: `bozza` → `testi_approvati` → `prova_vis
 - Non riscrivere il testo in modalità `verbatim` senza autorizzazione.
 - Includere sempre la copertina.
 - La copertina contiene il titolo, non un sottotitolo. Non inventare né renderizzare un secondo livello testuale sotto il titolo.
-- In modalità `narrative`, lasciare vuoti i titoli delle slide interne e non renderizzare etichette tecniche, numeri di slide, nomi del layout o eyebrow decorativi. Il testo deve costruire una progressione continua.
+- In modalità `narrative`, lasciare vuoti i titoli delle slide interne e non renderizzare etichette tecniche, nomi del layout o eyebrow decorativi. Inserire soltanto la numerazione progressiva delle pagine nell'angolo superiore destro, inclusi copertina e chiusura, dentro la safe area. Il testo deve costruire una progressione continua.
 - In modalità `sectional`, usare titoli interni quando aiutano slide autonome; non usare comunque etichette tecniche o nomi del layout.
 - Per impostazione predefinita usare un solo visuale in copertina. Mantenere le slide interne pulite e tipografiche, senza SVG o disegni decorativi. Visuali interni richiedono una richiesta esplicita e una nuova prova visuale coerente per tecnica e stile.
 - Usare il carattere approvato nel profilo, non un font fisso della skill. Qualsiasi sostituzione deve essere nominata, motivata e approvata prima della prova visuale.
