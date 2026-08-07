@@ -86,7 +86,9 @@ Per segnalare problemi o proporre miglioramenti, apri una Issue indicando:
 
 ## Licenza
 
-Da definire.
+Distribuita gratuitamente con licenza [MIT](LICENSE). Puoi usare, modificare e
+ridistribuire la skill, mantenendo l'avviso di copyright e il testo della
+licenza.
 
 ## Autore
 

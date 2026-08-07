@@ -9,6 +9,9 @@ La skill rileva le capacità della sessione: usa l'editor HTML locale se Python,
 browser locale e ricezione degli eventi sono disponibili; negli altri casi mantiene
 lo stesso flusso di revisione direttamente nella conversazione.
 
+Il pacchetto è distribuito gratuitamente con licenza MIT. Il testo completo è
+disponibile nel file [`../LICENSE`](../LICENSE) del repository.
+
 La versione sorgente della skill resta nella radice del repository. Questo pacchetto è
 un livello di distribuzione aggiuntivo e non modifica il flusso di installazione esistente.
 
