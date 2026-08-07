@@ -45,6 +45,59 @@ def require_text(value: object, field: str) -> str:
     return value
 
 
+EMPHASIS_KEYS = {
+    "cover_title": ("cover_title_serif", "cover_title_accent"),
+    "title": ("title_serif", "title_accent"),
+    "summary": ("summary_serif", "summary_accent"),
+}
+
+
+def emphasis_phrases(container: dict, field: str) -> list[tuple[str, str]]:
+    """Elenca le coppie (chiave, frase) di enfasi associate a un campo testuale."""
+    pairs: list[tuple[str, str]] = []
+    for key in EMPHASIS_KEYS[field]:
+        phrases = container.get(key)
+        if not isinstance(phrases, list):
+            continue
+        pairs.extend((key, phrase) for phrase in phrases if isinstance(phrase, str))
+    return pairs
+
+
+def prune_emphasis(container: dict, field: str, new_text: str) -> list[str]:
+    """Rimuove le frasi di enfasi che non compaiono più nel testo aggiornato.
+
+    I campi ``*_serif`` e ``*_accent`` indicano frasi esatte contenute nel testo.
+    Quando l'utente riscrive il testo nell'editor, le frasi precedenti possono non
+    esistere più: conservarle produrrebbe un manifest che viola le regole della
+    skill e un rendering con enfasi mancanti o sbagliate.
+    """
+    dropped: list[str] = []
+    for key in EMPHASIS_KEYS[field]:
+        phrases = container.get(key)
+        if not isinstance(phrases, list):
+            continue
+        kept = [
+            phrase
+            for phrase in phrases
+            if isinstance(phrase, str) and phrase and phrase in new_text
+        ]
+        if kept != phrases:
+            dropped.extend(
+                str(phrase) for phrase in phrases if phrase not in kept
+            )
+            container[key] = kept
+    return dropped
+
+
+def stale_emphasis(container: dict, field: str, text_value: str) -> list[str]:
+    """Elenca le frasi di enfasi già incoerenti con un testo rimasto invariato."""
+    return [
+        phrase
+        for _key, phrase in emphasis_phrases(container, field)
+        if not phrase or phrase not in text_value
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("manifest", type=Path)
@@ -106,6 +159,29 @@ def main() -> int:
             raise ValueError("La copertina manca dal batch")
         new_cover = require_text(cover.get("title"), "cover.title")
 
+        emphasis_dropped: dict[str, list[str]] = {}
+        warnings: list[str] = []
+        stale_alt_text: list[str] = []
+
+        cover_emphasis = {
+            key: list(manifest[key])
+            for key in EMPHASIS_KEYS["cover_title"]
+            if isinstance(manifest.get(key), list)
+        }
+        if manifest.get("cover_title", "") != new_cover:
+            dropped = prune_emphasis(cover_emphasis, "cover_title", new_cover)
+            if dropped:
+                emphasis_dropped["cover"] = dropped
+            if manifest.get("cover_alt_text"):
+                stale_alt_text.append("cover")
+        else:
+            stale = stale_emphasis(manifest, "cover_title", new_cover)
+            if stale:
+                warnings.append(
+                    "Enfasi già incoerenti con cover_title, non modificate: "
+                    + ", ".join(repr(phrase) for phrase in stale)
+                )
+
         new_items: list[dict] = []
         seen: set[str] = set()
         for slide in slides:
@@ -115,9 +191,27 @@ def main() -> int:
             if item_id not in by_id or item_id in seen:
                 raise ValueError(f"ID slide interna non valido o duplicato: {item_id}")
             seen.add(item_id)
-            updated = dict(by_id[item_id])
+            previous = by_id[item_id]
+            updated = dict(previous)
             updated["title"] = require_text(slide.get("title"), f"{item_id}.title")
             updated["summary"] = require_text(slide.get("summary"), f"{item_id}.summary")
+            dropped: list[str] = []
+            text_changed = False
+            for field in ("title", "summary"):
+                if previous.get(field, "") != updated[field]:
+                    text_changed = True
+                    dropped.extend(prune_emphasis(updated, field, updated[field]))
+                else:
+                    stale = stale_emphasis(updated, field, updated[field])
+                    if stale:
+                        warnings.append(
+                            f"Enfasi già incoerenti con {item_id}.{field}, non modificate: "
+                            + ", ".join(repr(phrase) for phrase in stale)
+                        )
+            if dropped:
+                emphasis_dropped[str(item_id)] = dropped
+            if text_changed and updated.get("alt_text"):
+                stale_alt_text.append(str(item_id))
             new_items.append(updated)
         if not new_items:
             raise ValueError("Deve restare almeno una slide interna")
@@ -130,6 +224,12 @@ def main() -> int:
             new_outro = dict(manifest["outro"])
             new_outro["title"] = require_text(outro_slide.get("title"), "outro.title")
             new_outro["body"] = require_text(outro_slide.get("summary"), "outro.body")
+            outro_changed = (
+                manifest["outro"].get("title", "") != new_outro["title"]
+                or manifest["outro"].get("body", "") != new_outro["body"]
+            )
+            if outro_changed and new_outro.get("alt_text"):
+                stale_alt_text.append("outro")
 
         changed: list[str] = []
         if manifest.get("cover_title", "") != new_cover:
@@ -138,6 +238,63 @@ def main() -> int:
             changed.append("items")
         if new_outro is not None and manifest.get("outro") != new_outro:
             changed.append("outro")
+        if cover_emphasis and any(
+            manifest.get(key) != value for key, value in cover_emphasis.items()
+        ):
+            changed.append("cover_emphasis")
+
+        # La sequenza può cambiare per riordino o eliminazione: gli ID derivati
+        # dal manifest vanno riallineati, altrimenti restano puntatori a slide
+        # che non esistono più.
+        slide_ids = (
+            ["cover"]
+            + [str(item["id"]) for item in new_items]
+            + (["outro"] if new_outro is not None else [])
+        )
+        accessibility = (
+            manifest.get("accessibility")
+            if isinstance(manifest.get("accessibility"), dict)
+            else None
+        )
+        new_reading_order = None
+        if accessibility is not None and isinstance(
+            accessibility.get("reading_order"), list
+        ):
+            if accessibility["reading_order"] != slide_ids:
+                new_reading_order = slide_ids
+                changed.append("accessibility.reading_order")
+        proof = manifest.get("proof") if isinstance(manifest.get("proof"), dict) else None
+        pruned_proof_ids: list[str] = []
+        new_proof_ids = None
+        if proof is not None and isinstance(proof.get("slide_ids"), list):
+            known = set(slide_ids)
+            kept = [
+                slide_id
+                for slide_id in proof["slide_ids"]
+                if isinstance(slide_id, str) and slide_id in known
+            ]
+            if kept != proof["slide_ids"]:
+                pruned_proof_ids = [
+                    str(slide_id) for slide_id in proof["slide_ids"] if slide_id not in kept
+                ]
+                new_proof_ids = kept
+                changed.append("proof.slide_ids")
+
+        stale_transcript = bool(
+            changed
+            and accessibility is not None
+            and accessibility.get("transcript")
+        )
+        if stale_alt_text:
+            warnings.append(
+                "Alt text da rigenerare per: " + ", ".join(stale_alt_text)
+            )
+        if stale_transcript:
+            warnings.append("La trascrizione di accessibilità non riflette più i testi correnti")
+        if proof is not None and proof.get("approved") and changed:
+            warnings.append(
+                "proof.approved resta true ma i testi sono cambiati: la prova visuale va riapprovata"
+            )
 
         existing_review = manifest.get("review") if isinstance(manifest.get("review"), dict) else {}
         review = dict(existing_review)
@@ -159,8 +316,13 @@ def main() -> int:
             if changed:
                 manifest["cover_title"] = new_cover
                 manifest["items"] = new_items
+                manifest.update(cover_emphasis)
                 if new_outro is not None:
                     manifest["outro"] = new_outro
+                if new_reading_order is not None:
+                    accessibility["reading_order"] = new_reading_order
+                if new_proof_ids is not None:
+                    proof["slide_ids"] = new_proof_ids
                 manifest["revision"] = revision + 1
             manifest["review"] = review
             atomic_write_json(manifest_path, manifest)
@@ -184,6 +346,11 @@ def main() -> int:
             "overall_note": feedback.get("overall_note", ""),
             "approval_requested": feedback["action"] == "approve",
             "workflow_state_changed": False,
+            "emphasis_dropped": emphasis_dropped,
+            "proof_slide_ids_pruned": pruned_proof_ids,
+            "stale_alt_text": stale_alt_text,
+            "stale_transcript": stale_transcript,
+            "warnings": warnings,
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0

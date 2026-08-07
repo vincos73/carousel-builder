@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Compile scripts
+        run: python -m compileall -q scripts tests
+      - name: Run tests
+        run: python -m unittest discover -s tests -t tests -v
+
+  package-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Il pacchetto Agent Plugins deve restare identico alla skill
+        run: |
+          for path in SKILL.md references scripts assets agents; do
+            diff -r -x __pycache__ "$path" "agent-plugin/skills/carousel-builder/$path"
+          done
+      - name: La versione della skill deve coincidere con quella del plugin
+        run: |
+          skill_version=$(grep -oP '(?<=^Versione: \*\*)[^*]+' SKILL.md)
+          plugin_version=$(python3 -c "import json;print(json.load(open('agent-plugin/plugin.json'))['version'])")
+          echo "SKILL.md=$skill_version plugin.json=$plugin_version"
+          test "$skill_version" = "$plugin_version"

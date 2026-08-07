@@ -44,6 +44,7 @@
   let overallNote = "";
   let pendingSelection = null;
   let awaitingFeedbackId = null;
+  let staleRevision = null;
   let toastTimer = null;
 
   function clone(value) {
@@ -97,6 +98,16 @@
 
   function updateChangeSummary() {
     const count = computeChangeCount();
+    if (staleRevision !== null) {
+      // L'agente ha pubblicato una revisione più recente: un invio basato su
+      // questa copia verrebbe rifiutato dal server, quindi resta solo il ricarico.
+      elements.dirtyDot.classList.add("active");
+      elements.changeLabel.textContent = `L'agente ha pubblicato la revisione ${staleRevision}. Ricarica per continuare.`;
+      elements.resetButton.disabled = false;
+      elements.sendButton.disabled = true;
+      elements.approveButton.disabled = true;
+      return;
+    }
     elements.dirtyDot.classList.toggle("active", count > 0);
     elements.changeLabel.textContent = count === 0
       ? "Nessuna modifica"
@@ -430,6 +441,7 @@
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Impossibile caricare la sessione");
     model = data;
+    staleRevision = null;
     hydrateDraft();
     if (!preserveAwaiting) awaitingFeedbackId = null;
     renderAll();
@@ -521,6 +533,32 @@
         awaitingFeedbackId = null;
         await loadSession();
         showToast("Le modifiche dirette sono state applicate. Controlla la nuova revisione.");
+        return;
+      }
+      // L'agente aggiorna il manifest anche per risolvere i commenti: senza
+      // questo controllo l'editor resterebbe su una revisione superata e ogni
+      // invio successivo verrebbe rifiutato con un conflitto senza via d'uscita.
+      if (!model || !Number.isInteger(status.manifest_revision)) return;
+      if (status.manifest_revision === model.revision) {
+        if (staleRevision !== null) {
+          staleRevision = null;
+          updateChangeSummary();
+        }
+        return;
+      }
+      if (!awaitingFeedbackId && computeChangeCount() === 0) {
+        localStorage.removeItem(storageKey);
+        await loadSession();
+        showToast(`Aggiornato alla revisione ${model.revision}.`);
+        return;
+      }
+      if (staleRevision !== status.manifest_revision) {
+        staleRevision = status.manifest_revision;
+        updateChangeSummary();
+        showToast(
+          "L'agente ha aggiornato i testi. Ricarica per vedere la revisione corrente.",
+          true
+        );
       }
     } catch (_error) {
       // Il polling riprova senza interrompere la bozza locale.
@@ -535,7 +573,18 @@
     overallNote = elements.overallNote.value;
     persistDraft();
   });
-  elements.resetButton.addEventListener("click", () => {
+  elements.resetButton.addEventListener("click", async () => {
+    if (staleRevision !== null) {
+      if (!window.confirm(`Caricare la revisione ${staleRevision}? Le modifiche non inviate andranno perse.`)) return;
+      localStorage.removeItem(storageKey);
+      try {
+        await loadSession();
+        showToast(`Aggiornato alla revisione ${model.revision}.`);
+      } catch (error) {
+        showToast(error.message || "Ricarica non riuscita", true);
+      }
+      return;
+    }
     if (!window.confirm("Ripristinare i testi della revisione corrente e rimuovere i commenti non inviati?")) return;
     localStorage.removeItem(storageKey);
     hydrateDraft();

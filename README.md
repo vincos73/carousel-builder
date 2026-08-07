@@ -79,6 +79,16 @@ Poi riapri o aggiorna Codex e invoca `$carousel-builder`.
 
 Il repository include anche un pacchetto skills-only compatibile con Agent Plugins nella cartella [`agent-plugin/`](agent-plugin/). Il pacchetto contiene `plugin.json` e la skill in `skills/carousel-builder/`; non richiede né include un server MCP.
 
+Il contenuto di `agent-plugin/skills/carousel-builder/` è una copia esatta della skill nella radice del repository. Ogni modifica va replicata in entrambe le posizioni: la CI confronta le due copie e fallisce se divergono.
+
+## Sviluppo
+
+I due script del percorso `local-editor` sono coperti da test con la sola libreria standard, senza dipendenze da installare:
+
+```bash
+python3 -m unittest discover -s tests -t tests -v
+```
+
 ## Modalità editoriali
 
 - **Narrativa**: per una tesi sviluppata in passaggi dipendenti.
