@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="assets/icon.svg" width="80" alt="Icona Carousel Builder">
-</p>
 
 # Carousel Builder by Vincos
 
 Skill adattiva per trasformare URL, articoli, newsletter, note e testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social.
 
 La versione 2.0 riunisce in un solo pacchetto il flusso portabile e l'editor HTML locale. La skill verifica le capacità della sessione e sceglie automaticamente la migliore superficie di revisione disponibile, senza dipendere da Canvas.
+
+</p><img width="1256" height="701" alt="carousel-builder-screenshot" src="https://github.com/user-attachments/assets/1e4de6de-2960-405d-881c-21d6d14b943c" />
 
 ## Inizia da qui
 
@@ -38,8 +38,8 @@ Se usi Codex e preferisci installarla dalla riga di comando, trovi il comando ne
 
 | Capacità della sessione | Modalità usata |
 | --- | --- |
-| Python 3, browser locale e ricezione degli eventi disponibili | Editor HTML locale con invio automatico di correzioni e approvazioni |
-| Una o più capacità mancanti | Revisione direttamente nella conversazione |
+| Se usi un agente avrà Python 3, browser locale e ricezione degli eventi disponibili | Editor HTML locale con invio automatico di correzioni e approvazioni |
+| Se usi un chatbot web alcune capacità macheranno | Revisione direttamente nella conversazione |
 
 La scelta dipende dalle capacità effettivamente rilevate, non dal nome del prodotto. In ChatGPT Web, Claude o altri client privi di accesso al browser locale, la skill continua a funzionare con il fallback conversazionale. In un ambiente agentico compatibile, come Codex con gli strumenti necessari, può aprire l'editor locale.
 
