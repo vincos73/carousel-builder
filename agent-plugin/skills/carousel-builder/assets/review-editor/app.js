@@ -117,6 +117,16 @@
     elements.approveButton.disabled = Boolean(awaitingFeedbackId);
   }
 
+  function lockEditing() {
+    // I controlli delle slide sono renderizzati una volta sola: senza questo
+    // blocco resterebbero attivi mentre il batch è in volo e ogni modifica
+    // fatta in quella finestra andrebbe persa al ricarico successivo.
+    elements.editor.classList.add("locked");
+    for (const node of elements.editor.querySelectorAll("input, textarea, button")) {
+      node.disabled = true;
+    }
+  }
+
   function persistDraft() {
     if (!model) return;
     const value = {
@@ -430,6 +440,7 @@
     renderSlides();
     renderComments();
     elements.overallNote.value = overallNote;
+    elements.editor.classList.remove("locked");
     elements.loading.classList.add("hidden");
     elements.editor.classList.remove("hidden");
     elements.actionbar.classList.remove("hidden");
@@ -515,6 +526,7 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Invio non riuscito");
       awaitingFeedbackId = data.feedback_id;
+      lockEditing();
       showToast(action === "approve" ? "Richiesta di approvazione inviata." : "Correzioni inviate all'agente.");
       updateChangeSummary();
     } catch (error) {
@@ -554,6 +566,7 @@
       }
       if (staleRevision !== status.manifest_revision) {
         staleRevision = status.manifest_revision;
+        lockEditing();
         updateChangeSummary();
         showToast(
           "L'agente ha aggiornato i testi. Ricarica per vedere la revisione corrente.",

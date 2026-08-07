@@ -309,11 +309,14 @@ def main() -> int:
             }
         )
         if changed or existing_review != review:
-            backups_dir = session_dir / "backups"
-            backups_dir.mkdir(parents=True, exist_ok=True)
-            backup_name = f"manifest-r{revision}-{feedback['feedback_id']}.json"
-            shutil.copy2(manifest_path, backups_dir / backup_name)
+            # Il backup serve a recuperare i testi precedenti: senza modifiche
+            # editoriali non c'è nulla da ripristinare e sarebbe solo una copia
+            # identica in più a ogni batch di soli commenti.
             if changed:
+                backups_dir = session_dir / "backups"
+                backups_dir.mkdir(parents=True, exist_ok=True)
+                backup_name = f"manifest-r{revision}-{feedback['feedback_id']}.json"
+                shutil.copy2(manifest_path, backups_dir / backup_name)
                 manifest["cover_title"] = new_cover
                 manifest["items"] = new_items
                 manifest.update(cover_emphasis)

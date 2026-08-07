@@ -1,0 +1,205 @@
+"""Test di integrazione sul server locale: autorizzazione, host e concorrenza."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+import urllib.error
+import urllib.request
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from support import SCRIPTS, base_manifest, slide, write_json
+
+
+def request(
+    url: str, *, method: str = "GET", body: bytes | None = None, headers: dict | None = None
+) -> tuple[int, dict]:
+    req = urllib.request.Request(url, data=body, method=method)
+    for name, value in (headers or {}).items():
+        req.add_header(name, value)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            payload = response.read()
+            return response.status, payload
+    except urllib.error.HTTPError as error:
+        return error.code, error.read()
+
+
+def json_request(url: str, **kwargs: object) -> tuple[int, dict]:
+    status, payload = request(url, **kwargs)
+    return status, json.loads(payload.decode("utf-8"))
+
+
+class ReviewServerHTTPTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.workdir = Path(self._tmp.name)
+        self.manifest_path = self.workdir / "manifest.json"
+        self.session_dir = self.workdir / "session"
+        write_json(self.manifest_path, base_manifest())
+        self.process = subprocess.Popen(
+            [
+                sys.executable,
+                str(SCRIPTS / "review_server.py"),
+                str(self.manifest_path),
+                "--session-dir",
+                str(self.session_dir),
+                "--port",
+                "0",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(self.stop)
+        ready = json.loads(self.process.stdout.readline())
+        self.url = ready["url"]
+        parsed = urlparse(self.url)
+        self.origin = f"http://127.0.0.1:{parsed.port}"
+        self.token = parse_qs(parsed.query)["token"][0]
+
+    def stop(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+            self.process.wait(timeout=10)
+        for stream in (self.process.stdout, self.process.stderr):
+            if stream is not None:
+                stream.close()
+
+    def api(self, path: str) -> str:
+        return f"{self.origin}{path}?token={self.token}"
+
+    def batch(self, **overrides: object) -> bytes:
+        payload = {
+            "action": "feedback",
+            "base_revision": 1,
+            "slides": [
+                slide("cover", "cover", title="La lezione e operativa"),
+                slide("item-1", "item", summary="Prima frase."),
+                slide("item-2", "item", summary="Seconda frase."),
+                slide("outro", "outro", title="Chiusura", summary="Corpo."),
+            ],
+            "comments": [],
+            "overall_note": "",
+        }
+        payload.update(overrides)
+        return json.dumps(payload).encode("utf-8")
+
+    def test_serves_the_editor_with_a_valid_token(self) -> None:
+        status, payload = request(self.url)
+        self.assertEqual(status, 200)
+        self.assertIn(b"Carousel Builder Editor", payload)
+
+    def test_rejects_a_missing_or_wrong_token(self) -> None:
+        self.assertEqual(request(f"{self.origin}/")[0], 403)
+        self.assertEqual(request(f"{self.origin}/?token=sbagliato")[0], 403)
+        self.assertEqual(request(f"{self.origin}/api/session")[0], 403)
+        self.assertEqual(request(f"{self.origin}/api/status")[0], 403)
+
+    def test_rejects_a_foreign_host_header(self) -> None:
+        status, payload = json_request(
+            self.api("/api/session"), headers={"Host": "attaccante.example"}
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("Host", payload["error"])
+
+    def test_accepts_localhost_as_host(self) -> None:
+        status, _ = request(self.api("/api/session"), headers={"Host": "localhost"})
+        self.assertEqual(status, 200)
+
+    def test_serves_the_static_assets(self) -> None:
+        for path in ("/assets/styles.css", "/assets/app.js"):
+            status, payload = request(f"{self.origin}{path}")
+            self.assertEqual(status, 200, path)
+            self.assertTrue(payload)
+
+    def test_sets_the_expected_security_headers(self) -> None:
+        req = urllib.request.Request(self.url)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            self.assertEqual(response.headers["X-Frame-Options"], "DENY")
+            self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+            self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
+
+    def test_rejects_an_unknown_route(self) -> None:
+        self.assertEqual(request(self.api("/api/altro"))[0], 404)
+
+    def test_rejects_a_non_json_content_type(self) -> None:
+        status, payload = json_request(
+            self.api("/api/submit"),
+            method="POST",
+            body=self.batch(),
+            headers={"Content-Type": "text/plain"},
+        )
+        self.assertEqual(status, 415)
+        self.assertIn("application/json", payload["error"])
+
+    def test_accepts_a_batch_and_writes_the_session_files(self) -> None:
+        status, payload = json_request(
+            self.api("/api/submit"),
+            method="POST",
+            body=self.batch(),
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["event"], "feedback")
+        feedback = json.loads((self.session_dir / "feedback.json").read_text(encoding="utf-8"))
+        self.assertEqual(feedback["feedback_id"], payload["feedback_id"])
+        state = json.loads((self.session_dir / "session-state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["last_feedback_id"], payload["feedback_id"])
+
+    def test_reports_the_revision_in_the_status(self) -> None:
+        status, payload = json_request(self.api("/api/status"))
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["manifest_revision"], 1)
+        self.assertFalse(payload["feedback_pending"])
+
+    def test_refuses_a_second_batch_until_the_first_is_applied(self) -> None:
+        first, _ = json_request(
+            self.api("/api/submit"),
+            method="POST",
+            body=self.batch(),
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(first, 200)
+        second, payload = json_request(
+            self.api("/api/submit"),
+            method="POST",
+            body=self.batch(),
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(second, 409)
+        self.assertIn("attende", payload["error"])
+
+    def test_only_one_of_two_concurrent_batches_is_accepted(self) -> None:
+        results: list[int] = []
+        lock = threading.Lock()
+
+        def submit() -> None:
+            status, _ = json_request(
+                self.api("/api/submit"),
+                method="POST",
+                body=self.batch(),
+                headers={"Content-Type": "application/json"},
+            )
+            with lock:
+                results.append(status)
+
+        threads = [threading.Thread(target=submit) for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+
+        self.assertEqual(len(results), 6)
+        self.assertEqual(results.count(200), 1, results)
+        self.assertEqual(results.count(409), 5, results)
+
+
+if __name__ == "__main__":
+    unittest.main()
