@@ -8,6 +8,7 @@ import json
 import os
 import secrets
 import sys
+import threading
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -193,12 +194,9 @@ def validate_feedback(payload: object, model: dict) -> dict:
         )
 
     source_by_id = {slide["id"]: slide for slide in model["slides"]}
-    source_item_ids = {
-        slide["id"] for slide in model["slides"] if slide["kind"] == "item"
-    }
     slides = payload.get("slides")
     if not isinstance(slides, list) or not (2 <= len(slides) <= MAX_SLIDES):
-        raise ValueError("Il batch deve contenere tra 2 e 50 slide")
+        raise ValueError(f"Il batch deve contenere tra 2 e {MAX_SLIDES} slide")
     seen: set[str] = set()
     normalized_slides: list[dict] = []
     item_count = 0
@@ -229,8 +227,6 @@ def validate_feedback(payload: object, model: dict) -> dict:
         raise ValueError("La copertina deve restare la prima slide")
     if "outro" in source_by_id and normalized_slides[-1]["id"] != "outro":
         raise ValueError("La chiusura deve restare l'ultima slide")
-    if set(slide["id"] for slide in normalized_slides if slide["kind"] == "item") - source_item_ids:
-        raise ValueError("Il batch contiene slide interne sconosciute")
     if item_count < 1:
         raise ValueError("Deve restare almeno una slide interna")
 
@@ -319,6 +315,7 @@ def main() -> int:
         }
     )
     atomic_write_json(state_path, state)
+    submit_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "CarouselReviewLab/0.1"
@@ -353,7 +350,22 @@ def main() -> int:
             candidate = query.get("token", [""])[0]
             return secrets.compare_digest(candidate, token)
 
+        def local_host(self) -> bool:
+            """Rifiuta le richieste che non nominano l'indirizzo locale.
+
+            Un sito remoto può far risolvere il proprio dominio su 127.0.0.1 e
+            diventare così same-origin rispetto a questo server. Il token resta
+            la difesa principale, ma il controllo dell'header Host chiude il
+            caso senza costi.
+            """
+            host = self.headers.get("Host", "")
+            name = host.rsplit(":", 1)[0].strip("[]") if host else ""
+            return name in {"127.0.0.1", "localhost", "::1"}
+
         def do_GET(self) -> None:  # noqa: N802
+            if not self.local_host():
+                self.send_json(HTTPStatus.FORBIDDEN, {"error": "Host non consentito"})
+                return
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
             if parsed.path == "/":
@@ -366,6 +378,9 @@ def main() -> int:
                     "text/html; charset=utf-8",
                 )
                 return
+            # Gli asset sono file statici della skill, privi di dati di
+            # sessione: restano leggibili senza token perché index.html li
+            # referenzia staticamente.
             if parsed.path in {"/assets/styles.css", "/assets/app.js"}:
                 asset_name = Path(parsed.path).name
                 asset_path = assets_dir / asset_name
@@ -374,7 +389,14 @@ def main() -> int:
                     if asset_name.endswith(".css")
                     else "text/javascript; charset=utf-8"
                 )
-                self.send_bytes(HTTPStatus.OK, asset_path.read_bytes(), content_type)
+                try:
+                    body = asset_path.read_bytes()
+                except OSError:
+                    self.send_json(
+                        HTTPStatus.NOT_FOUND, {"error": f"Asset mancante: {asset_name}"}
+                    )
+                    return
+                self.send_bytes(HTTPStatus.OK, body, content_type)
                 return
             if parsed.path == "/api/session":
                 if not self.authorized(query):
@@ -391,7 +413,11 @@ def main() -> int:
                 if not self.authorized(query):
                     self.send_json(HTTPStatus.FORBIDDEN, {"error": "Sessione non autorizzata"})
                     return
-                current_state = read_json(state_path)
+                try:
+                    current_state = read_json(state_path)
+                except ValueError as exc:
+                    self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
+                    return
                 try:
                     revision = manifest_model(manifest_path)["revision"]
                 except ValueError:
@@ -411,6 +437,9 @@ def main() -> int:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "Risorsa non trovata"})
 
         def do_POST(self) -> None:  # noqa: N802
+            if not self.local_host():
+                self.send_json(HTTPStatus.FORBIDDEN, {"error": "Host non consentito"})
+                return
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
             if parsed.path != "/api/submit":
@@ -419,16 +448,11 @@ def main() -> int:
             if not self.authorized(query):
                 self.send_json(HTTPStatus.FORBIDDEN, {"error": "Sessione non autorizzata"})
                 return
-            current_state = read_json(state_path)
-            last_feedback_id = current_state.get("last_feedback_id")
-            applied_feedback_id = current_state.get("applied_feedback_id")
-            if last_feedback_id and last_feedback_id != applied_feedback_id:
+            content_type = self.headers.get("Content-Type", "")
+            if content_type and content_type.split(";")[0].strip() != "application/json":
                 self.send_json(
-                    HTTPStatus.CONFLICT,
-                    {
-                        "error": "Il feedback precedente attende ancora di essere applicato",
-                        "feedback_id": last_feedback_id,
-                    },
+                    HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                    {"error": "Il batch deve essere inviato come application/json"},
                 )
                 return
             try:
@@ -438,32 +462,53 @@ def main() -> int:
             if length <= 0 or length > MAX_BODY_BYTES:
                 self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "Batch non valido o troppo grande"})
                 return
-            try:
-                payload = json.loads(self.rfile.read(length).decode("utf-8"))
-                current_model = manifest_model(manifest_path)
-                feedback = validate_feedback(payload, current_model)
-            except RuntimeError as exc:
-                self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
-                return
-            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-                self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
-                return
-            atomic_write_json(feedback_path, feedback)
-            current_state.update(
-                {
-                    "last_feedback_id": feedback["feedback_id"],
-                    "feedback_submitted_at": feedback["submitted_at"],
-                    "manifest_revision": current_model["revision"],
+            body = self.rfile.read(length)
+            # Il server è multi-thread: senza lock due invii ravvicinati possono
+            # superare entrambi il controllo sul batch in attesa e sovrascrivere
+            # feedback.json a vicenda.
+            with submit_lock:
+                try:
+                    current_state = read_json(state_path)
+                except ValueError as exc:
+                    self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
+                    return
+                last_feedback_id = current_state.get("last_feedback_id")
+                applied_feedback_id = current_state.get("applied_feedback_id")
+                if last_feedback_id and last_feedback_id != applied_feedback_id:
+                    self.send_json(
+                        HTTPStatus.CONFLICT,
+                        {
+                            "error": "Il feedback precedente attende ancora di essere applicato",
+                            "feedback_id": last_feedback_id,
+                        },
+                    )
+                    return
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                    current_model = manifest_model(manifest_path)
+                    feedback = validate_feedback(payload, current_model)
+                except RuntimeError as exc:
+                    self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+                    return
+                except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                    self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
+                    return
+                atomic_write_json(feedback_path, feedback)
+                current_state.update(
+                    {
+                        "last_feedback_id": feedback["feedback_id"],
+                        "feedback_submitted_at": feedback["submitted_at"],
+                        "manifest_revision": current_model["revision"],
+                    }
+                )
+                atomic_write_json(state_path, current_state)
+                event = {
+                    "event": "feedback",
+                    "feedback_id": feedback["feedback_id"],
+                    "action": feedback["action"],
+                    "path": str(feedback_path),
                 }
-            )
-            atomic_write_json(state_path, current_state)
-            event = {
-                "event": "feedback",
-                "feedback_id": feedback["feedback_id"],
-                "action": feedback["action"],
-                "path": str(feedback_path),
-            }
-            print(json.dumps(event, ensure_ascii=False), flush=True)
+                print(json.dumps(event, ensure_ascii=False), flush=True)
             self.send_json(HTTPStatus.OK, event)
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)

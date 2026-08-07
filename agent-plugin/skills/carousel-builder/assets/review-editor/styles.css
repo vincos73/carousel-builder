@@ -161,6 +161,10 @@ input:focus {
   align-items: start;
 }
 
+.editor.locked {
+  opacity: 0.72;
+}
+
 .sidebar {
   position: sticky;
   top: 112px;

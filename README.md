@@ -1,12 +1,10 @@
-<p align="center">
-
 # Carousel Builder by Vincos
 
 Skill adattiva per trasformare URL, articoli, newsletter, note e testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social.
 
 La versione 2.0 riunisce in un solo pacchetto il flusso portabile e l'editor HTML locale. La skill verifica le capacità della sessione e sceglie automaticamente la migliore superficie di revisione disponibile, senza dipendere da Canvas.
 
-</p><img width="1256" height="701" alt="carousel-builder-screenshot" src="https://github.com/user-attachments/assets/1e4de6de-2960-405d-881c-21d6d14b943c" />
+<img width="1256" height="701" alt="carousel-builder-screenshot" src="https://github.com/user-attachments/assets/1e4de6de-2960-405d-881c-21d6d14b943c" />
 
 ## Inizia da qui
 
@@ -17,7 +15,7 @@ Puoi scaricare subito il pacchetto completo in formato ZIP:
 Non serve conoscere GitHub o usare il terminale per iniziare.
 
 1. Scarica il file ZIP dal link qui sopra.
-2. Se il tuo strumento permette di caricare una skill, carica direttamente il file ZIP. Se chiede una cartella, scompatta il file e seleziona la cartella `carousel-builder-main`.
+2. Se il tuo strumento permette di caricare una skill, carica direttamente il file ZIP. Se chiede una cartella, scompatta il file e **rinomina** la cartella ottenuta da `carousel-builder-main` a `carousel-builder`, poi selezionala: alcuni client richiedono che il nome della cartella coincida con quello dichiarato dalla skill.
 3. Dopo l'installazione, invoca la skill con `$carousel-builder` e incolla un URL, un testo o le tue note.
 
 Se usi Codex e preferisci installarla dalla riga di comando, trovi il comando nella sezione [Installazione locale](#installazione-locale).
@@ -38,8 +36,8 @@ Se usi Codex e preferisci installarla dalla riga di comando, trovi il comando ne
 
 | Capacità della sessione | Modalità usata |
 | --- | --- |
-| Se usi un agente avrà Python 3, browser locale e ricezione degli eventi disponibili | Editor HTML locale con invio automatico di correzioni e approvazioni |
-| Se usi un chatbot web alcune capacità macheranno | Revisione direttamente nella conversazione |
+| Python 3, apertura di un indirizzo locale nel browser e ricezione degli eventi del server: tutte e tre disponibili | Editor HTML locale con invio automatico di correzioni e approvazioni |
+| Anche una sola delle tre non è disponibile | Revisione direttamente nella conversazione |
 
 La scelta dipende dalle capacità effettivamente rilevate, non dal nome del prodotto. In ChatGPT Web, Claude o altri client privi di accesso al browser locale, la skill continua a funzionare con il fallback conversazionale. In un ambiente agentico compatibile, come Codex con gli strumenti necessari, può aprire l'editor locale.
 
@@ -70,14 +68,27 @@ Questa procedura serve soltanto per installare la skill nella directory locale d
 curl -L https://github.com/vincos73/carousel-builder/archive/refs/heads/main.zip -o carousel-builder.zip
 unzip -q carousel-builder.zip
 mkdir -p ~/.codex/skills/carousel-builder
-cp -R carousel-builder-main/. ~/.codex/skills/carousel-builder/
+rsync -a --exclude agent-plugin --exclude tests --exclude .github \
+  carousel-builder-main/ ~/.codex/skills/carousel-builder/
 ```
+
+Le cartelle escluse non fanno parte della skill: `agent-plugin/` è una copia della skill destinata a un'altra forma di distribuzione, e copiarla dentro la skill installata produrrebbe una seconda copia annidata.
 
 Poi riapri o aggiorna Codex e invoca `$carousel-builder`.
 
 ### Distribuzione Agent Plugins
 
 Il repository include anche un pacchetto skills-only compatibile con Agent Plugins nella cartella [`agent-plugin/`](agent-plugin/). Il pacchetto contiene `plugin.json` e la skill in `skills/carousel-builder/`; non richiede né include un server MCP.
+
+Il contenuto di `agent-plugin/skills/carousel-builder/` è una copia esatta della skill nella radice del repository. Ogni modifica va replicata in entrambe le posizioni: la CI confronta le due copie e fallisce se divergono.
+
+## Sviluppo
+
+I due script del percorso `local-editor` sono coperti da test con la sola libreria standard, senza dipendenze da installare:
+
+```bash
+python3 -m unittest discover -s tests -t tests -v
+```
 
 ## Modalità editoriali
 

@@ -50,6 +50,14 @@ python3 <skill>/scripts/apply_review.py <manifest.json> <session-dir>/feedback.j
 
 Lo script deve aggiornare soltanto i campi editoriali consentiti, preservare un backup nella cartella di sessione, incrementare `revision` quando cambia il testo o l'ordine e non modificare automaticamente `workflow_state`.
 
+Lo script riallinea inoltre i riferimenti derivati dai testi:
+
+- rimuove dai campi `*_serif` e `*_accent` le frasi che non compaiono più nel testo aggiornato e le elenca in `emphasis_dropped`;
+- ricostruisce `accessibility.reading_order` secondo la sequenza risultante;
+- elimina da `proof.slide_ids` gli ID delle slide non più presenti e li elenca in `proof_slide_ids_pruned`.
+
+Leggere sempre `warnings`, `stale_alt_text` e `stale_transcript` nell'output. Lo script non riscrive i testi descrittivi: gli `alt_text` delle slide modificate e la trascrizione di accessibilità restano invariati e vanno rigenerati dall'agente prima della produzione. Se il batch invalida una prova già approvata, lo script lo segnala senza modificare `proof.approved`.
+
 Esaminare poi `comments` e `overall_note`. I commenti sono richieste da interpretare, non modifiche già effettuate. Applicare le correzioni necessarie al manifest, ripetere i controlli editoriali e aggiornare la revisione se occorre.
 
 Se `action` è `approve`, trattarla come richiesta esplicita di approvazione. Impostare `workflow_state: testi_approvati` soltanto dopo aver risolto i commenti e superato i controlli. In caso contrario mantenere `bozza`.
@@ -58,6 +66,6 @@ Se `action` è `approve`, trattarla come richiesta esplicita di approvazione. Im
 
 Il browser conserva una bozza locale finché il batch non viene inviato. Il server conserva l'ultimo batch nella cartella di sessione. Se il processo si interrompe, riavviarlo con gli stessi manifest e cartella di sessione.
 
-Dopo aver applicato il batch, lo script registra l'esito in `session-state.json`; l'editor rileva il nuovo stato e ricarica il manifest aggiornato. Chiudere il processo del server quando la revisione è terminata o l'utente interrompe il lavoro.
+Dopo aver applicato il batch, lo script registra l'esito in `session-state.json`; l'editor rileva il nuovo stato e ricarica il manifest aggiornato. L'editor confronta anche la revisione del manifest con quella che sta mostrando: quando l'agente incrementa `revision` risolvendo i commenti, la pagina si aggiorna da sola se non ci sono modifiche locali in sospeso, altrimenti blocca l'invio e propone il ricarico. Non chiedere all'utente di aggiornare la pagina a mano. Chiudere il processo del server quando la revisione è terminata o l'utente interrompe il lavoro.
 
 Se il server, il browser o l'applicazione del batch falliscono, non modificare lo stato del workflow. Offrire la revisione conversazionale come fallback dichiarato.
