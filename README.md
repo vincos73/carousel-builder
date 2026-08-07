@@ -1,8 +1,8 @@
 # Carousel Builder by Vincos
 
-Skill adattiva per trasformare URL, articoli, newsletter, note e testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social.
+Carousel Builder è una skill adattiva per trasformare URL, articoli, newsletter, note e testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social.
 
-La versione 2.0 riunisce in un solo pacchetto il flusso portabile e l'editor HTML locale. La skill verifica le capacità della sessione e sceglie automaticamente la migliore superficie di revisione disponibile, senza dipendere da Canvas.
+Può essere usata con ChatGPT e Claude (versioni web), ma dà il meglio quando viene usata con le versioni desktop. In particolare se usata con ChatGPT Desktop permette una revisione visiva delle slide del carosello attraverso un editor html.
 
 <img width="1256" height="701" alt="carousel-builder-screenshot" src="https://github.com/user-attachments/assets/1e4de6de-2960-405d-881c-21d6d14b943c" />
 
@@ -20,7 +20,7 @@ Non serve conoscere GitHub o usare il terminale per iniziare.
 
 Il pacchetto contiene soltanto la skill, in una cartella già chiamata `carousel-builder` come richiesto da alcuni client. Se preferisci l'ultimo stato del repository invece dell'ultima versione pubblicata, puoi sempre scaricare [l'archivio del ramo `main`](https://github.com/vincos73/carousel-builder/archive/refs/heads/main.zip), che però include anche i file di sviluppo e si estrae come `carousel-builder-main`.
 
-Se usi Codex e preferisci installarla dalla riga di comando, trovi il comando nella sezione [Installazione locale](#installazione-locale).
+Se usi ChatGPT Desktop e preferisci installarla dalla riga di comando, trovi il comando nella sezione [Installazione locale](#installazione-locale).
 
 ## Cosa fa
 
@@ -30,18 +30,19 @@ Se usi Codex e preferisci installarla dalla riga di comando, trovi il comando ne
 - permette di approvare profilo e testi prima della produzione grafica;
 - offre un editor locale per correggere, riordinare, commentare e approvare le slide quando l'ambiente lo consente;
 - usa la revisione conversazionale come fallback negli altri ambienti;
-- genera una prova visuale con copertina, slide più densa e chiusura;
 - produce PNG, PDF o un layout dettagliato, secondo gli strumenti disponibili;
 - controlla leggibilità, contrasto, font, ritagli e corrispondenza con i testi approvati.
 
 ## Un'unica skill, due modalità
+
+La skill si adatta all'ambiente di lavoro dell'utente: in ChatGPT Web, Claude o altri client privi di accesso al browser locale, la skill funziona in modalità conversazionale. 
+In un ambiente agentivo compatibile, come ChatGPT Desktop può aprire l'editor locale per dar modo di fare modifiche mirate.
 
 | Capacità della sessione | Modalità usata |
 | --- | --- |
 | Python 3, apertura di un indirizzo locale nel browser e ricezione degli eventi del server: tutte e tre disponibili | Editor HTML locale con invio automatico di correzioni e approvazioni |
 | Anche una sola delle tre non è disponibile | Revisione direttamente nella conversazione |
 
-La scelta dipende dalle capacità effettivamente rilevate, non dal nome del prodotto. In ChatGPT Web, Claude o altri client privi di accesso al browser locale, la skill continua a funzionare con il fallback conversazionale. In un ambiente agentico compatibile, come Codex con gli strumenti necessari, può aprire l'editor locale.
 
 ## Flusso
 
