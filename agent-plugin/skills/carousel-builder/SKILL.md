@@ -1,0 +1,127 @@
+---
+name: carousel-builder
+description: Trasforma URL, articoli, newsletter, note e testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social. Usare per ideare, sintetizzare, impaginare, modificare o rigenerare carousel e social card; configurare o riutilizzare un'identità visiva tramite sito, brand kit, indicazioni manuali, profilo JSON o brand pack; revisionare i testi prima della produzione; creare PNG, PDF o layout dettagliati in base agli strumenti disponibili.
+---
+
+# Carousel Builder
+
+Versione: **1.7.0**
+
+Creare caroselli editoriali separando fonte, profilo visivo, approvazione dei testi e produzione grafica.
+
+Usare soltanto strumenti già disponibili nella sessione. Non installare pacchetti, non scaricare browser, font o dipendenze e non eseguire script inclusi nella skill. Recuperare risorse esterne soltanto quando l'utente fornisce o approva esplicitamente la fonte e lo strumento lo consente.
+
+Non incorporare identità, logo, URL, firma o attribuzioni della skill nei caroselli senza approvazione esplicita. Non ricavare il brand dalla fonte, dalla memoria o dal profilo personale dell'utente.
+
+Richiedere due approvazioni distinte prima del rendering completo: prima profilo e testi, poi una prova visuale. Una richiesta iniziale come «crea un carosello» autorizza la proposta editoriale, non la produzione grafica.
+
+Gestire il lavoro con questi stati: `bozza` → `testi_approvati` → `prova_visuale_approvata` → `rendering` → `qa` → `consegnato`. Non avanzare di stato senza il relativo via libera o senza aver completato il controllo previsto.
+
+## Fase 0: preflight e orientamento
+
+1. Leggere [references/production-qa.md](references/production-qa.md) e determinare quali risultati sono realisticamente producibili nella sessione: immagini di copertina, card con tipografia controllata, PNG, PDF o solo layout dettagliato.
+2. Descrivere i risultati previsti in una frase, senza esporre nomi tecnici degli strumenti.
+3. Leggere [references/brand-onboarding.md](references/brand-onboarding.md). Se la richiesta è incompleta, mostrare l'introduzione operativa prevista. Se contiene già fonte e profilo JSON, brand pack, tema neutro o indicazioni visive sufficienti, evitare l'introduzione estesa e procedere.
+
+## Fase 1: fonte, brand e anteprima
+
+1. Leggere interamente la fonte. Il conferimento di un URL autorizza la lettura di quell'URL, non di risorse estranee. Se la fonte non è leggibile, non colmare i vuoti: chiedere di incollare il testo, caricare il documento o fornire una versione accessibile.
+2. Determinare la modalità della fonte:
+   - `newsletter`: più notizie o sezioni distinte;
+   - `article`: un articolo, paper o testo argomentativo;
+   - `notes`: note o testo da trasformare in sequenza;
+   - `verbatim`: testo da riprodurre senza riscrittura, diviso sui doppi a capo.
+   Accettare `rework` e `social` come alias legacy rispettivamente di `notes` e `verbatim`.
+3. Determinare la modalità della sequenza con [references/editorial-workflow.md](references/editorial-workflow.md):
+   - `narrative`: una tesi sviluppata in passaggi dipendenti;
+   - `sectional`: sezioni o notizie autonome, comprensibili anche isolate.
+   Non confondere la modalità della fonte con quella della sequenza: un articolo è normalmente narrativo, ma può essere sezionale se la struttura della fonte lo richiede.
+4. Risolvere il profilo di brand:
+   - validare e usare il profilo JSON o il brand pack fornito;
+   - usare il profilo approvato nel lavoro corrente;
+   - configurare un nuovo profilo con il percorso rapido o guidato di [references/brand-onboarding.md](references/brand-onboarding.md);
+   - usare il profilo neutro di [references/brand-profile.md](references/brand-profile.md) solo dopo una scelta esplicita.
+5. Leggere [references/editorial-workflow.md](references/editorial-workflow.md) e costruire copertina e sequenza secondo `sequence_mode`.
+6. Leggere [references/semantic-emphasis.md](references/semantic-emphasis.md). Proporre massimo due enfasi per card soltanto se il profilo approvato prevede un secondo carattere o un accento pertinente. Gli asterischi sono comandi tipografici temporanei, non un obbligo stilistico.
+7. Nel percorso rapido, mostrare nella stessa risposta prima `Anteprima profilo brand` e poi `Anteprima testi`. Usare un solo checkpoint editoriale che richiede l'approvazione di entrambi; accettare correzioni o approvazioni separate senza creare due passaggi obbligatori.
+8. Nel percorso guidato, ottenere prima l'approvazione del profilo e poi mostrare `Anteprima testi`.
+9. Nell'anteprima testuale indicare:
+   - profilo usato;
+   - master 1080×1350, export previsto e numero totale di slide;
+   - titolo esatto della copertina;
+   - titolo e testo esatti di ogni slide;
+   - chiusura esatta, quando prevista;
+   - ogni frase compiuta su una nuova riga.
+10. Mostrare soltanto contenuti destinati alle slide, oltre alle informazioni minime su profilo, formato, fonte, `sequence_mode` e approvazione. Non esporre manifest, prompt visuali o note tecniche.
+11. Invitare l'utente a scegliere `Approva profilo e testi`, `Modifica il profilo` oppure `Modifica i testi`. Procedere soltanto quando entrambi risultano approvati. Fermarsi e attendere.
+12. Dopo qualsiasi modifica testuale, mostrare prima le slide cambiate e poi l'intera anteprima aggiornata. Chiedere nuovamente conferma.
+
+## Fase 2: prova visuale
+
+1. Leggere [references/cover-visual.md](references/cover-visual.md). Ricavare 2-3 concetti dalle slide e tradurli in una sola metafora visiva.
+2. Se è disponibile uno strumento nativo di generazione immagini, creare una sola immagine di copertina priva di testo e coerente con il profilo.
+3. Convertire le eventuali enfasi approvate in campi espliciti e rimuovere gli asterischi dai testi finali.
+4. Preparare una scheda di produzione conforme a [references/carousel-schema.md](references/carousel-schema.md), includendo profilo risolto, CTA e stato del lavoro.
+5. Creare una prova composta da copertina, card più densa e chiusura quando prevista. Usare card renderizzate soltanto con controllo tipografico affidabile; altrimenti mostrare il visuale disponibile e i tre layout dettagliati dichiarando il limite. Se non è possibile generare il visuale, mostrare composizione e direzione descritte chiaramente, senza presentarle come immagine finale.
+6. Verificare la prova a dimensione feed e a risoluzione leggibile secondo [references/production-qa.md](references/production-qa.md).
+7. Mostrare la prova e invitare l'utente a scegliere `Approva la prova visuale`, `Cambia la direzione grafica` oppure `Torna ai testi`. Fermarsi e attendere.
+8. Dopo qualsiasi modifica grafica, produrre e mostrare una nuova prova. Non riaprire l'approvazione dei testi se il testo approvato è rimasto identico.
+
+## Fase 3: produzione completa
+
+1. Dopo `Approva la prova visuale`, produrre l'intera sequenza con un renderer o adapter compatibile quando disponibile.
+2. Se non è disponibile un controllo tipografico affidabile, non generare card complete come immagini: consegnare il layout dettagliato, slide per slide, pronto per Canva, Figma o un editor equivalente.
+3. Applicare integralmente il controllo di [references/production-qa.md](references/production-qa.md). Per sequenze fino a 10 slide, ispezionare visivamente tutte le card oltre alla contact sheet completa.
+4. Correggere e rigenerare gli artefatti quando il controllo trova tagli, sovrapposizioni, contrasto insufficiente, asset mancanti o difformità dai testi approvati.
+5. Consegnare l'anteprima finale e gli artefatti prodotti, indicando numero, dimensioni, formato e modalità di produzione. Creare un archivio ZIP soltanto su richiesta esplicita.
+
+## Regole editoriali
+
+- Usare esclusivamente informazioni presenti nella fonte, salvo richiesta esplicita di ricerca o integrazione.
+- Scrivere nella lingua dell'utente o in quella richiesta, traducendo anche onboarding, etichette e comandi di conferma.
+- Mantenere massimo 5-6 slide di contenuto, salvo richiesta diversa.
+- Conservare numeri, nomi propri, cautele, condizioni e attribuzioni.
+- Non introdurre priorità, rapporti causali, gradi di certezza o conclusioni non presenti nella fonte.
+- Non usare em dash nei testi italiani.
+- Inserire una nuova riga dopo ogni frase compiuta, senza righe vuote; non spezzare abbreviazioni, iniziali, decimali, domini o URL.
+- Non riscrivere il testo in modalità `verbatim` senza autorizzazione.
+- Includere sempre la copertina.
+- La copertina contiene il titolo, non un sottotitolo. Non inventare né renderizzare un secondo livello testuale sotto il titolo.
+- In modalità `narrative`, lasciare vuoti i titoli delle slide interne e non renderizzare etichette tecniche, numeri di slide, nomi del layout o eyebrow decorativi. Il testo deve costruire una progressione continua.
+- In modalità `sectional`, usare titoli interni quando aiutano slide autonome; non usare comunque etichette tecniche o nomi del layout.
+- Per impostazione predefinita usare un solo visuale in copertina. Mantenere le slide interne pulite e tipografiche, senza SVG o disegni decorativi. Visuali interni richiedono una richiesta esplicita e una nuova prova visuale coerente per tecnica e stile.
+- Usare il carattere approvato nel profilo, non un font fisso della skill. Qualsiasi sostituzione deve essere nominata, motivata e approvata prima della prova visuale.
+- Includere la chiusura per `newsletter` e `article`, salvo scelta diversa nel profilo.
+- Generare la CTA dalla fonte corrente quando `outro.copy_mode` è `generate_from_source`; non salvarne titolo e corpo nel profilo riutilizzabile.
+- Contare la chiusura nel numero totale e mostrarla prima dell'approvazione.
+- Non usare Markdown nelle slide, eccetto gli asterischi temporanei per il cambio di font.
+- Evidenziare massimo due unità semantiche complete per card.
+- Non inventare logo, sito, firma, tagline, colori o attribuzioni.
+- Non presentare il profilo neutro come identità dell'utente.
+- Usare come master il canvas 1080×1350 in rapporto 4:5. Esportare in alta definizione a 1440×1800 applicando la stessa scala proporzionale, senza cambiare densità o impaginazione.
+- Trattare il 4:5 come master multipiattaforma, non come formato universale. Se il canale o placement richiesto usa un rapporto diverso, verificare le specifiche correnti, derivare una variante separata e sottoporla a una nuova prova visuale. Non deformare o ritagliare silenziosamente il master.
+- Consentire un adattamento tipografico automatico massimo dell'8%. Se il testo non entra ancora, fermarsi e richiedere una revisione del copy; non ridurre ulteriormente il carattere.
+
+## Profili riutilizzabili
+
+Accettare sito, brand kit, brief informale, JSON o brand pack. Tradurre gli input nello schema di [references/brand-profile.md](references/brand-profile.md).
+
+Un profilo JSON deve contenere regole riutilizzabili, non testi legati a una singola fonte. Logo e font proprietari non sono incorporati nel JSON: quando servono per la portabilità, offrire un brand pack con JSON e asset, soltanto su richiesta esplicita.
+
+Dopo l'approvazione di un nuovo profilo, offrire una volta di salvarlo come `<nome-brand>-carousel-brand.json`. Non modificare la skill e non incorporarvi asset personali.
+
+## Modifiche
+
+Per revisioni testuali, mostrare le slide cambiate e poi l'intera sequenza aggiornata, quindi attendere un nuovo via libera. Per modifiche esclusivamente grafiche, aggiornare il profilo o la scheda di produzione senza riaprire l'approvazione dei testi, ma richiedere sempre una nuova approvazione della prova visuale.
+
+Riutilizzare il visuale di copertina se una modifica testuale non cambia tesi, metafora o composizione. Rigenerarlo quando cambiano fonte, tesi centrale, metafora o direzione visiva.
+
+## Recupero e interruzioni
+
+Se una lettura, generazione, esportazione o verifica fallisce:
+
+1. non avanzare lo stato del lavoro;
+2. preservare fonte, profilo, testi approvati, manifest e artefatti validi già prodotti;
+3. spiegare in linguaggio semplice cosa non è riuscito e quale risultato resta disponibile;
+4. offrire `Riprova`, `Usa il fallback dichiarato`, `Torna allo stato precedente` oppure `Interrompi`;
+5. non presentare mai artefatti parziali come consegna completa.

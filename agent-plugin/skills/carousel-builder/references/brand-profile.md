@@ -1,0 +1,117 @@
+# Profilo di brand
+
+Usare per i nuovi profili questo schema:
+
+```json
+{
+  "profile_type": "carousel-brand",
+  "schema_version": "1.0",
+  "name": "Studio Example",
+  "website": "example.com",
+  "signature": "Studio Example",
+  "tagline": "Ideas made clear",
+  "logos": {
+    "on_light": "assets/logo-dark.svg",
+    "on_dark": "assets/logo-light.svg"
+  },
+  "fonts": {
+    "sans": { "family": "Brand Sans", "file": "assets/BrandSans.ttf", "source": "uploaded" },
+    "serif": { "family": "Brand Serif", "file": "assets/BrandSerif.ttf", "source": "uploaded" },
+    "serif_italic": { "family": "Brand Serif", "file": "assets/BrandSerifItalic.ttf", "source": "uploaded" }
+  },
+  "typography": {
+    "cover_px": 112,
+    "section_title_px": 72,
+    "body_px": 64,
+    "cover_weight": 800,
+    "section_title_weight": 800,
+    "body_weight": 620,
+    "body_line_height": 1.12,
+    "body_tracking_em": -0.025,
+    "metadata_px": 26
+  },
+  "palette": {
+    "surface_mode": "alternating",
+    "background_light": "#F5F1E8",
+    "background_dark": "#172033",
+    "text_on_light": "#172033",
+    "text_on_dark": "#FFFFFF",
+    "accent": "#C65A3A"
+  },
+  "visual_direction": {
+    "mode": "editorial-geometric",
+    "description": "Metafore visive essenziali, forme nette e texture leggere",
+    "references": [],
+    "avoid": ["robot umanoidi", "circuiti generici"],
+    "internal_slides": "clean_typographic"
+  },
+  "outro": {
+    "enabled": true,
+    "goal": "comment",
+    "copy_mode": "generate_from_source",
+    "eyebrow": "",
+    "fixed_title": "",
+    "fixed_body": ""
+  }
+}
+```
+
+## Regole
+
+- Usare `profile_type: carousel-brand` e `schema_version: 1.0` per riconoscere il file e consentire future migrazioni.
+- Consentire `surface_mode`: `light`, `dark` o `alternating`.
+- Usare `logos.on_light` sui fondi chiari e `logos.on_dark` sui fondi scuri.
+- Accettare TTF, OTF, WOFF e WOFF2. Usare `source`: `uploaded`, `bundled`, `system` o `fallback`.
+- Usare come carattere primario quello scelto e approvato dall'utente. Verificarne il caricamento effettivo prima della prova visuale.
+- Se l'utente richiede un font esatto e il file non è disponibile, chiedere il file. Se indica soltanto una famiglia o un tono, proporre un sostituto disponibile e attenderne l'approvazione.
+- Inter e Playfair Display inclusi sono fallback del profilo neutro, non fallback automatici di ogni brand.
+- Un font con `source: system` può essere usato dopo verifica locale, dichiarando che non è portabile senza il relativo file.
+- Usare la scala tipografica nominale indicata nel profilo. Scostamenti richiedono approvazione e restano soggetti al limite di riduzione dell'8%.
+- Accettare per `visual_direction.mode`: `editorial-geometric`, `photographic`, `illustrated-collage`, `hand-drawn`, `3d` o `custom`.
+- Trattare `visual_direction.description` come istruzione primaria.
+- Usare riferimenti soltanto se forniti o approvati.
+- Applicare `visual_direction.avoid` alla generazione e alla revisione.
+- Usare `visual_direction.internal_slides: clean_typographic` come impostazione predefinita: un solo visuale in copertina e slide interne prive di illustrazioni decorative. Un valore diverso richiede una scelta esplicita e una prova visuale aggiornata.
+- Verificare almeno 4.5:1 tra testo normale e sfondo e almeno 3:1 per testo grande. Segnalare un contrasto insufficiente anziché alterare silenziosamente i colori identificativi.
+- Non inventare dati identificativi mancanti.
+- Consentire un profilo personalizzato senza identità mostrata, lasciando vuoti nome, sito, firma, tagline e logo.
+
+## Chiusura
+
+Usare `copy_mode: generate_from_source` per generare titolo e corpo coerenti con la fonte corrente e con `goal`. Lasciare `eyebrow` vuoto salvo richiesta esplicita. Salvare nel profilo soltanto la strategia riutilizzabile.
+
+Usare `copy_mode: fixed` solo quando l'utente vuole deliberatamente riutilizzare `fixed_title` e `fixed_body` in tutti i caroselli.
+
+Le copie esatte generate per il singolo carosello appartengono al manifest, non al profilo.
+
+## Portabilità degli asset
+
+Il JSON non incorpora logo o font. Risolvere i percorsi relativi rispetto al JSON o al manifest che incorpora il profilo.
+
+Se un asset referenziato manca:
+
+1. non sostituirlo silenziosamente con un asset fittizio;
+2. chiedere il file oppure proporre un fallback dichiarato;
+3. offrire un brand pack con JSON e asset quando l'utente chiede portabilità completa.
+
+## Compatibilità con profili precedenti
+
+Accettare profili senza `schema_version` come legacy:
+
+- mappare `logo_light` a `logos.on_light` e `logo_dark` a `logos.on_dark` secondo il comportamento storico;
+- convertire i font espressi come stringhe in oggetti con `source` coerente;
+- convertire `palettes` nella nuova `palette`, chiedendo chiarimento solo se esistono valori incompatibili;
+- se `outro` contiene titolo o corpo ma non `copy_mode`, chiedere se siano testi fissi oppure specifici della vecchia fonte; non riutilizzarli automaticamente.
+
+## Profilo neutro
+
+Usarlo soltanto dopo scelta esplicita:
+
+- `name`: `Editorial Carousel`;
+- nessun logo, sito, firma o tagline;
+- Inter e Playfair Display inclusi;
+- `surface_mode: alternating` con palette predefinita leggibile;
+- direzione `editorial-geometric`;
+- chiusura generata dalla fonte per `newsletter` e `article`.
+
+Non salvarlo come brand dell'utente.

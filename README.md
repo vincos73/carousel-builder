@@ -52,6 +52,10 @@ Poi invoca `$carousel-builder`.
 
 In alternativa, scarica una release dalla sezione **Releases** e copia la cartella nella directory delle skill.
 
+### Distribuzione Agent Plugins
+
+Questo repository include anche un pacchetto skills-only compatibile con Agent Plugins nella cartella [`agent-plugin/`](agent-plugin/). Il pacchetto contiene `plugin.json` e la skill in `skills/carousel-builder/`; non richiede né include un server MCP.
+
 ## Modalità editoriali
 
 - **Narrativa**: per una tesi sviluppata in passaggi dipendenti.
