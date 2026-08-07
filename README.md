@@ -8,6 +8,20 @@ Skill adattiva per trasformare URL, articoli, newsletter, note e testi in carose
 
 La versione 2.0 riunisce in un solo pacchetto il flusso portabile e l'editor HTML locale. La skill verifica le capacità della sessione e sceglie automaticamente la migliore superficie di revisione disponibile, senza dipendere da Canvas.
 
+## Inizia da qui
+
+Puoi scaricare subito il pacchetto completo in formato ZIP:
+
+[**Scarica Carousel Builder**](https://github.com/vincos73/carousel-builder/archive/refs/heads/main.zip)
+
+Non serve conoscere GitHub o usare il terminale per iniziare.
+
+1. Scarica il file ZIP dal link qui sopra.
+2. Se il tuo strumento permette di caricare una skill, carica direttamente il file ZIP. Se chiede una cartella, scompatta il file e seleziona la cartella `carousel-builder-main`.
+3. Dopo l'installazione, invoca la skill con `$carousel-builder` e incolla un URL, un testo o le tue note.
+
+Se usi Codex e preferisci installarla dalla riga di comando, trovi il comando nella sezione [Installazione locale](#installazione-locale).
+
 ## Cosa fa
 
 - legge e sintetizza una fonte senza aggiungere informazioni estranee;
@@ -48,17 +62,18 @@ La scelta dipende dalle capacità effettivamente rilevate, non dal nome del prod
 - numerazione progressiva nell'angolo superiore destro per le sequenze narrative;
 - font e pesi derivati dal profilo approvato, senza imporre un carattere fisso.
 
-## Installazione
+## Installazione locale
 
-Per installare la skill `carousel-builder`:
+Questa procedura serve soltanto per installare la skill nella directory locale di Codex:
 
 ```bash
-git clone https://github.com/vincos73/carousel-builder.git ~/.codex/skills/carousel-builder
+curl -L https://github.com/vincos73/carousel-builder/archive/refs/heads/main.zip -o carousel-builder.zip
+unzip -q carousel-builder.zip
+mkdir -p ~/.codex/skills/carousel-builder
+cp -R carousel-builder-main/. ~/.codex/skills/carousel-builder/
 ```
 
-Poi invoca `$carousel-builder`.
-
-In alternativa, scarica una release dalla sezione **Releases** e copia la cartella nella directory delle skill del client.
+Poi riapri o aggiorna Codex e invoca `$carousel-builder`.
 
 ### Distribuzione Agent Plugins
 
