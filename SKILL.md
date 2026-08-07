@@ -5,7 +5,7 @@ description: Trasforma URL, articoli, newsletter, note e testi in caroselli edit
 
 # Carousel Builder
 
-Versione: **2.0.0**
+Versione: **2.1.0**
 
 Creare caroselli editoriali separando fonte, profilo visivo, revisione editoriale, approvazione dei testi e produzione grafica. Adattare la superficie di revisione alle capacità effettive della sessione, mantenendo invariati metodo editoriale e checkpoint.
 

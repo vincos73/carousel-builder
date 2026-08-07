@@ -8,15 +8,17 @@ La versione 2.0 riunisce in un solo pacchetto il flusso portabile e l'editor HTM
 
 ## Inizia da qui
 
-Puoi scaricare subito il pacchetto completo in formato ZIP:
+Puoi scaricare subito il pacchetto in formato ZIP:
 
-[**Scarica Carousel Builder**](https://github.com/vincos73/carousel-builder/archive/refs/heads/main.zip)
+[**Scarica Carousel Builder**](https://github.com/vincos73/carousel-builder/releases/latest/download/carousel-builder.zip)
 
 Non serve conoscere GitHub o usare il terminale per iniziare.
 
 1. Scarica il file ZIP dal link qui sopra.
-2. Se il tuo strumento permette di caricare una skill, carica direttamente il file ZIP. Se chiede una cartella, scompatta il file e **rinomina** la cartella ottenuta da `carousel-builder-main` a `carousel-builder`, poi selezionala: alcuni client richiedono che il nome della cartella coincida con quello dichiarato dalla skill.
+2. Se il tuo strumento permette di caricare una skill, carica direttamente il file ZIP. Se chiede una cartella, scompatta il file e seleziona la cartella `carousel-builder`.
 3. Dopo l'installazione, invoca la skill con `$carousel-builder` e incolla un URL, un testo o le tue note.
+
+Il pacchetto contiene soltanto la skill, in una cartella già chiamata `carousel-builder` come richiesto da alcuni client. Se preferisci l'ultimo stato del repository invece dell'ultima versione pubblicata, puoi sempre scaricare [l'archivio del ramo `main`](https://github.com/vincos73/carousel-builder/archive/refs/heads/main.zip), che però include anche i file di sviluppo e si estrae come `carousel-builder-main`.
 
 Se usi Codex e preferisci installarla dalla riga di comando, trovi il comando nella sezione [Installazione locale](#installazione-locale).
 
@@ -65,14 +67,11 @@ La scelta dipende dalle capacità effettivamente rilevate, non dal nome del prod
 Questa procedura serve soltanto per installare la skill nella directory locale di Codex. Apri il terminale e scrivi:
 
 ```bash
-curl -L https://github.com/vincos73/carousel-builder/archive/refs/heads/main.zip -o carousel-builder.zip
+curl -L https://github.com/vincos73/carousel-builder/releases/latest/download/carousel-builder.zip -o carousel-builder.zip
 unzip -q carousel-builder.zip
-mkdir -p ~/.codex/skills/carousel-builder
-rsync -a --exclude agent-plugin --exclude tests --exclude .github \
-  carousel-builder-main/ ~/.codex/skills/carousel-builder/
+mkdir -p ~/.codex/skills
+cp -R carousel-builder ~/.codex/skills/
 ```
-
-Le cartelle escluse non fanno parte della skill: `agent-plugin/` è una copia della skill destinata a un'altra forma di distribuzione, e copiarla dentro la skill installata produrrebbe una seconda copia annidata.
 
 Poi riapri o aggiorna Codex e invoca `$carousel-builder`.
 
