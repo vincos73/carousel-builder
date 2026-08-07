@@ -3,6 +3,7 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,14 +14,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: La versione dichiarata deve coincidere con il tag
+      - name: Determina il tag da pubblicare
+        id: version
         run: |
-          tag="${GITHUB_REF_NAME#v}"
           skill_version=$(grep -oP '(?<=^Versione: \*\*)[^*]+' SKILL.md)
           plugin_version=$(python3 -c "import json;print(json.load(open('agent-plugin/plugin.json'))['version'])")
-          echo "tag=$tag SKILL.md=$skill_version plugin.json=$plugin_version"
-          test "$tag" = "$skill_version"
-          test "$tag" = "$plugin_version"
+          echo "SKILL.md=$skill_version plugin.json=$plugin_version"
+          test "$skill_version" = "$plugin_version"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"
+            test "${tag#v}" = "$skill_version"
+          else
+            tag="v$skill_version"
+          fi
+          echo "Pubblico $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Costruisci il pacchetto della skill
         run: |
@@ -35,10 +43,20 @@ jobs:
       - name: Pubblica la release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "Carousel Builder ${GITHUB_REF_NAME#v}" \
-            --generate-notes \
-            --latest \
-            dist/carousel-builder.zip \
-            dist/carousel-builder-agent-plugin.zip
+          # Idempotente: se la release esiste già, per esempio perché è stata
+          # creata a mano dalla UI, ne aggiorna gli asset invece di fallire.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/carousel-builder.zip \
+              dist/carousel-builder-agent-plugin.zip --clobber
+          else
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "Carousel Builder ${TAG#v}" \
+              --generate-notes \
+              --latest \
+              dist/carousel-builder.zip \
+              dist/carousel-builder-agent-plugin.zip
+          fi
+          gh release view "$TAG" --json tagName,isLatest,assets
