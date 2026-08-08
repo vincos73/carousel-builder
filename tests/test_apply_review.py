@@ -296,6 +296,20 @@ class ApplyReviewTest(unittest.TestCase):
 
         result = self.apply(
             base_manifest(),
+            base_feedback(self.full_batch(), visual_style_system="geometrico"),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.manifest()["visual_style_system"], "editorial-halftone")
+
+        result = self.apply(
+            base_manifest(),
+            base_feedback(self.full_batch(), visual_style_system="istituzionale"),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.manifest()["visual_style_system"], "corporate-modular")
+
+        result = self.apply(
+            base_manifest(),
             base_feedback(self.full_batch(), visual_style_system="costellazione"),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
