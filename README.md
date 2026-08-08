@@ -1,6 +1,6 @@
 # Carousel Builder by Vincos
 
-Carousel Builder è una skill adattiva per trasformare URL, articoli, newsletter, note e testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social.
+Carousel Builder è una skill adattiva per trasformare URL, articoli, newsletter, testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social (formato .pdf e .png).
 
 Può essere usata con ChatGPT e Claude (versioni web), ma dà il meglio quando viene usata con le versioni desktop. In particolare se usata con ChatGPT Desktop permette una revisione visiva delle slide del carosello attraverso un editor html.
 
@@ -28,7 +28,7 @@ Se usi ChatGPT Desktop e preferisci installarla dalla riga di comando, trovi il 
 
 - legge e sintetizza una fonte senza aggiungere informazioni estranee;
 - configura un'identità visiva da sito, brand kit, descrizione manuale o profilo JSON;
-- distingue tra sequenza narrativa e sequenza sezionale;
+- distingue tra sequenza narrativa e sequenza sezionale (titolo e corpo);
 - permette di approvare profilo e testi prima della produzione grafica;
 - offre un editor locale per correggere, riordinare, commentare e approvare le slide quando l'ambiente lo consente;
 - usa la revisione conversazionale come fallback negli altri ambienti;
