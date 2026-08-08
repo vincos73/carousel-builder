@@ -43,7 +43,7 @@ In un ambiente agentivo compatibile, come ChatGPT Desktop può aprire l'editor l
 | Capacità della sessione | Modalità usata |
 | --- | --- |
 | Python 3, apertura di un indirizzo locale nel browser e ricezione degli eventi del server: tutte e tre disponibili | Editor HTML locale con invio automatico di correzioni e approvazioni |
-| Anche una sola delle tre non è disponibile | Revisione direttamente nella conversazione |
+| Anche se una sola delle tre non è disponibile | Revisione attraverso conversazione testuale |
 
 
 ## Flusso
@@ -51,7 +51,7 @@ In un ambiente agentivo compatibile, come ChatGPT Desktop può aprire l'editor l
 1. **Fonte**: URL, testo, note o file.
 2. **Brand**: configurazione, profilo salvato oppure tema neutro.
 3. **Anteprima editoriale**: profilo e testi completi da revisionare e approvare.
-4. **Prova visuale**: copertina, slide più densa e chiusura.
+4. **Prova visivae**: copertina, slide più densa e chiusura.
 5. **Produzione**: sequenza completa soltanto dopo la seconda approvazione.
 6. **Controllo finale**: verifica di tutti gli artefatti prodotti.
 
@@ -61,7 +61,7 @@ In un ambiente agentivo compatibile, come ChatGPT Desktop può aprire l'editor l
 - esportazione ad alta definizione: **1440×1800 px**;
 - prova obbligatoria a **480×600 px**;
 - adattamento tipografico automatico massimo: **8%**;
-- visuale generato in copertina, con slide interne pulite per impostazione predefinita;
+- immagine generata in copertina, con slide interne pulite per impostazione predefinita;
 - numerazione progressiva nell'angolo superiore destro per le sequenze narrative;
 - font e pesi derivati dal profilo approvato, senza imporre un carattere fisso.
 
