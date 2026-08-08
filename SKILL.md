@@ -5,7 +5,7 @@ description: Trasforma URL, articoli, newsletter, note e testi in caroselli edit
 
 # Carousel Builder
 
-Versione: **2.1.0**
+Versione: **2.2.0**
 
 Creare caroselli editoriali separando fonte, profilo visivo, revisione editoriale, approvazione dei testi e produzione grafica. Adattare la superficie di revisione alle capacità effettive della sessione, mantenendo invariati metodo editoriale e checkpoint.
 
@@ -64,7 +64,7 @@ Se l'ambiente espone esplicitamente le proprie capacità, usarle. Altrimenti ver
    - ogni frase compiuta su una nuova riga.
 10. Mostrare soltanto contenuti destinati alle slide, oltre alle informazioni minime su profilo, formato, fonte, `sequence_mode` e approvazione. Non esporre manifest, prompt visuali o note tecniche.
 11. Se è selezionato `local-editor`, creare il manifest in stato `bozza`, avviare l'editor secondo [references/visual-review.md](references/visual-review.md) e aprirlo nel browser. Non limitarsi a stampare il codice HTML nella chat e non duplicare l'intera anteprima, salvo richiesta dell'utente o fallback.
-12. Nell'editor invitare l'utente a scegliere `Invia correzioni` oppure `Approva profilo e testi`. Trattare l'invio delle correzioni come feedback, mai come approvazione implicita. Nel percorso `local-editor`, non terminare il turno e non chiedere all'utente di tornare in chat con messaggi come «fatto»: mantenere il task in ascolto dell'evento del server secondo [references/visual-review.md](references/visual-review.md).
+12. Nell'editor invitare l'utente a scegliere `Invia correzioni` oppure `Approva profilo e testi`. Dichiarare chiaramente che la copertina finale conterrà un'immagine, generata e mostrata in una prova visuale separata soltanto dopo l'approvazione dei testi. Trattare l'invio delle correzioni come feedback, mai come approvazione implicita. Nel percorso `local-editor`, non terminare il turno e non chiedere all'utente di tornare in chat con messaggi come «fatto»: mantenere il task in ascolto dell'evento del server secondo [references/visual-review.md](references/visual-review.md).
 13. Appena il server segnala il batch, applicare le modifiche dirette con `scripts/apply_review.py`, quindi esaminare e risolvere tutti i commenti ricevuti. Conservare esattamente il testo scritto dall'utente salvo incompatibilità dichiarata con fonte, modalità `verbatim` o vincoli di produzione.
 14. Dopo ogni batch, ripetere i controlli editoriali, aggiornare il manifest e far ricaricare l'editor. Non avanzare oltre `bozza` finché l'utente non ha richiesto esplicitamente l'approvazione e tutti i controlli sono superati.
 15. Se l'utente richiede l'approvazione ma resta un problema bloccante, mantenere `bozza`, mostrare il problema nell'editor o in chat e chiedere una correzione.
@@ -100,7 +100,9 @@ Se l'ambiente espone esplicitamente le proprie capacità, usarle. Altrimenti ver
 - Inserire una nuova riga dopo ogni frase compiuta, senza righe vuote; non spezzare abbreviazioni, iniziali, decimali, domini o URL.
 - Non riscrivere il testo in modalità `verbatim` senza autorizzazione.
 - Includere sempre la copertina.
-- La copertina contiene il titolo, non un sottotitolo. Non inventare né renderizzare un secondo livello testuale sotto il titolo.
+- La copertina contiene sempre il titolo. Il sottotitolo è opzionale: usarlo soltanto quando l'utente lo fornisce o lo approva esplicitamente, senza inventarlo. Renderizzarlo in Playfair Display corsivo, subordinato al titolo.
+- Ogni uso di Playfair Display è sempre in corsivo, comprese le enfasi semantiche `*_serif`; non usare la variante tonda.
+- Nei testi di slide e chiusura, iniziare ogni nuova frase completa su una nuova riga. Non spezzare i punti interni a numeri, decimali o versioni come `1.2`; rispettare inoltre le abbreviazioni comuni.
 - In modalità `narrative`, lasciare vuoti i titoli delle slide interne e non renderizzare etichette tecniche, nomi del layout o eyebrow decorativi. Inserire soltanto la numerazione progressiva delle pagine nell'angolo superiore destro, inclusi copertina e chiusura, dentro la safe area. Il testo deve costruire una progressione continua.
 - In modalità `sectional`, usare titoli interni quando aiutano slide autonome; non usare comunque etichette tecniche o nomi del layout.
 - Per impostazione predefinita usare un solo visuale in copertina. Mantenere le slide interne pulite e tipografiche, senza SVG o disegni decorativi. Visuali interni richiedono una richiesta esplicita e una nuova prova visuale coerente per tecnica e stile.

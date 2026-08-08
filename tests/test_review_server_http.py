@@ -42,7 +42,23 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.workdir = Path(self._tmp.name)
         self.manifest_path = self.workdir / "manifest.json"
         self.session_dir = self.workdir / "session"
-        write_json(self.manifest_path, base_manifest())
+        self.font_path = self.workdir / "brand.woff2"
+        self.font_path.write_bytes(b"test font bytes")
+        self.cover_path = self.workdir / "cover.png"
+        self.cover_path.write_bytes(b"test image bytes")
+        manifest = base_manifest()
+        manifest["cover_image"] = "cover.png"
+        manifest["brand"] = {
+            "fonts": {
+                "sans": {
+                    "family": "Review Sans",
+                    "file": "brand.woff2",
+                    "source": "uploaded",
+                },
+                "serif": {"family": "Missing Serif", "file": "missing.ttf"},
+            }
+        }
+        write_json(self.manifest_path, manifest)
         self.process = subprocess.Popen(
             [
                 sys.executable,
@@ -114,10 +130,25 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.assertEqual(status, 200)
 
     def test_serves_the_static_assets(self) -> None:
-        for path in ("/assets/styles.css", "/assets/app.js"):
+        for path in (
+            "/assets/styles.css",
+            "/assets/app.js",
+            "/styles.css",
+            "/app.js",
+            "/assets/fonts/Inter-Variable.ttf",
+            "/assets/fonts/PlayfairDisplay-Variable.ttf",
+            "/assets/fonts/PlayfairDisplay-Italic-Variable.ttf",
+        ):
             status, payload = request(f"{self.origin}{path}")
             self.assertEqual(status, 200, path)
             self.assertTrue(payload)
+
+    def test_serves_bundled_fonts_with_a_safe_mime_type(self) -> None:
+        with urllib.request.urlopen(
+            f"{self.origin}/assets/fonts/Inter-Variable.ttf", timeout=10
+        ) as response:
+            self.assertEqual(response.headers["Content-Type"], "font/ttf")
+            self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
 
     def test_sets_the_expected_security_headers(self) -> None:
         req = urllib.request.Request(self.url)
@@ -125,6 +156,29 @@ class ReviewServerHTTPTest(unittest.TestCase):
             self.assertEqual(response.headers["X-Frame-Options"], "DENY")
             self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
             self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
+            self.assertIn("font-src 'self'", response.headers["Content-Security-Policy"])
+
+    def test_serves_an_authorized_manifest_font_with_the_right_mime_type(self) -> None:
+        with urllib.request.urlopen(self.api("/api/font/sans"), timeout=10) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers["Content-Type"], "font/woff2")
+            self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+            self.assertEqual(response.read(), b"test font bytes")
+
+    def test_rejects_a_wrong_token_for_a_font(self) -> None:
+        self.assertEqual(request(f"{self.origin}/api/font/sans?token=sbagliato")[0], 403)
+
+    def test_serves_only_an_authorized_manifest_cover_image(self) -> None:
+        with urllib.request.urlopen(self.api("/api/cover-image"), timeout=10) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers["Content-Type"], "image/png")
+            self.assertEqual(response.read(), b"test image bytes")
+        self.assertEqual(
+            request(f"{self.origin}/api/cover-image?token=sbagliato")[0], 403
+        )
+
+    def test_reports_a_missing_font_without_falling_back_to_a_path(self) -> None:
+        self.assertEqual(request(self.api("/api/font/serif"))[0], 404)
 
     def test_rejects_an_unknown_route(self) -> None:
         self.assertEqual(request(self.api("/api/altro"))[0], 404)

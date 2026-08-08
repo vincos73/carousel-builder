@@ -21,12 +21,15 @@ Usare per i nuovi profili questo schema:
   },
   "typography": {
     "cover_px": 112,
+    "cover_subtitle_px": 56,
     "section_title_px": 72,
     "body_px": 64,
     "cover_weight": 800,
+    "cover_subtitle_weight": 500,
     "section_title_weight": 800,
     "body_weight": 620,
     "body_line_height": 1.12,
+    "cover_subtitle_line_height": 1.08,
     "body_tracking_em": -0.025,
     "metadata_px": 26
   },
@@ -64,7 +67,7 @@ Usare per i nuovi profili questo schema:
 - Accettare TTF, OTF, WOFF e WOFF2. Usare `source`: `uploaded`, `bundled`, `system` o `fallback`.
 - Usare come carattere primario quello scelto e approvato dall'utente. Verificarne il caricamento effettivo prima della prova visuale.
 - Se l'utente richiede un font esatto e il file non è disponibile, chiedere il file. Se indica soltanto una famiglia o un tono, proporre un sostituto disponibile e attenderne l'approvazione.
-- Inter e Playfair Display inclusi sono fallback del profilo neutro, non fallback automatici di ogni brand.
+- Inter e Playfair Display inclusi sono fallback del profilo neutro, non fallback automatici di ogni brand. Playfair Display va sempre usato nella variante corsiva.
 - Un font con `source: system` può essere usato dopo verifica locale, dichiarando che non è portabile senza il relativo file.
 - Usare la scala tipografica nominale indicata nel profilo. Scostamenti richiedono approvazione e restano soggetti al limite di riduzione dell'8%.
 - Accettare per `visual_direction.mode`: `editorial-geometric`, `photographic`, `illustrated-collage`, `hand-drawn`, `3d` o `custom`.

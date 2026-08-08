@@ -8,6 +8,7 @@ Usare l'enfasi tipografica soltanto quando il profilo approvato prevede un secon
 - Usare gli asterischi solo per il cambio di font, non per grassetto o corsivo Markdown.
 - Racchiudere unità semantiche complete e usare massimo due segmenti per card.
 - Dopo l'approvazione, rimuovere gli asterischi e compilare `cover_title_serif`, `title_serif` o `summary_serif`.
+- Ogni frase marcata `*_serif` usa Playfair Display sempre in corsivo. Il sottotitolo opzionale di copertina usa lo stesso trattamento per intero e non richiede una marcatura semantica separata.
 
 ## Criteri
 

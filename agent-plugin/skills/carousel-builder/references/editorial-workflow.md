@@ -3,7 +3,8 @@
 ## Regole comuni
 
 - Formulare un `cover_title` breve, fedele e comprensibile autonomamente.
-- Non aggiungere un sottotitolo alla copertina.
+- Aggiungere `cover_subtitle` soltanto se l'utente lo fornisce o lo approva esplicitamente. È sempre subordinato al titolo e renderizzato in Playfair Display corsivo.
+- Nei testi, inserire almeno un ritorno a capo dopo ogni punto che conclude una frase. Non spezzare decimali e versioni (`1.2`) né abbreviazioni comuni (`es.`, `ecc.`).
 - Mantenere la promessa della copertina lungo tutta la sequenza.
 - Inserire un ritorno a capo dopo ogni frase compiuta.
 - Conservare cautele, attribuzioni e condizioni che cambiano il significato.

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import shutil
 import sys
@@ -50,6 +51,21 @@ EMPHASIS_KEYS = {
     "title": ("title_serif", "title_accent"),
     "summary": ("summary_serif", "summary_accent"),
 }
+SENTENCE_BREAK_ABBREVIATIONS = {
+    "ca", "cfr", "dott", "ecc", "es", "n", "pag", "pp", "prof", "sig", "sigg", "vs"
+}
+SENTENCE_BREAK_RE = re.compile(r'\.(?!\d)([”’"\')\]]*)[ \t]+(?=[A-ZÀÈÉÌÒÙ])')
+
+
+def sentence_line_breaks(value: str) -> str:
+    """Separa le frasi complete senza spezzare decimali, versioni o abbreviazioni."""
+    def replace(match: re.Match[str]) -> str:
+        token = re.search(r"([A-Za-zÀ-ÿ]+)$", value[: match.start()])
+        if token and token.group(1).casefold() in SENTENCE_BREAK_ABBREVIATIONS:
+            return match.group(0)
+        return "." + match.group(1) + "\n"
+
+    return SENTENCE_BREAK_RE.sub(replace, value)
 
 
 def emphasis_phrases(container: dict, field: str) -> list[tuple[str, str]]:
@@ -158,6 +174,9 @@ def main() -> int:
         if not isinstance(cover, dict):
             raise ValueError("La copertina manca dal batch")
         new_cover = require_text(cover.get("title"), "cover.title")
+        new_cover_subtitle = sentence_line_breaks(
+            require_text(cover.get("summary"), "cover.summary")
+        )
 
         emphasis_dropped: dict[str, list[str]] = {}
         warnings: list[str] = []
@@ -168,12 +187,14 @@ def main() -> int:
             for key in EMPHASIS_KEYS["cover_title"]
             if isinstance(manifest.get(key), list)
         }
+        cover_copy_changed = (
+            manifest.get("cover_title", "") != new_cover
+            or manifest.get("cover_subtitle", "") != new_cover_subtitle
+        )
         if manifest.get("cover_title", "") != new_cover:
             dropped = prune_emphasis(cover_emphasis, "cover_title", new_cover)
             if dropped:
                 emphasis_dropped["cover"] = dropped
-            if manifest.get("cover_alt_text"):
-                stale_alt_text.append("cover")
         else:
             stale = stale_emphasis(manifest, "cover_title", new_cover)
             if stale:
@@ -181,6 +202,8 @@ def main() -> int:
                     "Enfasi già incoerenti con cover_title, non modificate: "
                     + ", ".join(repr(phrase) for phrase in stale)
                 )
+        if cover_copy_changed and manifest.get("cover_alt_text"):
+            stale_alt_text.append("cover")
 
         new_items: list[dict] = []
         seen: set[str] = set()
@@ -194,7 +217,9 @@ def main() -> int:
             previous = by_id[item_id]
             updated = dict(previous)
             updated["title"] = require_text(slide.get("title"), f"{item_id}.title")
-            updated["summary"] = require_text(slide.get("summary"), f"{item_id}.summary")
+            updated["summary"] = sentence_line_breaks(
+                require_text(slide.get("summary"), f"{item_id}.summary")
+            )
             dropped: list[str] = []
             text_changed = False
             for field in ("title", "summary"):
@@ -223,7 +248,9 @@ def main() -> int:
                 raise ValueError("La chiusura manca dal batch")
             new_outro = dict(manifest["outro"])
             new_outro["title"] = require_text(outro_slide.get("title"), "outro.title")
-            new_outro["body"] = require_text(outro_slide.get("summary"), "outro.body")
+            new_outro["body"] = sentence_line_breaks(
+                require_text(outro_slide.get("summary"), "outro.body")
+            )
             outro_changed = (
                 manifest["outro"].get("title", "") != new_outro["title"]
                 or manifest["outro"].get("body", "") != new_outro["body"]
@@ -234,6 +261,8 @@ def main() -> int:
         changed: list[str] = []
         if manifest.get("cover_title", "") != new_cover:
             changed.append("cover_title")
+        if manifest.get("cover_subtitle", "") != new_cover_subtitle:
+            changed.append("cover_subtitle")
         if original_items != new_items:
             changed.append("items")
         if new_outro is not None and manifest.get("outro") != new_outro:
@@ -318,6 +347,7 @@ def main() -> int:
                 backup_name = f"manifest-r{revision}-{feedback['feedback_id']}.json"
                 shutil.copy2(manifest_path, backups_dir / backup_name)
                 manifest["cover_title"] = new_cover
+                manifest["cover_subtitle"] = new_cover_subtitle
                 manifest["items"] = new_items
                 manifest.update(cover_emphasis)
                 if new_outro is not None:

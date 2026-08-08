@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import sys
 import threading
@@ -20,6 +21,45 @@ MAX_BODY_BYTES = 1_000_000
 MAX_SLIDES = 50
 MAX_COMMENTS = 200
 MAX_TEXT = 20_000
+TYPOGRAPHY_DEFAULTS = {
+    "cover_px": 112,
+    "cover_subtitle_px": 56,
+    "section_title_px": 72,
+    "body_px": 64,
+    "cover_weight": 800,
+    "cover_subtitle_weight": 500,
+    "section_title_weight": 800,
+    "body_weight": 620,
+    "body_line_height": 1.12,
+    "cover_subtitle_line_height": 1.08,
+    "body_tracking_em": -0.025,
+    "min_auto_scale": 0.92,
+    "overflow_policy": "error_and_copy_revision",
+}
+FONT_MIME_TYPES = {
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+}
+IMAGE_MIME_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+FONT_SOURCES = {"uploaded", "bundled", "system", "fallback"}
+BUNDLED_FONT_ASSETS = {
+    "sans": ("Inter", Path(__file__).resolve().parent.parent / "assets" / "fonts" / "Inter-Variable.ttf"),
+    "serif": (
+        "Playfair Display",
+        Path(__file__).resolve().parent.parent / "assets" / "fonts" / "PlayfairDisplay-Italic-Variable.ttf",
+    ),
+}
+SENTENCE_BREAK_ABBREVIATIONS = {
+    "ca", "cfr", "dott", "ecc", "es", "n", "pag", "pp", "prof", "sig", "sigg", "vs"
+}
+SENTENCE_BREAK_RE = re.compile(r'\.(?!\d)([”’"\')\]]*)[ \t]+(?=[A-ZÀÈÉÌÒÙ])')
 
 
 def now_iso() -> str:
@@ -57,6 +97,22 @@ def text(value: object, *, field: str, limit: int = MAX_TEXT) -> str:
     return value
 
 
+def sentence_line_breaks(value: str) -> str:
+    """Put each clearly complete sentence on a new line.
+
+    Decimal/version dots such as ``1.2`` never match. A short allowlist avoids
+    treating common Italian abbreviations as sentence endings.
+    """
+    def replace(match: re.Match[str]) -> str:
+        prefix = value[: match.start()]
+        token = re.search(r"([A-Za-zÀ-ÿ]+)$", prefix)
+        if token and token.group(1).casefold() in SENTENCE_BREAK_ABBREVIATIONS:
+            return match.group(0)
+        return "." + match.group(1) + "\n"
+
+    return SENTENCE_BREAK_RE.sub(replace, value)
+
+
 def stable_items(manifest: dict) -> list[dict]:
     items = manifest.get("items")
     if not isinstance(items, list) or not items:
@@ -74,7 +130,153 @@ def stable_items(manifest: dict) -> list[dict]:
     return result
 
 
-def brand_summary(manifest: dict) -> dict:
+def _short_string(value: object, *, limit: int = 200) -> str:
+    """Return a presentation-safe string without trusting manifest types."""
+    return value if isinstance(value, str) and len(value) <= limit else ""
+
+
+def normalize_typography(manifest: dict) -> dict:
+    """Expose documented typography defaults while discarding malformed values."""
+    raw = manifest.get("typography")
+    values = raw if isinstance(raw, dict) else {}
+
+    def positive_int(key: str) -> int:
+        value = values.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 1_000:
+            return value
+        return TYPOGRAPHY_DEFAULTS[key]
+
+    def finite_number(key: str, *, lower: float, upper: float) -> float:
+        value = values.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            converted = float(value)
+            if lower <= converted <= upper:
+                return converted
+        return TYPOGRAPHY_DEFAULTS[key]
+
+    min_auto_scale = finite_number("min_auto_scale", lower=0.0, upper=10.0)
+    return {
+        "cover_px": positive_int("cover_px"),
+        "cover_subtitle_px": positive_int("cover_subtitle_px"),
+        "section_title_px": positive_int("section_title_px"),
+        "body_px": positive_int("body_px"),
+        "cover_weight": positive_int("cover_weight"),
+        "cover_subtitle_weight": positive_int("cover_subtitle_weight"),
+        "section_title_weight": positive_int("section_title_weight"),
+        "body_weight": positive_int("body_weight"),
+        "body_line_height": finite_number("body_line_height", lower=0.5, upper=3.0),
+        "cover_subtitle_line_height": finite_number(
+            "cover_subtitle_line_height", lower=0.5, upper=3.0
+        ),
+        "body_tracking_em": finite_number("body_tracking_em", lower=-1.0, upper=1.0),
+        "min_auto_scale": max(0.92, min_auto_scale),
+        "overflow_policy": (
+            values.get("overflow_policy")
+            if values.get("overflow_policy") == "error_and_copy_revision"
+            else TYPOGRAPHY_DEFAULTS["overflow_policy"]
+        ),
+    }
+
+
+def validated_emphasis(value: object, content: str) -> list[str]:
+    """Keep at most two exact, non-empty phrases contained in their text."""
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for phrase in value:
+        if (
+            isinstance(phrase, str)
+            and phrase
+            and phrase in content
+            and phrase not in result
+        ):
+            result.append(phrase)
+            if len(result) == 2:
+                break
+    return result
+
+
+def _font_asset(manifest: dict, manifest_path: Path, key: str) -> tuple[dict, Path | None]:
+    brand = manifest.get("brand") if isinstance(manifest.get("brand"), dict) else {}
+    fonts = brand.get("fonts") if isinstance(brand.get("fonts"), dict) else {}
+    configured = fonts.get(key)
+    family = ""
+    source = "fallback"
+    file_name: object = None
+    if isinstance(configured, dict):
+        family = _short_string(configured.get("family"))
+        declared_source = configured.get("source")
+        if isinstance(declared_source, str) and declared_source in FONT_SOURCES:
+            source = declared_source
+        file_name = configured.get("file")
+    elif isinstance(configured, str):
+        family = _short_string(configured)
+
+    resolved: Path | None = None
+    if isinstance(file_name, str) and file_name:
+        candidate = Path(file_name)
+        if not candidate.is_absolute() and candidate.suffix.lower() in FONT_MIME_TYPES:
+            font_root = manifest_path.parent.resolve()
+            candidate = (font_root / candidate).resolve()
+            try:
+                candidate.relative_to(font_root)
+            except ValueError:
+                candidate = None
+            if candidate is not None and candidate.is_file():
+                resolved = candidate
+                if source == "fallback":
+                    source = "uploaded"
+
+    bundled_family, bundled_path = BUNDLED_FONT_ASSETS[key]
+    if resolved is None and family.casefold() == bundled_family.casefold() and bundled_path.is_file():
+        resolved = bundled_path
+        source = "bundled"
+
+    available = resolved is not None
+    public = {
+        "family": family,
+        "source": source,
+        "available": available,
+        "endpoint": f"/api/font/{key}" if available else "",
+    }
+    return public, resolved
+
+
+def font_assets(manifest: dict, manifest_path: Path) -> tuple[dict, dict[str, Path]]:
+    """Build public font metadata and the private, manifest-resolved allowlist."""
+    public: dict = {}
+    allowed: dict[str, Path] = {}
+    for key in ("sans", "serif"):
+        entry, resolved = _font_asset(manifest, manifest_path, key)
+        public[key] = entry
+        if resolved is not None:
+            allowed[key] = resolved
+    return public, allowed
+
+
+def cover_image_asset(manifest: dict, manifest_path: Path) -> tuple[dict, Path | None]:
+    """Resolve a project-local cover image without exposing filesystem paths."""
+    value = manifest.get("cover_image")
+    resolved: Path | None = None
+    if isinstance(value, str) and value:
+        candidate = Path(value)
+        if not candidate.is_absolute() and candidate.suffix.lower() in IMAGE_MIME_TYPES:
+            root = manifest_path.parent.resolve()
+            candidate = (root / candidate).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                candidate = None
+            if candidate is not None and candidate.is_file():
+                resolved = candidate
+    return {
+        "available": resolved is not None,
+        "endpoint": "/api/cover-image" if resolved is not None else "",
+        "position": _short_string(manifest.get("cover_image_position")) or "50% 50%",
+    }, resolved
+
+
+def brand_summary(manifest: dict, manifest_path: Path | None = None) -> dict:
     brand = manifest.get("brand") if isinstance(manifest.get("brand"), dict) else {}
     palette = brand.get("palette") if isinstance(brand.get("palette"), dict) else {}
     fonts = brand.get("fonts") if isinstance(brand.get("fonts"), dict) else {}
@@ -82,8 +284,15 @@ def brand_summary(manifest: dict) -> dict:
     def font_name(key: str) -> str:
         value = fonts.get(key)
         if isinstance(value, dict):
-            return text(value.get("family"), field=f"brand.fonts.{key}.family", limit=200)
-        return text(value, field=f"brand.fonts.{key}", limit=200)
+            return _short_string(value.get("family"))
+        return _short_string(value)
+
+    asset_metadata = {
+        "sans": {"family": font_name("sans"), "source": "fallback", "available": False, "endpoint": ""},
+        "serif": {"family": font_name("serif"), "source": "fallback", "available": False, "endpoint": ""},
+    }
+    if manifest_path is not None:
+        asset_metadata, _ = font_assets(manifest, manifest_path)
 
     return {
         "name": text(brand.get("name"), field="brand.name", limit=300),
@@ -91,6 +300,7 @@ def brand_summary(manifest: dict) -> dict:
         "signature": text(brand.get("signature"), field="brand.signature", limit=300),
         "sans": font_name("sans"),
         "serif": font_name("serif"),
+        "font_assets": asset_metadata,
         "palette": {
             "background_light": text(
                 palette.get("background_light") or "#F5F1E8",
@@ -133,7 +343,17 @@ def manifest_model(manifest_path: Path) -> dict:
             "kind": "cover",
             "label": "Copertina",
             "title": text(manifest.get("cover_title"), field="cover_title"),
-            "summary": "",
+            "summary": sentence_line_breaks(
+                text(manifest.get("cover_subtitle"), field="cover_subtitle")
+            ),
+            "title_serif": validated_emphasis(
+                manifest.get("cover_title_serif"), text(manifest.get("cover_title"), field="cover_title")
+            ),
+            "title_accent": validated_emphasis(
+                manifest.get("cover_title_accent"), text(manifest.get("cover_title"), field="cover_title")
+            ),
+            "summary_serif": [],
+            "summary_accent": [],
             "deletable": False,
         }
     ]
@@ -144,7 +364,21 @@ def manifest_model(manifest_path: Path) -> dict:
                 "kind": "item",
                 "label": f"Slide {index}",
                 "title": text(item.get("title"), field=f"{item['id']}.title"),
-                "summary": text(item.get("summary"), field=f"{item['id']}.summary"),
+                "summary": sentence_line_breaks(
+                    text(item.get("summary"), field=f"{item['id']}.summary")
+                ),
+                "title_serif": validated_emphasis(
+                    item.get("title_serif"), text(item.get("title"), field=f"{item['id']}.title")
+                ),
+                "title_accent": validated_emphasis(
+                    item.get("title_accent"), text(item.get("title"), field=f"{item['id']}.title")
+                ),
+                "summary_serif": validated_emphasis(
+                    item.get("summary_serif"), text(item.get("summary"), field=f"{item['id']}.summary")
+                ),
+                "summary_accent": validated_emphasis(
+                    item.get("summary_accent"), text(item.get("summary"), field=f"{item['id']}.summary")
+                ),
                 "deletable": True,
             }
         )
@@ -157,7 +391,21 @@ def manifest_model(manifest_path: Path) -> dict:
                 "kind": "outro",
                 "label": "Chiusura",
                 "title": text(outro.get("title"), field="outro.title"),
-                "summary": text(outro.get("body"), field="outro.body"),
+                "summary": sentence_line_breaks(
+                    text(outro.get("body"), field="outro.body")
+                ),
+                "title_serif": validated_emphasis(
+                    outro.get("title_serif"), text(outro.get("title"), field="outro.title")
+                ),
+                "title_accent": validated_emphasis(
+                    outro.get("title_accent"), text(outro.get("title"), field="outro.title")
+                ),
+                "summary_serif": validated_emphasis(
+                    outro.get("summary_serif"), text(outro.get("body"), field="outro.body")
+                ),
+                "summary_accent": validated_emphasis(
+                    outro.get("summary_accent"), text(outro.get("body"), field="outro.body")
+                ),
                 "deletable": False,
             }
         )
@@ -166,6 +414,7 @@ def manifest_model(manifest_path: Path) -> dict:
     if sequence_mode not in {"narrative", "sectional"}:
         sequence_mode = "narrative"
     format_data = manifest.get("format") if isinstance(manifest.get("format"), dict) else {}
+    cover_visual, _ = cover_image_asset(manifest, manifest_path)
     return {
         "revision": revision,
         "workflow_state": manifest.get("workflow_state", "bozza"),
@@ -176,7 +425,9 @@ def manifest_model(manifest_path: Path) -> dict:
             "master_width": format_data.get("master_width", 1080),
             "master_height": format_data.get("master_height", 1350),
         },
-        "brand": brand_summary(manifest),
+        "typography": normalize_typography(manifest),
+        "brand": brand_summary(manifest, manifest_path),
+        "cover_visual": cover_visual,
         "slides": slides,
     }
 
@@ -217,8 +468,8 @@ def validate_feedback(payload: object, model: dict) -> dict:
                 "id": slide_id,
                 "kind": source["kind"],
                 "title": text(slide.get("title"), field=f"slides[{position}].title"),
-                "summary": text(
-                    slide.get("summary"), field=f"slides[{position}].summary"
+                "summary": sentence_line_breaks(
+                    text(slide.get("summary"), field=f"slides[{position}].summary")
                 ),
             }
         )
@@ -333,7 +584,8 @@ def main() -> int:
             self.send_header(
                 "Content-Security-Policy",
                 "default-src 'self'; script-src 'self'; style-src 'self'; "
-                "connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; "
+                "connect-src 'self'; img-src 'self' data:; font-src 'self'; "
+                "frame-ancestors 'none'; "
                 "base-uri 'none'; form-action 'self'",
             )
             self.end_headers()
@@ -381,14 +633,28 @@ def main() -> int:
             # Gli asset sono file statici della skill, privi di dati di
             # sessione: restano leggibili senza token perché index.html li
             # referenzia staticamente.
-            if parsed.path in {"/assets/styles.css", "/assets/app.js"}:
-                asset_name = Path(parsed.path).name
-                asset_path = assets_dir / asset_name
-                content_type = (
-                    "text/css; charset=utf-8"
-                    if asset_name.endswith(".css")
-                    else "text/javascript; charset=utf-8"
-                )
+            static_assets = {
+                "/assets/styles.css": (assets_dir / "styles.css", "text/css; charset=utf-8"),
+                "/assets/app.js": (assets_dir / "app.js", "text/javascript; charset=utf-8"),
+                "/styles.css": (assets_dir / "styles.css", "text/css; charset=utf-8"),
+                "/app.js": (assets_dir / "app.js", "text/javascript; charset=utf-8"),
+                "/assets/fonts/Inter-Variable.ttf": (
+                    BUNDLED_FONT_ASSETS["sans"][1],
+                    "font/ttf",
+                ),
+                "/assets/fonts/PlayfairDisplay-Variable.ttf": (
+                    assets_dir.parent / "fonts" / "PlayfairDisplay-Variable.ttf",
+                    "font/ttf",
+                ),
+                "/assets/fonts/PlayfairDisplay-Italic-Variable.ttf": (
+                    BUNDLED_FONT_ASSETS["serif"][1],
+                    "font/ttf",
+                ),
+            }
+            static_asset = static_assets.get(parsed.path)
+            if static_asset is not None:
+                asset_path, content_type = static_asset
+                asset_name = asset_path.name
                 try:
                     body = asset_path.read_bytes()
                 except OSError:
@@ -397,6 +663,57 @@ def main() -> int:
                     )
                     return
                 self.send_bytes(HTTPStatus.OK, body, content_type)
+                return
+            font_key = {
+                "/api/font/sans": "sans",
+                "/api/font/serif": "serif",
+            }.get(parsed.path)
+            if font_key is not None:
+                if not self.authorized(query):
+                    self.send_json(HTTPStatus.FORBIDDEN, {"error": "Sessione non autorizzata"})
+                    return
+                try:
+                    _, allowed_fonts = font_assets(read_json(manifest_path), manifest_path)
+                except ValueError as exc:
+                    self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
+                    return
+                font_path = allowed_fonts.get(font_key)
+                if font_path is None:
+                    self.send_json(HTTPStatus.NOT_FOUND, {"error": "Font non disponibile"})
+                    return
+                try:
+                    body = font_path.read_bytes()
+                except OSError:
+                    self.send_json(HTTPStatus.NOT_FOUND, {"error": "Font non disponibile"})
+                    return
+                self.send_bytes(
+                    HTTPStatus.OK,
+                    body,
+                    FONT_MIME_TYPES[font_path.suffix.lower()],
+                )
+                return
+            if parsed.path == "/api/cover-image":
+                if not self.authorized(query):
+                    self.send_json(HTTPStatus.FORBIDDEN, {"error": "Sessione non autorizzata"})
+                    return
+                try:
+                    _, image_path = cover_image_asset(read_json(manifest_path), manifest_path)
+                except ValueError as exc:
+                    self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
+                    return
+                if image_path is None:
+                    self.send_json(HTTPStatus.NOT_FOUND, {"error": "Immagine non disponibile"})
+                    return
+                try:
+                    body = image_path.read_bytes()
+                except OSError:
+                    self.send_json(HTTPStatus.NOT_FOUND, {"error": "Immagine non disponibile"})
+                    return
+                self.send_bytes(
+                    HTTPStatus.OK,
+                    body,
+                    IMAGE_MIME_TYPES[image_path.suffix.lower()],
+                )
                 return
             if parsed.path == "/api/session":
                 if not self.authorized(query):

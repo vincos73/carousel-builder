@@ -76,7 +76,9 @@ Confrontare ogni card con l'ultima anteprima approvata e verificare:
 - ritorni a capo coerenti;
 - nomi propri, numeri, cautele e attribuzioni;
 - chiusura specifica della fonte corrente;
-- assenza di un sottotitolo in copertina;
+- corrispondenza esatta di titolo e dell'eventuale sottotitolo approvato in copertina;
+- gerarchia subordinata del sottotitolo e Playfair Display sempre in corsivo, anche nelle enfasi serif;
+- ritorno a capo dopo ogni punto di frase, senza spezzare decimali, versioni o abbreviazioni;
 - in modalità `narrative`, titoli interni vuoti e assenza di etichette tecniche;
 
 ## Controllo visivo
