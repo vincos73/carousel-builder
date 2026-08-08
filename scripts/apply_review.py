@@ -67,11 +67,15 @@ VISUAL_STYLE_ALIASES = {
     "color-field": "editorial-halftone",
     "costellazione": "editorial-halftone",
     "constellation": "editorial-halftone",
+    "geometrico": "editorial-halftone",
+    "geometric": "editorial-halftone",
     "corporate": "corporate-modular",
     "corporate_modular": "corporate-modular",
     "modulare-quieto": "corporate-modular",
     "modulare_quieto": "corporate-modular",
     "quiet-modular": "corporate-modular",
+    "istituzionale": "corporate-modular",
+    "institutional": "corporate-modular",
 }
 SENTENCE_BREAK_ABBREVIATIONS = {
     "ca", "cfr", "dott", "ecc", "es", "n", "pag", "pp", "prof", "sig", "sigg", "vs"

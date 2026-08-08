@@ -6,11 +6,11 @@ Usare un sistema visivo stabile per l'intera sequenza. Il sistema decide composi
 
 | ID | Funzione | Regole distintive |
 | --- | --- | --- |
-| `editorial-frame` | Analisi, opinioni e tesi | Cornice editoriale, ampio spazio tipografico, accento sobrio. |
-| `editorial-halftone` | Creatività, cultura e contenuti espressivi | Costellazione laterale di cinque corpi circolari a scale diverse, con posizione verticale alternata e superfici chiare e scure. L’ID storico resta invariato per compatibilità. |
-| `corporate-modular` | Metodo, risultati, processi e dati | Indice modulare compatto, guida orizzontale sottile e gerarchia funzionale senza bande laterali o griglie estese. |
+| `editorial-frame` | Analisi, opinioni e tesi | **Editoriale**: cornice netta, ampio spazio tipografico e accento sobrio. |
+| `editorial-halftone` | Creatività, cultura e contenuti espressivi | **Geometrico**: costellazione laterale di cinque corpi circolari a scale diverse, con posizione verticale alternata e superfici chiare e scure. L’ID storico resta invariato per compatibilità. |
+| `corporate-modular` | Metodo, risultati, processi e dati | **Istituzionale**: indice modulare compatto, guida orizzontale sottile e gerarchia funzionale senza bande laterali o griglie estese. |
 
-Usare `editorial-frame` quando il contenuto sviluppa un ragionamento, `editorial-halftone` quando il tono beneficia di colore, energia e personalità, `corporate-modular` per processi, confronti o dati. In Costellazione confinare sempre i corpi alla fascia laterale, lasciare almeno il 70% della larghezza al testo e alternare la composizione in verticale tra slide consecutive. Mostrare le tre prove con lo stesso contenuto rappresentativo e la stessa identità, preselezionare il sistema risolto e consentire all'utente di confrontarle prima dell'approvazione. Nel fallback conversazionale descrivere le tre strutture senza fingere un rendering.
+Usare `editorial-frame` quando il contenuto sviluppa un ragionamento, `editorial-halftone` quando il tono beneficia di colore, energia e personalità, `corporate-modular` per processi, confronti o dati. Nel sistema Geometrico confinare sempre i corpi alla fascia laterale, lasciare almeno il 70% della larghezza al testo e alternare la composizione in verticale tra slide consecutive. Mostrare le tre prove con lo stesso contenuto rappresentativo e la stessa identità, preselezionare il sistema risolto e consentire all'utente di confrontarle prima dell'approvazione. Nel fallback conversazionale descrivere le tre strutture senza fingere un rendering.
 
 ## Invarianti
 

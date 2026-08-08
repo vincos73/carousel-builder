@@ -96,18 +96,18 @@
   const visualSystems = [
     {
       id: "editorial-frame",
-      label: "A · Cornice",
+      label: "A · Editoriale",
       description: "Sistema editoriale: una cornice netta guida la lettura, con il testo al centro della scena.",
     },
     {
       id: "editorial-halftone",
-      label: "B · Costellazione",
-      description: "Sistema espressivo: cinque corpi geometrici di scale diverse danno ritmo alla fascia laterale senza competere con il testo.",
+      label: "B · Geometrico",
+      description: "Sistema geometrico: cinque corpi di scale diverse danno ritmo alla fascia laterale senza competere con il testo.",
     },
     {
       id: "corporate-modular",
-      label: "C · Modulare quieto",
-      description: "Sistema corporate: un indice compatto ordina metodo, dati e processi senza sottrarre spazio al testo.",
+      label: "C · Istituzionale",
+      description: "Sistema istituzionale: un indice compatto ordina metodo, dati e processi senza sottrarre spazio al testo.",
     },
   ];
 

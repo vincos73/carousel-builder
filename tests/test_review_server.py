@@ -81,7 +81,7 @@ class ManifestModelTest(unittest.TestCase):
         )
         self.assertEqual(
             [option["label"] for option in proofs["options"]],
-            ["Cornice editoriale", "Costellazione", "Modulare quieto"],
+            ["Editoriale", "Geometrico", "Istituzionale"],
         )
         self.assertEqual(proofs["identity"]["brand"]["name"], "Studio")
         self.assertEqual(proofs["identity"]["cover"]["mode"], "typographic")
@@ -130,7 +130,12 @@ class ManifestModelTest(unittest.TestCase):
             self.model(manifest)["visual_proofs"]["selected_style_system"],
             "editorial-halftone",
         )
-        manifest["visual_style_system"] = "modulare-quieto"
+        manifest["visual_style_system"] = "geometrico"
+        self.assertEqual(
+            self.model(manifest)["visual_proofs"]["selected_style_system"],
+            "editorial-halftone",
+        )
+        manifest["visual_style_system"] = "istituzionale"
         self.assertEqual(
             self.model(manifest)["visual_proofs"]["selected_style_system"],
             "corporate-modular",
