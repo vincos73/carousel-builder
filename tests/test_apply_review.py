@@ -160,6 +160,20 @@ class ApplyReviewTest(unittest.TestCase):
         )
         self.assertEqual(json.loads(result.stdout)["emphasis_dropped"], {})
 
+    def test_prunes_bold_emphasis_with_the_same_rules_as_other_emphasis(self) -> None:
+        manifest = base_manifest()
+        manifest["items"][0]["summary_bold"] = ["Prima frase."]
+        result = self.apply(
+            manifest,
+            base_feedback(self.full_batch(**{"item-1": "Testo completamente nuovo."})),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.manifest()["items"][0]["summary_bold"], [])
+        self.assertEqual(
+            json.loads(result.stdout)["emphasis_dropped"]["item-1"],
+            ["Prima frase.", "Prima frase."],
+        )
+
     def test_reports_but_keeps_emphasis_already_stale_on_unchanged_text(self) -> None:
         manifest = base_manifest()
         manifest["items"][0]["summary_serif"] = ["frase mai esistita"]
@@ -243,6 +257,49 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertTrue(payload["approval_requested"])
         self.assertFalse(payload["workflow_state_changed"])
         self.assertEqual(self.manifest()["workflow_state"], "bozza")
+
+    def test_persists_only_the_selected_visual_style_override(self) -> None:
+        manifest = base_manifest()
+        manifest["brand"] = {
+            "visual_signature": {"style_system": "editorial-frame"},
+        }
+        feedback = base_feedback(
+            self.full_batch(), visual_style_system="corporate-modular"
+        )
+        result = self.apply(manifest, feedback)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        written = self.manifest()
+        self.assertEqual(written["visual_style_system"], "corporate-modular")
+        self.assertEqual(
+            written["brand"]["visual_signature"]["style_system"], "editorial-frame"
+        )
+        self.assertEqual(written["revision"], 2)
+        self.assertIn("visual_style_system", payload["changed"])
+        self.assertFalse(payload["stale_transcript"])
+
+    def test_rejects_an_invalid_visual_style_selection(self) -> None:
+        result = self.apply(
+            base_manifest(),
+            base_feedback(self.full_batch(), visual_style_system="inventato"),
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("visual_style_system", json.loads(result.stderr)["error"])
+
+    def test_accepts_new_visual_system_aliases(self) -> None:
+        result = self.apply(
+            base_manifest(),
+            base_feedback(self.full_batch(), visual_style_system="campo-cromatico"),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.manifest()["visual_style_system"], "editorial-halftone")
+
+        result = self.apply(
+            base_manifest(),
+            base_feedback(self.full_batch(), visual_style_system="costellazione"),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.manifest()["visual_style_system"], "editorial-halftone")
 
 
 if __name__ == "__main__":

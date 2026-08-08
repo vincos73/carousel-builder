@@ -5,7 +5,7 @@
 Prima dell'onboarding determinare, senza installare nulla, se la sessione può:
 
 - leggere integralmente la fonte;
-- generare o recuperare il visuale di copertina;
+- generare, ricevere o sostituire con una composizione tipografica il visuale di copertina;
 - impaginare testo con controllo affidabile di font, misure e ritorni a capo;
 - esportare PNG e PDF;
 - rendere disponibili gli artefatti finali.
@@ -33,7 +33,7 @@ Qualunque modalità diversa da `layout` deve:
 1. usare l'ultimo manifest approvato senza riscrivere silenziosamente i testi;
 2. dichiarare prima della produzione quali artefatti può creare;
 3. rispettare dimensioni, profilo, ordine delle slide, font e campi di enfasi;
-4. produrre prima la prova visuale e soltanto dopo il batch completo;
+4. produrre prima la prova visuale e soltanto dopo il batch completo, usando strutture HTML/CSS/SVG deterministiche e trattando l'immagine come asset opzionale di copertina;
 5. restituire errori e output verificabili, senza sostituire asset o font in modo invisibile.
 
 Se un renderer o adapter non soddisfa questi requisiti, usare `layout` come fallback dichiarato.
@@ -77,7 +77,8 @@ Confrontare ogni card con l'ultima anteprima approvata e verificare:
 - nomi propri, numeri, cautele e attribuzioni;
 - chiusura specifica della fonte corrente;
 - corrispondenza esatta di titolo e dell'eventuale sottotitolo approvato in copertina;
-- gerarchia subordinata del sottotitolo e Playfair Display sempre in corsivo, anche nelle enfasi serif;
+- font display effettivo su copertina e titoli e font body effettivo su testi, CTA e metadati;
+- gerarchia subordinata del sottotitolo e carattere `serif_italic` approvato; se è Playfair Display, verificarne sempre la variante corsiva;
 - ritorno a capo dopo ogni punto di frase, senza spezzare decimali, versioni o abbreviazioni;
 - in modalità `narrative`, titoli interni vuoti e assenza di etichette tecniche;
 
@@ -101,7 +102,8 @@ Verificare:
 - numerazione progressiva delle pagine nell'angolo superiore destro di ogni card, inclusi copertina e chiusura, dentro la safe area e senza interferire con testo, logo o visuale;
 - coerenza dell'alternanza cromatica;
 - enfasi serif e accenti cromatici approvati;
-- illustrazioni che non interferiscano con la lettura;
+- sistema visivo risolto, varianti controllate e struttura HTML/CSS/SVG coerenti;
+- eventuale immagine di copertina che non interferisca con la lettura;
 - dimensioni e rapporto d'aspetto richiesti;
 - sfondo esteso esattamente da `x=0`, `y=0` fino a 1080×1350, senza strisce o margini introdotti dal renderer;
 - assenza di SVG, filtri o elementi nascosti che occupino spazio nel flusso del documento;

@@ -44,12 +44,22 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.session_dir = self.workdir / "session"
         self.font_path = self.workdir / "brand.woff2"
         self.font_path.write_bytes(b"test font bytes")
+        self.display_font_path = self.workdir / "display.ttf"
+        self.display_font_path.write_bytes(b"display font bytes")
         self.cover_path = self.workdir / "cover.png"
         self.cover_path.write_bytes(b"test image bytes")
+        self.logo_path = self.workdir / "logo.png"
+        self.logo_path.write_bytes(b"test logo bytes")
         manifest = base_manifest()
         manifest["cover_image"] = "cover.png"
         manifest["brand"] = {
+            "logos": {"on_light": "logo.png"},
             "fonts": {
+                "display": {
+                    "family": "Review Display",
+                    "file": "display.ttf",
+                    "source": "uploaded",
+                },
                 "sans": {
                     "family": "Review Sans",
                     "file": "brand.woff2",
@@ -165,6 +175,14 @@ class ReviewServerHTTPTest(unittest.TestCase):
             self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
             self.assertEqual(response.read(), b"test font bytes")
 
+    def test_serves_distinct_display_and_body_font_roles(self) -> None:
+        with urllib.request.urlopen(self.api("/api/font/display"), timeout=10) as response:
+            self.assertEqual(response.headers["Content-Type"], "font/ttf")
+            self.assertEqual(response.read(), b"display font bytes")
+        with urllib.request.urlopen(self.api("/api/font/body"), timeout=10) as response:
+            self.assertEqual(response.headers["Content-Type"], "font/woff2")
+            self.assertEqual(response.read(), b"test font bytes")
+
     def test_rejects_a_wrong_token_for_a_font(self) -> None:
         self.assertEqual(request(f"{self.origin}/api/font/sans?token=sbagliato")[0], 403)
 
@@ -176,6 +194,14 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.assertEqual(
             request(f"{self.origin}/api/cover-image?token=sbagliato")[0], 403
         )
+
+    def test_serves_only_an_authorized_manifest_logo(self) -> None:
+        with urllib.request.urlopen(self.api("/api/logo/on-light"), timeout=10) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers["Content-Type"], "image/png")
+            self.assertEqual(response.read(), b"test logo bytes")
+        self.assertEqual(request(self.api("/api/logo/on-dark"))[0], 404)
+        self.assertEqual(request(f"{self.origin}/api/logo/on-light?token=sbagliato")[0], 403)
 
     def test_reports_a_missing_font_without_falling_back_to_a_path(self) -> None:
         self.assertEqual(request(self.api("/api/font/serif"))[0], 404)
@@ -212,6 +238,15 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["manifest_revision"], 1)
         self.assertFalse(payload["feedback_pending"])
+
+    def test_session_exposes_the_three_visual_proof_options(self) -> None:
+        status, payload = json_request(self.api("/api/session"))
+        self.assertEqual(status, 200)
+        proofs = payload["visual_proofs"]
+        self.assertEqual(len(proofs["options"]), 3)
+        self.assertEqual(proofs["selected_style_system"], "editorial-frame")
+        self.assertEqual(proofs["identity"]["brand"], payload["brand"])
+        self.assertEqual(proofs["identity"]["typography"], payload["typography"])
 
     def test_refuses_a_second_batch_until_the_first_is_applied(self) -> None:
         first, _ = json_request(

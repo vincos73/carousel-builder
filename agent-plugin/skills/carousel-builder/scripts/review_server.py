@@ -50,11 +50,39 @@ IMAGE_MIME_TYPES = {
 }
 FONT_SOURCES = {"uploaded", "bundled", "system", "fallback"}
 BUNDLED_FONT_ASSETS = {
-    "sans": ("Inter", Path(__file__).resolve().parent.parent / "assets" / "fonts" / "Inter-Variable.ttf"),
+    "display": ("Inter", Path(__file__).resolve().parent.parent / "assets" / "fonts" / "Inter-Variable.ttf"),
+    "body": ("Inter", Path(__file__).resolve().parent.parent / "assets" / "fonts" / "Inter-Variable.ttf"),
     "serif": (
         "Playfair Display",
         Path(__file__).resolve().parent.parent / "assets" / "fonts" / "PlayfairDisplay-Italic-Variable.ttf",
     ),
+}
+FONT_ROLE_FALLBACKS = {
+    "display": ("display", "sans"),
+    "body": ("body", "sans"),
+    "serif": ("serif_italic", "serif"),
+}
+VISUAL_STYLE_SYSTEMS = {
+    "editorial-frame": "Cornice editoriale",
+    "editorial-halftone": "Costellazione",
+    "corporate-modular": "Modulare quieto",
+}
+VISUAL_STYLE_ALIASES = {
+    "editorial": "editorial-frame",
+    "editorial_frame": "editorial-frame",
+    "editorialframe": "editorial-frame",
+    "halftone": "editorial-halftone",
+    "editorial_halftone": "editorial-halftone",
+    "campo-cromatico": "editorial-halftone",
+    "campo_cromatico": "editorial-halftone",
+    "color-field": "editorial-halftone",
+    "costellazione": "editorial-halftone",
+    "constellation": "editorial-halftone",
+    "corporate": "corporate-modular",
+    "corporate_modular": "corporate-modular",
+    "modulare-quieto": "corporate-modular",
+    "modulare_quieto": "corporate-modular",
+    "quiet-modular": "corporate-modular",
 }
 SENTENCE_BREAK_ABBREVIATIONS = {
     "ca", "cfr", "dott", "ecc", "es", "n", "pag", "pp", "prof", "sig", "sigg", "vs"
@@ -196,10 +224,90 @@ def validated_emphasis(value: object, content: str) -> list[str]:
     return result
 
 
+def normalized_visual_style_system(value: object) -> str | None:
+    """Return a canonical visual system, accepting a few legacy spellings."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().casefold()
+    normalized = VISUAL_STYLE_ALIASES.get(normalized, normalized)
+    return normalized if normalized in VISUAL_STYLE_SYSTEMS else None
+
+
+def resolved_visual_style_system(manifest: dict) -> str:
+    """Resolve a carousel override before the brand default, then a safe default."""
+    selected = normalized_visual_style_system(manifest.get("visual_style_system"))
+    if selected is not None:
+        return selected
+    brand = manifest.get("brand") if isinstance(manifest.get("brand"), dict) else {}
+    signature = (
+        brand.get("visual_signature")
+        if isinstance(brand.get("visual_signature"), dict)
+        else {}
+    )
+    for candidate in (
+        signature.get("style_system"),
+        brand.get("visual_style_system"),
+        brand.get("style_system"),
+    ):
+        selected = normalized_visual_style_system(candidate)
+        if selected is not None:
+            return selected
+    return "editorial-frame"
+
+
+def normalized_cover_mode(manifest: dict, cover_visual: dict) -> str:
+    """Expose the intended cover mode before approval and an executable one after."""
+    raw_mode = manifest.get("cover_mode")
+    if not isinstance(raw_mode, str):
+        legacy_mode = manifest.get("cover_visual_mode")
+        if legacy_mode == "generative":
+            raw_mode = "generated"
+        elif legacy_mode == "technical":
+            raw_mode = "provided"
+    if raw_mode not in {"generated", "provided", "typographic"}:
+        raw_mode = "provided" if cover_visual["available"] else "typographic"
+    if raw_mode == "generated" and not cover_visual["available"]:
+        if manifest.get("workflow_state", "bozza") in {
+            "bozza", "draft", "in_revisione", "in_revisione_editoriale", "in_review", "feedback"
+        }:
+            return "generated"
+        return "typographic"
+    if raw_mode == "provided" and not cover_visual["available"]:
+        return "typographic"
+    return raw_mode
+
+
+def visual_proofs(
+    manifest: dict,
+    *,
+    brand: dict,
+    typography: dict,
+    cover_visual: dict,
+) -> dict:
+    """Describe three renderable proof directions sharing one visual identity."""
+    cover = {**cover_visual, "mode": normalized_cover_mode(manifest, cover_visual)}
+    return {
+        "selected_style_system": resolved_visual_style_system(manifest),
+        "identity": {
+            "brand": brand,
+            "typography": typography,
+            "cover": cover,
+        },
+        "options": [
+            {"id": style_system, "label": label, "style_system": style_system}
+            for style_system, label in VISUAL_STYLE_SYSTEMS.items()
+        ],
+    }
+
+
 def _font_asset(manifest: dict, manifest_path: Path, key: str) -> tuple[dict, Path | None]:
     brand = manifest.get("brand") if isinstance(manifest.get("brand"), dict) else {}
     fonts = brand.get("fonts") if isinstance(brand.get("fonts"), dict) else {}
-    configured = fonts.get(key)
+    configured = None
+    for candidate in FONT_ROLE_FALLBACKS[key]:
+        if candidate in fonts:
+            configured = fonts[candidate]
+            break
     family = ""
     source = "fallback"
     file_name: object = None
@@ -246,11 +354,15 @@ def font_assets(manifest: dict, manifest_path: Path) -> tuple[dict, dict[str, Pa
     """Build public font metadata and the private, manifest-resolved allowlist."""
     public: dict = {}
     allowed: dict[str, Path] = {}
-    for key in ("sans", "serif"):
+    for key in ("display", "body", "serif"):
         entry, resolved = _font_asset(manifest, manifest_path, key)
         public[key] = entry
         if resolved is not None:
             allowed[key] = resolved
+    # ``sans`` remains a read-only compatibility alias for older editor clients.
+    public["sans"] = {**public["body"], "endpoint": "/api/font/sans" if public["body"]["available"] else ""}
+    if "body" in allowed:
+        allowed["sans"] = allowed["body"]
     return public, allowed
 
 
@@ -276,31 +388,74 @@ def cover_image_asset(manifest: dict, manifest_path: Path) -> tuple[dict, Path |
     }, resolved
 
 
+def logo_assets(manifest: dict, manifest_path: Path) -> tuple[dict, dict[str, Path]]:
+    """Resolve light/dark logo variants inside the manifest directory."""
+    brand = manifest.get("brand") if isinstance(manifest.get("brand"), dict) else {}
+    logos = brand.get("logos") if isinstance(brand.get("logos"), dict) else {}
+    root = manifest_path.parent.resolve()
+    public: dict = {}
+    allowed: dict[str, Path] = {}
+    for key, endpoint in (("on_light", "/api/logo/on-light"), ("on_dark", "/api/logo/on-dark")):
+        value = logos.get(key)
+        resolved: Path | None = None
+        if isinstance(value, str) and value:
+            candidate = Path(value)
+            if not candidate.is_absolute() and candidate.suffix.lower() in IMAGE_MIME_TYPES:
+                candidate = (root / candidate).resolve()
+                try:
+                    candidate.relative_to(root)
+                except ValueError:
+                    candidate = None
+                if candidate is not None and candidate.is_file():
+                    resolved = candidate
+        public[key] = {
+            "available": resolved is not None,
+            "endpoint": endpoint if resolved is not None else "",
+        }
+        if resolved is not None:
+            allowed[key] = resolved
+    return public, allowed
+
+
 def brand_summary(manifest: dict, manifest_path: Path | None = None) -> dict:
     brand = manifest.get("brand") if isinstance(manifest.get("brand"), dict) else {}
     palette = brand.get("palette") if isinstance(brand.get("palette"), dict) else {}
     fonts = brand.get("fonts") if isinstance(brand.get("fonts"), dict) else {}
 
-    def font_name(key: str) -> str:
-        value = fonts.get(key)
+    def font_name(*keys: str) -> str:
+        value = None
+        for key in keys:
+            if key in fonts:
+                value = fonts[key]
+                break
         if isinstance(value, dict):
             return _short_string(value.get("family"))
         return _short_string(value)
 
     asset_metadata = {
-        "sans": {"family": font_name("sans"), "source": "fallback", "available": False, "endpoint": ""},
-        "serif": {"family": font_name("serif"), "source": "fallback", "available": False, "endpoint": ""},
+        "display": {"family": font_name("display", "sans"), "source": "fallback", "available": False, "endpoint": ""},
+        "body": {"family": font_name("body", "sans"), "source": "fallback", "available": False, "endpoint": ""},
+        "serif": {"family": font_name("serif_italic", "serif"), "source": "fallback", "available": False, "endpoint": ""},
+    }
+    asset_metadata["sans"] = dict(asset_metadata["body"])
+    logo_metadata = {
+        "on_light": {"available": False, "endpoint": ""},
+        "on_dark": {"available": False, "endpoint": ""},
     }
     if manifest_path is not None:
         asset_metadata, _ = font_assets(manifest, manifest_path)
+        logo_metadata, _ = logo_assets(manifest, manifest_path)
 
     return {
         "name": text(brand.get("name"), field="brand.name", limit=300),
         "website": text(brand.get("website"), field="brand.website", limit=500),
         "signature": text(brand.get("signature"), field="brand.signature", limit=300),
-        "sans": font_name("sans"),
-        "serif": font_name("serif"),
+        "display": font_name("display", "sans"),
+        "body": font_name("body", "sans"),
+        "sans": font_name("body", "sans"),
+        "serif": font_name("serif_italic", "serif"),
         "font_assets": asset_metadata,
+        "logos": logo_metadata,
         "palette": {
             "background_light": text(
                 palette.get("background_light") or "#F5F1E8",
@@ -349,9 +504,13 @@ def manifest_model(manifest_path: Path) -> dict:
             "title_serif": validated_emphasis(
                 manifest.get("cover_title_serif"), text(manifest.get("cover_title"), field="cover_title")
             ),
+            "title_bold": validated_emphasis(
+                manifest.get("cover_title_bold"), text(manifest.get("cover_title"), field="cover_title")
+            ),
             "title_accent": validated_emphasis(
                 manifest.get("cover_title_accent"), text(manifest.get("cover_title"), field="cover_title")
             ),
+            "summary_bold": [],
             "summary_serif": [],
             "summary_accent": [],
             "deletable": False,
@@ -370,8 +529,14 @@ def manifest_model(manifest_path: Path) -> dict:
                 "title_serif": validated_emphasis(
                     item.get("title_serif"), text(item.get("title"), field=f"{item['id']}.title")
                 ),
+                "title_bold": validated_emphasis(
+                    item.get("title_bold"), text(item.get("title"), field=f"{item['id']}.title")
+                ),
                 "title_accent": validated_emphasis(
                     item.get("title_accent"), text(item.get("title"), field=f"{item['id']}.title")
+                ),
+                "summary_bold": validated_emphasis(
+                    item.get("summary_bold"), text(item.get("summary"), field=f"{item['id']}.summary")
                 ),
                 "summary_serif": validated_emphasis(
                     item.get("summary_serif"), text(item.get("summary"), field=f"{item['id']}.summary")
@@ -397,8 +562,14 @@ def manifest_model(manifest_path: Path) -> dict:
                 "title_serif": validated_emphasis(
                     outro.get("title_serif"), text(outro.get("title"), field="outro.title")
                 ),
+                "title_bold": validated_emphasis(
+                    outro.get("title_bold"), text(outro.get("title"), field="outro.title")
+                ),
                 "title_accent": validated_emphasis(
                     outro.get("title_accent"), text(outro.get("title"), field="outro.title")
+                ),
+                "summary_bold": validated_emphasis(
+                    outro.get("summary_bold"), text(outro.get("body"), field="outro.body")
                 ),
                 "summary_serif": validated_emphasis(
                     outro.get("summary_serif"), text(outro.get("body"), field="outro.body")
@@ -415,6 +586,9 @@ def manifest_model(manifest_path: Path) -> dict:
         sequence_mode = "narrative"
     format_data = manifest.get("format") if isinstance(manifest.get("format"), dict) else {}
     cover_visual, _ = cover_image_asset(manifest, manifest_path)
+    cover_visual["mode"] = normalized_cover_mode(manifest, cover_visual)
+    typography = normalize_typography(manifest)
+    brand = brand_summary(manifest, manifest_path)
     return {
         "revision": revision,
         "workflow_state": manifest.get("workflow_state", "bozza"),
@@ -425,9 +599,16 @@ def manifest_model(manifest_path: Path) -> dict:
             "master_width": format_data.get("master_width", 1080),
             "master_height": format_data.get("master_height", 1350),
         },
-        "typography": normalize_typography(manifest),
-        "brand": brand_summary(manifest, manifest_path),
+        "typography": typography,
+        "brand": brand,
         "cover_visual": cover_visual,
+        "cover_mode": cover_visual["mode"],
+        "visual_proofs": visual_proofs(
+            manifest,
+            brand=brand,
+            typography=typography,
+            cover_visual=cover_visual,
+        ),
         "slides": slides,
     }
 
@@ -515,7 +696,15 @@ def validate_feedback(payload: object, model: dict) -> dict:
             }
         )
 
-    return {
+    visual_style_system = None
+    for key in ("visual_style_system", "selected_style_system", "style_system"):
+        if key in payload:
+            visual_style_system = normalized_visual_style_system(payload[key])
+            if visual_style_system is None:
+                raise ValueError("visual_style_system non valido")
+            break
+
+    result = {
         "feedback_id": f"feedback-{secrets.token_hex(8)}",
         "submitted_at": now_iso(),
         "action": action,
@@ -526,6 +715,9 @@ def validate_feedback(payload: object, model: dict) -> dict:
             payload.get("overall_note"), field="overall_note", limit=10_000
         ),
     }
+    if visual_style_system is not None:
+        result["visual_style_system"] = visual_style_system
+    return result
 
 
 def main() -> int:
@@ -639,7 +831,7 @@ def main() -> int:
                 "/styles.css": (assets_dir / "styles.css", "text/css; charset=utf-8"),
                 "/app.js": (assets_dir / "app.js", "text/javascript; charset=utf-8"),
                 "/assets/fonts/Inter-Variable.ttf": (
-                    BUNDLED_FONT_ASSETS["sans"][1],
+                    BUNDLED_FONT_ASSETS["display"][1],
                     "font/ttf",
                 ),
                 "/assets/fonts/PlayfairDisplay-Variable.ttf": (
@@ -665,6 +857,8 @@ def main() -> int:
                 self.send_bytes(HTTPStatus.OK, body, content_type)
                 return
             font_key = {
+                "/api/font/display": "display",
+                "/api/font/body": "body",
                 "/api/font/sans": "sans",
                 "/api/font/serif": "serif",
             }.get(parsed.path)
@@ -713,6 +907,34 @@ def main() -> int:
                     HTTPStatus.OK,
                     body,
                     IMAGE_MIME_TYPES[image_path.suffix.lower()],
+                )
+                return
+            logo_key = {
+                "/api/logo/on-light": "on_light",
+                "/api/logo/on-dark": "on_dark",
+            }.get(parsed.path)
+            if logo_key is not None:
+                if not self.authorized(query):
+                    self.send_json(HTTPStatus.FORBIDDEN, {"error": "Sessione non autorizzata"})
+                    return
+                try:
+                    _, allowed_logos = logo_assets(read_json(manifest_path), manifest_path)
+                except ValueError as exc:
+                    self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
+                    return
+                logo_path = allowed_logos.get(logo_key)
+                if logo_path is None:
+                    self.send_json(HTTPStatus.NOT_FOUND, {"error": "Logo non disponibile"})
+                    return
+                try:
+                    body = logo_path.read_bytes()
+                except OSError:
+                    self.send_json(HTTPStatus.NOT_FOUND, {"error": "Logo non disponibile"})
+                    return
+                self.send_bytes(
+                    HTTPStatus.OK,
+                    body,
+                    IMAGE_MIME_TYPES[logo_path.suffix.lower()],
                 )
                 return
             if parsed.path == "/api/session":

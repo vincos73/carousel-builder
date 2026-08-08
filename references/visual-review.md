@@ -1,5 +1,7 @@
 # Revisione editoriale visuale
 
+Il modello `/api/model` espone `visual_proofs` come oggetto calcolato dal server con `selected_style_system`, identità condivisa e tre opzioni. Non persistere questo oggetto nel manifest: inviare la scelta come `visual_style_system` e applicarla con `scripts/apply_review.py`.
+
 Usare questa modalità soltanto quando Python 3 e un browser locale sono già disponibili. Non installare dipendenze. Il browser non deve scrivere direttamente nel manifest: deve inviare un batch strutturato che l'agente applica e controlla.
 
 ## Preparazione
@@ -31,7 +33,7 @@ L'editor consente di:
 - aggiungere una nota generale;
 - inviare correzioni oppure richiedere esplicitamente l'approvazione.
 
-Nella card di copertina e nella conferma di approvazione, chiarire che l'immagine finale della copertina non è ancora inclusa: verrà generata dopo l'approvazione dei testi e mostrata in una prova visuale separata.
+Nella card di copertina e nella conferma di approvazione, chiarire che la copertina finale non è ancora inclusa: dopo l'approvazione dei testi sarà mostrata in una prova visuale separata con immagine generata, immagine fornita o composizione tipografica.
 
 Non consentire di eliminare copertina o chiusura. Non interpretare grassetto, corsivo o altre formattazioni come enfasi semantiche.
 
@@ -60,7 +62,7 @@ Lo script riallinea inoltre i riferimenti derivati dai testi:
 
 Leggere sempre `warnings`, `stale_alt_text` e `stale_transcript` nell'output. Lo script non riscrive i testi descrittivi: gli `alt_text` delle slide modificate e la trascrizione di accessibilità restano invariati e vanno rigenerati dall'agente prima della produzione. Se il batch invalida una prova già approvata, lo script lo segnala senza modificare `proof.approved`.
 
-L'editor espone anche `cover_subtitle` come campo opzionale. Se presente, l'anteprima lo rende sempre in Playfair Display corsivo; la stessa regola vale per tutte le enfasi serif.
+L'editor carica separatamente `display` per copertina e titoli e `body` per testi e metadati. Nei profili legacy usa `sans` per entrambi. Espone inoltre `cover_subtitle` come campo opzionale: se presente, l'anteprima lo rende nel secondo carattere corsivo; la stessa regola vale per tutte le enfasi serif.
 
 Esaminare poi `comments` e `overall_note`. I commenti sono richieste da interpretare, non modifiche già effettuate. Applicare le correzioni necessarie al manifest, ripetere i controlli editoriali e aggiornare la revisione se occorre.
 

@@ -15,8 +15,8 @@ Usare per i nuovi profili questo schema:
     "on_dark": "assets/logo-light.svg"
   },
   "fonts": {
-    "sans": { "family": "Brand Sans", "file": "assets/BrandSans.ttf", "source": "uploaded" },
-    "serif": { "family": "Brand Serif", "file": "assets/BrandSerif.ttf", "source": "uploaded" },
+    "display": { "family": "Brand Display", "file": "assets/BrandDisplay.ttf", "source": "uploaded" },
+    "body": { "family": "Brand Text", "file": "assets/BrandText.ttf", "source": "uploaded" },
     "serif_italic": { "family": "Brand Serif", "file": "assets/BrandSerifItalic.ttf", "source": "uploaded" }
   },
   "typography": {
@@ -48,6 +48,9 @@ Usare per i nuovi profili questo schema:
     "avoid": ["robot umanoidi", "circuiti generici"],
     "internal_slides": "clean_typographic"
   },
+  "visual_signature": {
+    "style_system": "editorial-frame"
+  },
   "outro": {
     "enabled": true,
     "goal": "comment",
@@ -65,7 +68,8 @@ Usare per i nuovi profili questo schema:
 - Consentire `surface_mode`: `light`, `dark` o `alternating`.
 - Usare `logos.on_light` sui fondi chiari e `logos.on_dark` sui fondi scuri.
 - Accettare TTF, OTF, WOFF e WOFF2. Usare `source`: `uploaded`, `bundled`, `system` o `fallback`.
-- Usare come carattere primario quello scelto e approvato dall'utente. Verificarne il caricamento effettivo prima della prova visuale.
+- Usare `display` per copertina e titoli e `body` per testi, CTA e metadati. Possono indicare la stessa famiglia oppure due famiglie diverse. Verificarne il caricamento effettivo prima della prova visuale.
+- Trattare `serif_italic` come ruolo espressivo opzionale per sottotitolo di copertina ed enfasi semantiche; non usarlo come sostituto del ruolo `body`.
 - Se l'utente richiede un font esatto e il file non è disponibile, chiedere il file. Se indica soltanto una famiglia o un tono, proporre un sostituto disponibile e attenderne l'approvazione.
 - Inter e Playfair Display inclusi sono fallback del profilo neutro, non fallback automatici di ogni brand. Playfair Display va sempre usato nella variante corsiva.
 - Un font con `source: system` può essere usato dopo verifica locale, dichiarando che non è portabile senza il relativo file.
@@ -75,6 +79,7 @@ Usare per i nuovi profili questo schema:
 - Usare riferimenti soltanto se forniti o approvati.
 - Applicare `visual_direction.avoid` alla generazione e alla revisione.
 - Usare `visual_direction.internal_slides: clean_typographic` come impostazione predefinita: un solo visuale in copertina e slide interne prive di illustrazioni decorative. Un valore diverso richiede una scelta esplicita e una prova visuale aggiornata.
+- Usare `visual_signature.style_system` con uno degli ID definiti in [visual-systems.md](visual-systems.md). Il sistema determina la grammatica delle card; font, palette, logo, firma e sito restano quelli del profilo. Il manifest può selezionare un override per il singolo carosello.
 - Verificare almeno 4.5:1 tra testo normale e sfondo e almeno 3:1 per testo grande. Segnalare un contrasto insufficiente anziché alterare silenziosamente i colori identificativi.
 - Non inventare dati identificativi mancanti.
 - Consentire un profilo personalizzato senza identità mostrata, lasciando vuoti nome, sito, firma, tagline e logo.
@@ -103,7 +108,10 @@ Accettare profili senza `schema_version` come legacy:
 
 - mappare `logo_light` a `logos.on_light` e `logo_dark` a `logos.on_dark` secondo il comportamento storico;
 - convertire i font espressi come stringhe in oggetti con `source` coerente;
+- mappare `fonts.sans` sia a `display` sia a `body` quando i nuovi ruoli non sono presenti;
+- mappare `fonts.serif` a `serif_italic` quando il nuovo ruolo non è presente;
 - convertire `palettes` nella nuova `palette`, chiedendo chiarimento solo se esistono valori incompatibili;
+- migrare `visual_system` a `visual_signature.style_system` quando presente;
 - se `outro` contiene titolo o corpo ma non `copy_mode`, chiedere se siano testi fissi oppure specifici della vecchia fonte; non riutilizzarli automaticamente.
 
 ## Profilo neutro
@@ -112,9 +120,10 @@ Usarlo soltanto dopo scelta esplicita:
 
 - `name`: `Editorial Carousel`;
 - nessun logo, sito, firma o tagline;
-- Inter e Playfair Display inclusi;
+- Inter nei ruoli `display` e `body`, Playfair Display corsivo come `serif_italic`;
 - `surface_mode: alternating` con palette predefinita leggibile;
 - direzione `editorial-geometric`;
+- `visual_signature.style_system: editorial-frame`;
 - chiusura generata dalla fonte per `newsletter` e `article`.
 
 Non salvarlo come brand dell'utente.

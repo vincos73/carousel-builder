@@ -14,7 +14,7 @@ Se la richiesta è generica, spiegare in massimo cinque punti che Carousel Build
 
 - trasformare URL, articoli, newsletter, note o testi in un carosello verticale 4:5;
 - usare un tema neutro, configurare un brand o riutilizzare un profilo JSON;
-- definire logo, palette, font, immagini e chiusura;
+- definire logo, palette, font, sistema visivo, copertina e chiusura;
 - far revisionare tutti i testi prima della produzione;
 - produrre artefatti finali quando la sessione lo consente oppure un layout pronto da impaginare.
 
@@ -94,16 +94,17 @@ Chiedere fondi chiari, scuri o alternati; colori principali e accento; abbinamen
 
 #### C: tipografia
 
-Chiedere font o tono tipografico; eventuale secondo font; disponibilità dei file quando la riproduzione esatta è essenziale. Distinguere una richiesta esatta, come `Lato`, da una richiesta di famiglia, come `tipo Lato`.
+Chiedere il carattere per titoli (`display`) e quello per testi (`body`); possono coincidere. Chiedere separatamente un eventuale carattere espressivo corsivo. Verificare la disponibilità dei file quando la riproduzione esatta è essenziale. Distinguere una richiesta esatta, come `Lato`, da una richiesta di famiglia, come `tipo Lato`.
 
 - Per un font esatto, usare il file fornito oppure una copia già disponibile e verificata. Se manca, chiedere il file.
 - Per una richiesta di famiglia, proporre un sostituto disponibile nominandolo prima della prova visuale.
 - Non sostituire mai il font scelto con Inter o con un altro carattere senza dichiararlo e ottenere l'approvazione.
 - Se si usa un font di sistema, avvertire che la portabilità richiede il file o un brand pack.
+- Se un brand kit dichiara ruoli come display, heading, headline, text, body o copy, preservarli invece di ridurre automaticamente tutto a un solo font.
 
-#### D: immagini e composizione
+#### D: sistema visivo, immagini e composizione
 
-Chiedere la direzione visiva, eventuali riferimenti e ciò che va evitato.
+Leggere [visual-systems.md](visual-systems.md). Chiedere il sistema visivo, la direzione della copertina, eventuali riferimenti e ciò che va evitato. Se non è disponibile generazione immagini, dichiarare `typographic` come fallback universale e accettare un'immagine fornita.
 
 #### E: chiusura
 
@@ -126,8 +127,8 @@ Consentire descrizioni libere come blueprint, disegno a mano, 3D, minimal line a
 Mostrare quattro blocchi:
 
 - `Identità`: nome, logo sui fondi chiari e scuri, firma, sito e tagline;
-- `Sistema visivo`: palette, modalità dei fondi, font richiesto, font effettivamente disponibile ed eventuale fallback da approvare;
-- `Direzione`: stile, riferimenti, composizione ed elementi da evitare;
+- `Sistema visivo`: palette, modalità dei fondi, font display e body richiesti, font effettivamente disponibili, secondo carattere opzionale ed eventuali fallback da approvare;
+- `Direzione`: sistema visivo, stile, riferimenti, composizione ed elementi da evitare;
 - `Chiusura e stato`: presenza della chiusura, obiettivo, modalità della CTA e valori proposti o incerti.
 
 ## Profilo riutilizzabile
