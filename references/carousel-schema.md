@@ -32,18 +32,22 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
   },
   "typography": {
     "cover_px": 112,
+    "cover_subtitle_px": 56,
     "section_title_px": 72,
     "body_px": 64,
     "metadata_px": 26,
     "cover_weight": 800,
+    "cover_subtitle_weight": 500,
     "section_title_weight": 800,
     "body_weight": 620,
     "body_line_height": 1.12,
+    "cover_subtitle_line_height": 1.08,
     "body_tracking_em": -0.025,
     "min_auto_scale": 0.92,
     "overflow_policy": "error_and_copy_revision"
   },
   "cover_title": "Titolo breve della copertina",
+  "cover_subtitle": "Sottotitolo opzionale approvato dall'utente",
   "cover_title_serif": ["Frase esatta da rendere in serif"],
   "cover_image": "assets/cover-visual.png",
   "cover_image_position": "50% 50%",
@@ -96,12 +100,14 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
 - `proof.slide_ids`: copertina, card più densa e chiusura quando prevista.
 - `proof.approved`: impostare `true` soltanto dopo il via libera dell'utente; aggiornare allora `workflow_state` a `prova_visuale_approvata`.
 - `format`: usare il master 4:5 da 1080×1350, l'export 1440×1800 e la prova obbligatoria a 480 px di larghezza. I campi legacy `width` e `height` continuano a indicare l'export finale.
-- `typography`: registrare la scala sul master 1080×1350. I valori nominali sono copertina 112 px con peso 800, titoli sezionali 72 px con peso 800, corpo 64 px con peso 620, interlinea 1.12, tracking -0.025 em e metadati 26 px. Applicare all'export 1440×1800 un fattore uniforme di 4/3.
+- `typography`: registrare la scala sul master 1080×1350. I valori nominali sono copertina 112 px con peso 800, sottotitolo di copertina 56 px con peso 500 e interlinea 1.08, titoli sezionali 72 px con peso 800, corpo 64 px con peso 620, interlinea 1.12, tracking -0.025 em e metadati 26 px. Applicare all'export 1440×1800 un fattore uniforme di 4/3.
 - `typography.min_auto_scale`: non usare valori inferiori a `0.92`, equivalenti a una riduzione massima dell'8%.
 - `typography.overflow_policy`: usare `error_and_copy_revision`; non ridurre ulteriormente il font quando il testo non entra.
 - `cover_title`: obbligatorio.
-- Il manifest non prevede un sottotitolo di copertina. Non aggiungerlo in campi liberi o nel renderer.
+- `cover_subtitle`: opzionale; inserirlo soltanto se fornito o approvato esplicitamente dall'utente. Il renderer lo presenta in Playfair Display corsivo.
 - `cover_title_serif`: massimo due frasi esatte contenute nel titolo.
+- Tutti i segmenti `*_serif` usano Playfair Display esclusivamente in corsivo.
+- `summary` e `outro.body`: ogni frase completa inizia su una nuova riga. I punti interni a numeri e versioni, per esempio `1.2`, non producono un ritorno a capo; lo stesso vale per le abbreviazioni comuni.
 - `source_url`: facoltativo.
 - `cover_image`: percorso assoluto o relativo al manifest; vuoto per il fallback.
 - `cover_image_position`: posizione CSS del ritaglio.

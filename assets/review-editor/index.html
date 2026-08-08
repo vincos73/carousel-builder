@@ -2,15 +2,14 @@
 <html lang="it">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="light">
     <title>Carousel Builder Editor</title>
-    <link rel="stylesheet" href="/assets/styles.css">
+    <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header class="topbar">
       <div>
-        <p class="eyebrow">CAROUSEL BUILDER</p>
         <h1>Revisione editoriale</h1>
       </div>
       <div class="topbar-meta">
@@ -26,9 +25,25 @@
       </section>
 
       <section id="editor" class="editor hidden">
-        <aside class="sidebar">
+        <div class="content">
+          <div class="content-header">
+            <div class="content-heading">
+              <h2 id="slide-count">Slide</h2>
+              <p id="sequence-label" class="sequence-label"></p>
+            </div>
+            <p id="font-status" class="font-status" aria-live="polite">L’anteprima verifica tipografia, palette, densità e safe area; non verifica immagini o crop finali.</p>
+          </div>
+          <nav id="sequence-nav" class="sequence-nav" aria-label="Navigazione della sequenza"></nav>
+          <div id="slides" class="slides"></div>
+
+          <section class="panel overall-panel">
+            <label class="field-label" for="overall-note">Nota generale</label>
+            <textarea id="overall-note" rows="4" placeholder="Un'osservazione sull'intera sequenza"></textarea>
+          </section>
+        </div>
+
+        <aside class="sidebar" aria-label="Contesto di revisione">
           <section class="panel brand-panel">
-            <p class="panel-kicker">PROFILO</p>
             <h2 id="brand-name">Profilo del carosello</h2>
             <dl id="brand-details" class="brand-details"></dl>
             <div id="palette" class="palette" aria-label="Palette del profilo"></div>
@@ -37,7 +52,7 @@
           </section>
 
           <section class="panel guidance-panel">
-            <p class="panel-kicker">COME REVISIONARE</p>
+            <h2>Come revisionare</h2>
             <ol>
               <li>Correggi direttamente i testi.</li>
               <li>Seleziona una frase per commentarla.</li>
@@ -49,7 +64,6 @@
           <section class="panel comments-panel">
             <div class="panel-heading">
               <div>
-                <p class="panel-kicker">COMMENTI</p>
                 <h2>Selezioni annotate</h2>
               </div>
               <span id="comment-count" class="count">0</span>
@@ -59,22 +73,6 @@
             </div>
           </section>
         </aside>
-
-        <div class="content">
-          <div class="content-header">
-            <div>
-              <p id="sequence-label" class="panel-kicker"></p>
-              <h2 id="slide-count">Slide</h2>
-            </div>
-            <p class="content-help">Le anteprime sono indicative e servono a leggere ritmo e densità.</p>
-          </div>
-          <div id="slides" class="slides"></div>
-
-          <section class="panel overall-panel">
-            <label class="field-label" for="overall-note">Nota generale</label>
-            <textarea id="overall-note" rows="4" placeholder="Un'osservazione sull'intera sequenza"></textarea>
-          </section>
-        </div>
       </section>
     </main>
 
@@ -88,26 +86,27 @@
         <button id="send-button" class="button button-secondary" type="button">Invia correzioni</button>
         <button id="approve-button" class="button button-primary" type="button">Approva profilo e testi</button>
       </div>
+      <button id="mobile-actions-button" class="button button-secondary" type="button" aria-haspopup="dialog">Azioni di revisione</button>
     </footer>
 
-    <dialog id="comment-dialog" class="comment-dialog">
+    <dialog id="comment-dialog" class="comment-dialog" aria-labelledby="comment-dialog-title">
       <form method="dialog">
-        <p class="panel-kicker">COMMENTA LA SELEZIONE</p>
+        <h2 id="comment-dialog-title">Commenta la selezione</h2>
         <blockquote id="comment-quote"></blockquote>
         <label class="field-label" for="comment-feedback">Che cosa vuoi cambiare?</label>
         <textarea id="comment-feedback" rows="4" required></textarea>
         <div class="dialog-actions">
-          <button class="button button-ghost" value="cancel">Annulla</button>
+          <button id="cancel-comment" class="button button-ghost" type="button">Annulla</button>
           <button id="save-comment" class="button button-primary" value="default">Aggiungi commento</button>
         </div>
       </form>
     </dialog>
 
-    <dialog id="approval-dialog" class="comment-dialog">
+    <dialog id="approval-dialog" class="comment-dialog" aria-labelledby="approval-dialog-title">
       <form method="dialog">
-        <p class="panel-kicker">RICHIESTA DI APPROVAZIONE</p>
-        <h2>Confermi profilo e testi?</h2>
-        <p class="dialog-copy">Le modifiche e i commenti saranno inviati insieme. L’agente eseguirà ancora i controlli editoriali prima di avanzare lo stato.</p>
+        <h2 id="approval-dialog-title">Confermi profilo e testi?</h2>
+        <p id="approval-dialog-copy" class="dialog-copy">Le modifiche e i commenti saranno inviati insieme. L’agente eseguirà ancora i controlli editoriali prima di avanzare lo stato. Dopo l’approvazione dei testi verrà generata l’immagine della copertina e mostrata in una prova visuale separata.</p>
+        <p id="approval-summary" class="approval-summary" aria-live="polite"></p>
         <div class="dialog-actions">
           <button class="button button-ghost" value="cancel">Torna alla revisione</button>
           <button id="confirm-approval" class="button button-primary" type="button">Conferma approvazione</button>
@@ -115,7 +114,22 @@
       </form>
     </dialog>
 
+    <dialog id="mobile-actions-dialog" class="comment-dialog mobile-actions-dialog" aria-labelledby="mobile-actions-dialog-title">
+      <form method="dialog">
+        <h2 id="mobile-actions-dialog-title">Azioni di revisione</h2>
+        <p class="dialog-copy">Scegli come proseguire con la revisione corrente.</p>
+        <div class="mobile-actions-list">
+          <button id="mobile-send-button" class="button button-secondary" type="button">Invia correzioni</button>
+          <button id="mobile-approve-button" class="button button-primary" type="button">Approva profilo e testi</button>
+          <button id="mobile-reset-button" class="button button-ghost" type="button">Ripristina modifiche</button>
+        </div>
+        <div class="dialog-actions">
+          <button id="close-mobile-actions" class="button button-ghost" type="button">Chiudi</button>
+        </div>
+      </form>
+    </dialog>
+
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="/assets/app.js"></script>
+    <script src="./app.js"></script>
   </body>
 </html>

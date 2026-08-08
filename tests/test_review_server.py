@@ -42,6 +42,36 @@ class ManifestModelTest(unittest.TestCase):
         self.assertTrue(model["slides"][1]["deletable"])
         self.assertFalse(model["slides"][-1]["deletable"])
 
+    def test_exposes_optional_cover_subtitle(self) -> None:
+        manifest = base_manifest()
+        manifest["cover_subtitle"] = "Ecco cosa puoi fare"
+        cover = self.model(manifest)["slides"][0]
+        self.assertEqual(cover["summary"], "Ecco cosa puoi fare")
+
+    def test_exposes_a_safe_cover_image_endpoint_without_a_local_path(self) -> None:
+        image = self.workdir / "cover.png"
+        image.write_bytes(b"png")
+        manifest = base_manifest()
+        manifest["cover_image"] = "cover.png"
+        manifest["cover_image_position"] = "40% 60%"
+        model = self.model(manifest)
+        self.assertEqual(
+            model["cover_visual"],
+            {"available": True, "endpoint": "/api/cover-image", "position": "40% 60%"},
+        )
+        self.assertNotIn(str(image), json.dumps(model))
+
+    def test_puts_complete_sentences_on_new_lines_but_preserves_versions(self) -> None:
+        manifest = base_manifest()
+        manifest["items"][0]["summary"] = (
+            "È disponibile la versione 1.2. Ora puoi aggiornare. Ultima frase."
+        )
+        summary = self.model(manifest)["slides"][1]["summary"]
+        self.assertEqual(
+            summary,
+            "È disponibile la versione 1.2.\nOra puoi aggiornare.\nUltima frase.",
+        )
+
     def test_omits_a_disabled_outro(self) -> None:
         manifest = base_manifest()
         manifest["outro"]["enabled"] = False
@@ -77,6 +107,117 @@ class ManifestModelTest(unittest.TestCase):
         self.assertEqual(brand["sans"], "Brand Sans")
         self.assertEqual(brand["palette"]["accent"], "#C65A3A")
         self.assertNotIn("logos", brand)
+
+    def test_normalizes_typography_and_never_scales_below_documented_floor(self) -> None:
+        manifest = base_manifest()
+        manifest["typography"] = {
+            "cover_px": "large",
+            "section_title_px": 88,
+            "body_px": True,
+            "cover_weight": 700,
+            "section_title_weight": None,
+            "body_weight": 630,
+            "body_line_height": "dense",
+            "body_tracking_em": 2,
+            "min_auto_scale": 0.4,
+            "overflow_policy": "shrink_forever",
+        }
+        typography = self.model(manifest)["typography"]
+        self.assertEqual(typography["cover_px"], 112)
+        self.assertEqual(typography["cover_subtitle_px"], 56)
+        self.assertEqual(typography["section_title_px"], 88)
+        self.assertEqual(typography["body_px"], 64)
+        self.assertEqual(typography["cover_weight"], 700)
+        self.assertEqual(typography["cover_subtitle_weight"], 500)
+        self.assertEqual(typography["section_title_weight"], 800)
+        self.assertEqual(typography["body_weight"], 630)
+        self.assertEqual(typography["body_line_height"], 1.12)
+        self.assertEqual(typography["cover_subtitle_line_height"], 1.08)
+        self.assertEqual(typography["body_tracking_em"], -0.025)
+        self.assertEqual(typography["min_auto_scale"], 0.92)
+        self.assertEqual(typography["overflow_policy"], "error_and_copy_revision")
+
+    def test_exposes_only_exact_emphasis_for_each_slide_field(self) -> None:
+        manifest = base_manifest()
+        manifest["cover_title_accent"] = ["La lezione", "assente", "operativa"]
+        manifest["items"][0].update(
+            {
+                "title": "Titolo da evidenziare",
+                "title_serif": ["Titolo", "da evidenziare", "non presente"],
+                "title_accent": "non e una lista",
+                "summary_serif": ["Prima frase.", "Prima frase.", 4],
+                "summary_accent": ["assente"],
+            }
+        )
+        manifest["outro"].update({"title_serif": ["Chiusura"]})
+        slides = {entry["id"]: entry for entry in self.model(manifest)["slides"]}
+        self.assertEqual(slides["cover"]["title_serif"], ["e operativa"])
+        self.assertEqual(slides["cover"]["title_accent"], ["La lezione", "operativa"])
+        self.assertEqual(slides["cover"]["summary_serif"], [])
+        self.assertEqual(slides["item-1"]["title_serif"], ["Titolo", "da evidenziare"])
+        self.assertEqual(slides["item-1"]["title_accent"], [])
+        self.assertEqual(slides["item-1"]["summary_serif"], ["Prima frase."])
+        self.assertEqual(slides["item-1"]["summary_accent"], [])
+        self.assertEqual(slides["outro"]["title_serif"], ["Chiusura"])
+        self.assertEqual(slides["outro"]["summary_serif"], [])
+
+    def test_exposes_font_metadata_without_local_paths(self) -> None:
+        font_path = self.workdir / "brand.woff2"
+        font_path.write_bytes(b"fake font")
+        manifest = base_manifest()
+        manifest["brand"] = {
+            "fonts": {
+                "sans": {
+                    "family": "Studio Sans",
+                    "file": "brand.woff2",
+                    "source": "uploaded",
+                },
+                "serif": {"family": "Studio Serif", "file": "missing.ttf"},
+            }
+        }
+        model = self.model(manifest)
+        fonts = model["brand"]["font_assets"]
+        self.assertEqual(model["brand"]["sans"], "Studio Sans")
+        self.assertEqual(fonts["sans"], {
+            "family": "Studio Sans",
+            "source": "uploaded",
+            "available": True,
+            "endpoint": "/api/font/sans",
+        })
+        self.assertFalse(fonts["serif"]["available"])
+        self.assertEqual(fonts["serif"]["endpoint"], "")
+        self.assertNotIn(str(font_path), json.dumps(model))
+
+    def test_uses_bundled_assets_for_legacy_neutral_families(self) -> None:
+        manifest = base_manifest()
+        manifest["brand"] = {"fonts": {"sans": "Inter", "serif": "Playfair Display"}}
+        fonts = self.model(manifest)["brand"]["font_assets"]
+        self.assertEqual(fonts["sans"]["source"], "bundled")
+        self.assertTrue(fonts["sans"]["available"])
+        self.assertEqual(fonts["serif"]["source"], "bundled")
+        self.assertTrue(fonts["serif"]["available"])
+        self.assertEqual(
+            review_server.BUNDLED_FONT_ASSETS["serif"][1].name,
+            "PlayfairDisplay-Italic-Variable.ttf",
+        )
+
+    def test_rejects_a_font_path_outside_the_manifest_directory(self) -> None:
+        outside = self.workdir.parent / f"{self.workdir.name}-outside-font.woff2"
+        outside.write_bytes(b"private bytes")
+        self.addCleanup(outside.unlink, missing_ok=True)
+        manifest = base_manifest()
+        manifest["brand"] = {
+            "fonts": {
+                "sans": {
+                    "family": "Outside Sans",
+                    "file": f"../{outside.name}",
+                    "source": "uploaded",
+                }
+            }
+        }
+        font = self.model(manifest)["brand"]["font_assets"]["sans"]
+        self.assertFalse(font["available"])
+        self.assertEqual(font["endpoint"], "")
 
 
 class ValidateFeedbackTest(unittest.TestCase):

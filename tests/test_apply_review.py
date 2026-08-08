@@ -25,7 +25,12 @@ class ApplyReviewTest(unittest.TestCase):
 
     def full_batch(self, **changes: str) -> list[dict]:
         return [
-            slide("cover", "cover", title=changes.get("cover", "La lezione e operativa")),
+            slide(
+                "cover",
+                "cover",
+                title=changes.get("cover", "La lezione e operativa"),
+                summary=changes.get("cover_subtitle", ""),
+            ),
             slide("item-1", "item", summary=changes.get("item-1", "Prima frase.")),
             slide("item-2", "item", summary=changes.get("item-2", "Seconda frase.")),
             slide(
@@ -51,6 +56,30 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertEqual(manifest["items"][0]["summary"], "Prima frase riscritta.")
         backups = list((self.workdir / "session" / "backups").glob("*.json"))
         self.assertEqual(len(backups), 1)
+
+    def test_applies_cover_subtitle_and_marks_accessibility_copy_stale(self) -> None:
+        result = self.apply(
+            base_manifest(),
+            base_feedback(self.full_batch(cover_subtitle="Ecco cosa puoi fare")),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        manifest = self.manifest()
+        self.assertEqual(manifest["cover_subtitle"], "Ecco cosa puoi fare")
+        self.assertIn("cover_subtitle", payload["changed"])
+        self.assertEqual(payload["stale_alt_text"], ["cover"])
+        self.assertTrue(payload["stale_transcript"])
+
+    def test_enforces_sentence_line_breaks_without_splitting_versions(self) -> None:
+        copy = "Usa la versione 1.2. Poi riavvia. Fatto."
+        result = self.apply(
+            base_manifest(), base_feedback(self.full_batch(**{"item-1": copy}))
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.manifest()["items"][0]["summary"],
+            "Usa la versione 1.2.\nPoi riavvia.\nFatto.",
+        )
 
     def test_rejects_stale_base_revision(self) -> None:
         result = self.apply(
