@@ -3,14 +3,26 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="color-scheme" content="light">
+    <meta name="color-scheme" content="dark light">
+    <meta name="theme-color" content="#2D2E2F">
     <title>Carousel Builder Editor</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
+    <!--
+      THESIS: un tavolo di revisione editoriale, non una dashboard generica.
+      OWN-WORLD: carta crema, camera scura blu notte, segni di correzione caldi.
+      STORY: orientamento, sequenza, intervento sul testo, decisione finale.
+      FIRST VIEWPORT: stato del lavoro, scelta visiva e prima slide sono subito leggibili.
+      FORM: preview al centro, strumenti raccolti intorno, note trattate come margine editoriale.
+      FINISH: this should feel authored, not assembled.
+    -->
     <header class="topbar">
       <div>
-        <h1>Revisione editoriale</h1>
+        <h1>
+          <span class="product-title">Carousel Builder</span>
+          <span class="review-title"><span class="title-separator">-</span> <em>Revisione editoriale</em></span>
+        </h1>
       </div>
       <div class="topbar-meta">
         <span id="workflow-badge" class="badge">Caricamento</span>
@@ -29,10 +41,16 @@
           <div class="content-header">
             <div class="content-heading">
               <h2 id="slide-count">Slide</h2>
-              <p id="sequence-label" class="sequence-label"></p>
             </div>
             <p id="font-status" class="font-status" aria-live="polite">L’anteprima verifica tipografia, palette, densità e safe area; non verifica immagini o crop finali.</p>
           </div>
+          <section class="visual-systems" aria-labelledby="visual-systems-title">
+            <div class="visual-systems-copy">
+              <h3 id="visual-systems-title">Prove visive</h3>
+              <p id="visual-system-description" aria-live="polite"></p>
+            </div>
+            <div id="visual-system-picker" class="visual-system-picker" role="radiogroup" aria-label="Sistema visivo dell’anteprima"></div>
+          </section>
           <nav id="sequence-nav" class="sequence-nav" aria-label="Navigazione della sequenza"></nav>
           <div id="slides" class="slides"></div>
 
@@ -105,7 +123,7 @@
     <dialog id="approval-dialog" class="comment-dialog" aria-labelledby="approval-dialog-title">
       <form method="dialog">
         <h2 id="approval-dialog-title">Confermi profilo e testi?</h2>
-        <p id="approval-dialog-copy" class="dialog-copy">Le modifiche e i commenti saranno inviati insieme. L’agente eseguirà ancora i controlli editoriali prima di avanzare lo stato. Dopo l’approvazione dei testi verrà generata l’immagine della copertina e mostrata in una prova visuale separata.</p>
+        <p id="approval-dialog-copy" class="dialog-copy">Le modifiche e i commenti saranno inviati insieme. L’agente eseguirà ancora i controlli editoriali prima di avanzare lo stato. Dopo l’approvazione dei testi verrà mostrata una prova visuale separata con immagine generata, immagine fornita o copertina tipografica.</p>
         <p id="approval-summary" class="approval-summary" aria-live="polite"></p>
         <div class="dialog-actions">
           <button class="button button-ghost" value="cancel">Torna alla revisione</button>

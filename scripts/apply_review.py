@@ -47,9 +47,31 @@ def require_text(value: object, field: str) -> str:
 
 
 EMPHASIS_KEYS = {
-    "cover_title": ("cover_title_serif", "cover_title_accent"),
-    "title": ("title_serif", "title_accent"),
-    "summary": ("summary_serif", "summary_accent"),
+    "cover_title": ("cover_title_bold", "cover_title_serif", "cover_title_accent"),
+    "title": ("title_bold", "title_serif", "title_accent"),
+    "summary": ("summary_bold", "summary_serif", "summary_accent"),
+}
+VISUAL_STYLE_SYSTEMS = {
+    "editorial-frame",
+    "editorial-halftone",
+    "corporate-modular",
+}
+VISUAL_STYLE_ALIASES = {
+    "editorial": "editorial-frame",
+    "editorial_frame": "editorial-frame",
+    "editorialframe": "editorial-frame",
+    "halftone": "editorial-halftone",
+    "editorial_halftone": "editorial-halftone",
+    "campo-cromatico": "editorial-halftone",
+    "campo_cromatico": "editorial-halftone",
+    "color-field": "editorial-halftone",
+    "costellazione": "editorial-halftone",
+    "constellation": "editorial-halftone",
+    "corporate": "corporate-modular",
+    "corporate_modular": "corporate-modular",
+    "modulare-quieto": "corporate-modular",
+    "modulare_quieto": "corporate-modular",
+    "quiet-modular": "corporate-modular",
 }
 SENTENCE_BREAK_ABBREVIATIONS = {
     "ca", "cfr", "dott", "ecc", "es", "n", "pag", "pp", "prof", "sig", "sigg", "vs"
@@ -66,6 +88,15 @@ def sentence_line_breaks(value: str) -> str:
         return "." + match.group(1) + "\n"
 
     return SENTENCE_BREAK_RE.sub(replace, value)
+
+
+def normalized_visual_style_system(value: object) -> str | None:
+    """Validate the persisted carousel override without mutating brand defaults."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().casefold()
+    normalized = VISUAL_STYLE_ALIASES.get(normalized, normalized)
+    return normalized if normalized in VISUAL_STYLE_SYSTEMS else None
 
 
 def emphasis_phrases(container: dict, field: str) -> list[tuple[str, str]]:
@@ -154,6 +185,13 @@ def main() -> int:
             return 0
         if feedback.get("action") not in {"feedback", "approve"}:
             raise ValueError("Azione del batch non valida")
+        selected_visual_style = None
+        if "visual_style_system" in feedback:
+            selected_visual_style = normalized_visual_style_system(
+                feedback.get("visual_style_system")
+            )
+            if selected_visual_style is None:
+                raise ValueError("visual_style_system non valido")
 
         original_items = manifest.get("items")
         if not isinstance(original_items, list) or not original_items:
@@ -309,8 +347,15 @@ def main() -> int:
                 new_proof_ids = kept
                 changed.append("proof.slide_ids")
 
+        editorial_changed = bool(changed)
+        if (
+            selected_visual_style is not None
+            and manifest.get("visual_style_system") != selected_visual_style
+        ):
+            changed.append("visual_style_system")
+
         stale_transcript = bool(
-            changed
+            editorial_changed
             and accessibility is not None
             and accessibility.get("transcript")
         )
@@ -322,7 +367,7 @@ def main() -> int:
             warnings.append("La trascrizione di accessibilità non riflette più i testi correnti")
         if proof is not None and proof.get("approved") and changed:
             warnings.append(
-                "proof.approved resta true ma i testi sono cambiati: la prova visuale va riapprovata"
+                "proof.approved resta true ma il contenuto della prova è cambiato: la prova visuale va riapprovata"
             )
 
         existing_review = manifest.get("review") if isinstance(manifest.get("review"), dict) else {}
@@ -337,6 +382,8 @@ def main() -> int:
                 "updated_at": now_iso(),
             }
         )
+        if selected_visual_style is not None:
+            review["visual_style_system"] = selected_visual_style
         if changed or existing_review != review:
             # Il backup serve a recuperare i testi precedenti: senza modifiche
             # editoriali non c'è nulla da ripristinare e sarebbe solo una copia
@@ -356,6 +403,8 @@ def main() -> int:
                     accessibility["reading_order"] = new_reading_order
                 if new_proof_ids is not None:
                     proof["slide_ids"] = new_proof_ids
+                if selected_visual_style is not None:
+                    manifest["visual_style_system"] = selected_visual_style
                 manifest["revision"] = revision + 1
             manifest["review"] = review
             atomic_write_json(manifest_path, manifest)
@@ -384,6 +433,7 @@ def main() -> int:
             "stale_alt_text": stale_alt_text,
             "stale_transcript": stale_transcript,
             "warnings": warnings,
+            "visual_style_system": manifest.get("visual_style_system"),
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0

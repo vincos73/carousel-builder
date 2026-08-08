@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "carousel-builder",
-  "version": "2.2.0",
-  "description": "Crea caroselli editoriali 4:5 con editor locale quando disponibile e fallback conversazionale.",
+  "version": "2.6.0",
+  "description": "Crea caroselli editoriali 4:5 personali con tre sistemi visivi, editor locale e fallback conversazionale.",
   "author": {
     "name": "Vincenzo Cosenza",
     "url": "https://github.com/vincos73"

@@ -40,7 +40,6 @@
     brandDetails: document.querySelector("#brand-details"),
     palette: document.querySelector("#palette"),
     brandNote: document.querySelector("#brand-note"),
-    sequenceLabel: document.querySelector("#sequence-label"),
     slideCount: document.querySelector("#slide-count"),
     slides: document.querySelector("#slides"),
     overallNote: document.querySelector("#overall-note"),
@@ -71,6 +70,8 @@
     approvalSummary: document.querySelector("#approval-summary"),
     approvalDialogTitle: document.querySelector("#approval-dialog-title"),
     approvalDialogCopy: document.querySelector("#approval-dialog-copy"),
+    visualSystemPicker: document.querySelector("#visual-system-picker"),
+    visualSystemDescription: document.querySelector("#visual-system-description"),
   };
 
   let model = null;
@@ -88,9 +89,27 @@
   let resizeTimer = null;
   let currentSlideId = null;
   let viewedSlideIds = new Set();
-  let compactViewedSlides = false;
   let pointerDrag = null;
+  let selectedVisualSystem = "editorial-frame";
   const fitWarnings = new Map();
+
+  const visualSystems = [
+    {
+      id: "editorial-frame",
+      label: "A · Cornice",
+      description: "Sistema editoriale: una cornice netta guida la lettura, con il testo al centro della scena.",
+    },
+    {
+      id: "editorial-halftone",
+      label: "B · Costellazione",
+      description: "Sistema espressivo: cinque corpi geometrici di scale diverse danno ritmo alla fascia laterale senza competere con il testo.",
+    },
+    {
+      id: "corporate-modular",
+      label: "C · Modulare quieto",
+      description: "Sistema corporate: un indice compatto ordina metodo, dati e processi senza sottrarre spazio al testo.",
+    },
+  ];
 
   const workflowLabels = {
     bozza: "Bozza",
@@ -109,19 +128,6 @@
     pubblicato: "Pubblicato",
     published: "Pubblicato",
   };
-  const sequenceLabels = {
-    narrative: "Sequenza narrativa",
-    sectional: "Sequenza per sezioni",
-  };
-  const sourceLabels = {
-    article: "Articolo",
-    newsletter: "Newsletter",
-    notes: "Note",
-    verbatim: "Testo fornito",
-    rework: "Rielaborazione",
-    social: "Contenuto social",
-  };
-
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
   }
@@ -208,6 +214,18 @@
     return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
   }
 
+  function relativeLuminance(hex) {
+    const channels = [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16) / 255);
+    const linear = channels.map((channel) => channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  }
+
+  function contrastRatio(first, second) {
+    const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+    const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+
   function selectorValue(value) {
     if (window.CSS?.escape) return window.CSS.escape(value);
     return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
@@ -231,8 +249,87 @@
     return `${storageKey}:viewed:${model?.revision ?? ""}`;
   }
 
-  function compactStorageKey() {
-    return `${storageKey}:compact-viewed`;
+  function visualSystemStorageKey() {
+    return `${storageKey}:visual-system`;
+  }
+
+  function supportedVisualSystem(value) {
+    return visualSystems.some((system) => system.id === value) ? value : "";
+  }
+
+  function visualProofOptions() {
+    const options = model?.visual_proofs?.options;
+    return Array.isArray(options) ? options : [];
+  }
+
+  function selectedVisualProof() {
+    return visualProofOptions().find((option) => option?.id === selectedVisualSystem) || null;
+  }
+
+  function resolvedCoverMode() {
+    const mode = model?.cover_mode || model?.visual_proofs?.identity?.cover?.mode;
+    if (["generated", "provided", "typographic"].includes(mode)) return mode;
+    return model?.cover_visual?.available ? "provided" : "typographic";
+  }
+
+  function visualSystemDefinition(system) {
+    const fallback = visualSystems.find((candidate) => candidate.id === system.id) || system;
+    const supplied = visualProofOptions().find((option) => option?.id === system.id);
+    return {
+      ...fallback,
+      label: typeof supplied?.label === "string" && supplied.label.trim() ? supplied.label.trim() : fallback.label,
+    };
+  }
+
+  function previewBrand() {
+    const profile = model?.brand && typeof model.brand === "object" ? model.brand : {};
+    const proofBrand = selectedVisualProof()?.brand;
+    if (!proofBrand || typeof proofBrand !== "object") return profile;
+    return {
+      ...profile,
+      ...proofBrand,
+      palette: { ...(profile.palette || {}), ...(proofBrand.palette || {}) },
+      font_assets: { ...(profile.font_assets || {}), ...(proofBrand.font_assets || {}) },
+      logos: { ...(profile.logos || {}), ...(proofBrand.logos || {}) },
+    };
+  }
+
+  function resolveVisualSystem() {
+    const modelValue = model?.visual_proofs?.selected_style_system || model?.visual_style_system || model?.visual_system || model?.visual_style || model?.brand?.visual_system;
+    return supportedVisualSystem(safeStorageGet(visualSystemStorageKey())) || supportedVisualSystem(modelValue) || "editorial-frame";
+  }
+
+  function renderVisualSystemPicker() {
+    if (!elements.visualSystemPicker) return;
+    const active = visualSystemDefinition(visualSystems.find((system) => system.id === selectedVisualSystem) || visualSystems[0]);
+    elements.visualSystemPicker.replaceChildren();
+    elements.visualSystemPicker.dataset.activeSystem = active.id;
+    if (elements.visualSystemDescription) elements.visualSystemDescription.textContent = active.description;
+    for (const system of visualSystems) {
+      const definition = visualSystemDefinition(system);
+      const button = create("button", "visual-system-option", definition.label);
+      const selected = definition.id === active.id;
+      button.type = "button";
+      button.dataset.visualSystem = definition.id;
+      button.setAttribute("role", "radio");
+      button.setAttribute("aria-checked", String(selected));
+      button.setAttribute("aria-label", `${definition.label}. ${definition.description}`);
+      button.addEventListener("click", () => setVisualSystem(definition.id));
+      elements.visualSystemPicker.append(button);
+    }
+  }
+
+  function setVisualSystem(systemId) {
+    const next = supportedVisualSystem(systemId);
+    if (!next || next === selectedVisualSystem) return;
+    selectedVisualSystem = next;
+    safeStorageSet(visualSystemStorageKey(), next);
+    renderVisualSystemPicker();
+    if (elements.slides) elements.slides.dataset.visualSystem = next;
+    for (const preview of elements.slides?.querySelectorAll(".slide-preview") || []) {
+      for (const system of visualSystems) preview.classList.toggle(`visual-system-${system.id}`, system.id === next);
+    }
+    window.requestAnimationFrame(measurePreviews);
   }
 
   function loadViewState() {
@@ -244,7 +341,6 @@
     } catch (_error) {
       viewedSlideIds = new Set();
     }
-    compactViewedSlides = safeStorageGet(compactStorageKey()) === "true";
   }
 
   function persistViewState() {
@@ -386,15 +482,17 @@
   }
 
   async function configurePreviewTypography() {
-    const brand = model?.brand || {};
+    const brand = previewBrand();
     const assets = brand.font_assets && typeof brand.font_assets === "object" ? brand.font_assets : {};
-    const fallbacks = { sans: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", serif: "Georgia, 'Times New Roman', serif" };
+    const sansFallback = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    const fallbacks = { display: sansFallback, body: sansFallback, serif: "Georgia, 'Times New Roman', serif" };
+    const labels = { display: "Titoli", body: "Testi", serif: "Secondario corsivo" };
     const loaded = {};
     const outcomes = [];
-    for (const kind of ["sans", "serif"]) {
-      const asset = assets[kind];
+    for (const kind of ["display", "body", "serif"]) {
+      const asset = assets[kind] || (kind === "body" ? assets.sans : null);
       if (!asset || asset.available !== true || !asset.family || !asset.endpoint || typeof FontFace === "undefined") {
-        outcomes.push(`${kind === "sans" ? "Sans" : "Serif corsivo"}: fallback dichiarato`);
+        outcomes.push(`${labels[kind]}: fallback dichiarato`);
         continue;
       }
       try {
@@ -406,12 +504,14 @@
         await face.load();
         document.fonts.add(face);
         loaded[kind] = asset.family;
-        outcomes.push(`${kind === "sans" ? "Sans" : "Serif corsivo"}: ${asset.family}`);
+        outcomes.push(`${labels[kind]}: ${asset.family}`);
       } catch (_error) {
-        outcomes.push(`${kind === "sans" ? "Sans" : "Serif corsivo"}: fallback dichiarato (caricamento non riuscito)`);
+        outcomes.push(`${labels[kind]}: fallback dichiarato (caricamento non riuscito)`);
       }
     }
-    document.documentElement.style.setProperty("--preview-sans", fontStack(loaded.sans, fallbacks.sans));
+    document.documentElement.style.setProperty("--preview-display", fontStack(loaded.display, fallbacks.display));
+    document.documentElement.style.setProperty("--preview-body", fontStack(loaded.body, fallbacks.body));
+    document.documentElement.style.setProperty("--preview-sans", fontStack(loaded.body, fallbacks.body));
     document.documentElement.style.setProperty("--preview-serif", fontStack(loaded.serif, fallbacks.serif));
     setFontStatus(
       `Tipografia anteprima — ${outcomes.join(" · ")} · Non verifica immagini o crop finali.`,
@@ -421,7 +521,9 @@
   }
 
   function typography() {
-    return model?.typography && typeof model.typography === "object" ? model.typography : {};
+    const defaultTypography = model?.typography && typeof model.typography === "object" ? model.typography : {};
+    const proofTypography = selectedVisualProof()?.typography;
+    return proofTypography && typeof proofTypography === "object" ? { ...defaultTypography, ...proofTypography } : defaultTypography;
   }
 
   function numberValue(value, fallback) {
@@ -452,7 +554,7 @@
     if (title) {
       title.style.fontSize = `${previewFontBase(slide, "title", preview) * scale}px`;
       title.style.fontWeight = String(numberValue(slide.kind === "cover" ? type.cover_weight : type.section_title_weight, 800));
-      title.style.fontFamily = "var(--preview-sans)";
+      title.style.fontFamily = "var(--preview-display)";
     }
     if (summary) {
       summary.style.fontSize = `${previewFontBase(slide, "summary", preview) * scale}px`;
@@ -461,16 +563,18 @@
       summary.style.letterSpacing = slide.kind === "cover"
         ? "0em"
         : `${numberValue(Math.abs(type.body_tracking_em), 0.025) * -1}em`;
-      summary.style.fontFamily = slide.kind === "cover" ? "var(--preview-serif)" : "var(--preview-sans)";
+      summary.style.fontFamily = slide.kind === "cover" ? "var(--preview-serif)" : "var(--preview-body)";
       summary.style.fontStyle = slide.kind === "cover" ? "italic" : "normal";
     }
   }
 
   function emphasisFor(slide, field) {
     const legacyPrefix = slide.kind === "cover" && field === "title" ? "cover_title" : field;
+    const bold = slide[`${field}_bold`] ?? slide[`${legacyPrefix}_bold`];
     const serif = slide[`${field}_serif`] ?? slide[`${legacyPrefix}_serif`];
     const accent = slide[`${field}_accent`] ?? slide[`${legacyPrefix}_accent`];
     return {
+      bold: Array.isArray(bold) ? bold : [],
       serif: Array.isArray(serif) ? serif : [],
       accent: Array.isArray(accent) ? accent : [],
     };
@@ -489,7 +593,8 @@
         }
       }
     }
-    matches.sort((a, b) => a.start - b.start || b.end - a.end || (a.kind === "serif" ? -1 : 1));
+    const priority = { serif: 0, bold: 1, accent: 2 };
+    matches.sort((a, b) => a.start - b.start || b.end - a.end || priority[a.kind] - priority[b.kind]);
     const accepted = [];
     let cursor = 0;
     for (const match of matches) {
@@ -497,17 +602,33 @@
       accepted.push(match);
       cursor = match.end;
     }
+    const appendRange = (parent, start, end) => {
+      let rangeCursor = start;
+      for (const match of accepted) {
+        if (match.end <= start || match.start >= end) continue;
+        const matchStart = Math.max(start, match.start);
+        const matchEnd = Math.min(end, match.end);
+        if (matchStart > rangeCursor) parent.append(document.createTextNode(safeText.slice(rangeCursor, matchStart)));
+        parent.append(create("span", `preview-emphasis preview-${match.kind}`, safeText.slice(matchStart, matchEnd)));
+        rangeCursor = matchEnd;
+      }
+      if (rangeCursor < end) parent.append(document.createTextNode(safeText.slice(rangeCursor, end)));
+    };
     const fragment = document.createDocumentFragment();
-    cursor = 0;
-    for (const match of accepted) {
-      if (match.start > cursor) fragment.append(document.createTextNode(safeText.slice(cursor, match.start)));
-      const span = create("span", `preview-emphasis preview-${match.kind}`, safeText.slice(match.start, match.end));
-      if (match.kind === "serif") span.style.fontFamily = "var(--preview-serif)";
-      if (match.kind === "accent") span.style.fontWeight = "850";
-      fragment.append(span);
-      cursor = match.end;
+    const separateSentences = node.classList.contains("preview-summary") && safeText.includes("\n");
+    node.classList.toggle("has-sentence-breaks", separateSentences);
+    if (separateSentences) {
+      let lineStart = 0;
+      for (let index = 0; index <= safeText.length; index += 1) {
+        if (index !== safeText.length && safeText[index] !== "\n") continue;
+        const sentence = create("span", "preview-sentence");
+        appendRange(sentence, lineStart, index);
+        fragment.append(sentence);
+        lineStart = index + 1;
+      }
+    } else {
+      appendRange(fragment, 0, safeText.length);
     }
-    if (cursor < safeText.length || !accepted.length) fragment.append(document.createTextNode(safeText.slice(cursor)));
     node.replaceChildren(fragment);
   }
 
@@ -515,7 +636,9 @@
     const brand = model.brand || {};
     elements.brandName.textContent = brand.name || "Profilo senza nome";
     elements.brandDetails.replaceChildren();
-    const rows = [["Sito", brand.website || "Non mostrato"], ["Firma", brand.signature || "Non mostrata"], ["Primario", brand.sans || "Non dichiarato"], ["Secondario corsivo", brand.serif || "Non previsto"]];
+    const logoCount = Object.values(brand.logos || {}).filter((logo) => logo?.available).length;
+    const logoLabel = logoCount === 1 ? "1 variante disponibile" : logoCount > 1 ? `${logoCount} varianti disponibili` : "Non previsto";
+    const rows = [["Sito", brand.website || "Non mostrato"], ["Firma", brand.signature || "Non mostrata"], ["Logo", logoLabel], ["Titoli", brand.display || brand.sans || "Non dichiarato"], ["Testi", brand.body || brand.sans || "Non dichiarato"], ["Secondario corsivo", brand.serif || "Non previsto"]];
     for (const [label, value] of rows) elements.brandDetails.append(create("dt", "", label), create("dd", "", value));
     elements.palette.replaceChildren();
     const palette = brand.palette || {};
@@ -698,9 +821,20 @@
   }
 
   function previewColors(index, kind) {
-    const palette = model.brand?.palette || {};
+    const palette = previewBrand().palette || {};
     const useDark = kind === "cover" || kind === "outro" || index % 2 === 0;
-    return useDark ? { bg: safeColor(palette.background_dark, "#172033"), text: safeColor(palette.text_on_dark, "#ffffff") } : { bg: safeColor(palette.background_light, "#f5f1e8"), text: safeColor(palette.text_on_light, "#172033") };
+    const accent = safeColor(palette.accent || palette.primary || palette.accent_primary, "#febd08");
+    const backgroundDark = safeColor(palette.background_dark, "#172033");
+    const backgroundLight = safeColor(palette.background_light, "#f5f1e8");
+    const textOnDark = safeColor(palette.text_on_dark, "#ffffff");
+    const textOnLight = safeColor(palette.text_on_light, "#172033");
+    const accentUsesLightText = contrastRatio(accent, textOnDark) >= contrastRatio(accent, textOnLight);
+    const accentText = accentUsesLightText ? textOnDark : textOnLight;
+    const accentLogoRole = accentUsesLightText ? "on_dark" : "on_light";
+    const shared = { accent, backgroundDark, backgroundLight, textOnDark, textOnLight, accentText, accentLogoRole, surface: useDark ? "dark" : "light" };
+    return useDark
+      ? { bg: backgroundDark, text: textOnDark, ...shared }
+      : { bg: backgroundLight, text: textOnLight, ...shared };
   }
 
   function schemaWarning(slide) {
@@ -722,11 +856,9 @@
 
   function applyViewedClasses() {
     if (!elements.slides) return;
-    elements.slides.classList.toggle("compact-viewed", compactViewedSlides);
     for (const row of elements.slides.querySelectorAll(".slide-row")) {
       const viewed = viewedSlideIds.has(row.dataset.slideId);
       row.classList.toggle("is-viewed", viewed);
-      row.classList.toggle("collapsed", compactViewedSlides && viewed && row.dataset.slideId !== currentSlideId);
     }
   }
 
@@ -777,17 +909,6 @@
       list.append(button);
     });
     elements.sequenceNav.append(list);
-    const compactLabel = create("label", "compact-viewed-toggle");
-    const compactInput = document.createElement("input");
-    compactInput.type = "checkbox";
-    compactInput.checked = compactViewedSlides;
-    compactInput.addEventListener("change", () => {
-      compactViewedSlides = compactInput.checked;
-      safeStorageSet(compactStorageKey(), String(compactViewedSlides));
-      applyViewedClasses();
-    });
-    compactLabel.append(compactInput, document.createTextNode("Compatta le slide già viste"));
-    elements.sequenceNav.append(compactLabel);
   }
 
   function setupObserver() {
@@ -816,12 +937,24 @@
       let scale = 1;
       applyPreviewScale(preview, slide, scale);
       const style = window.getComputedStyle(preview);
-      const usableHeight = preview.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - 54;
-      while (copy.scrollHeight > usableHeight + 1 && scale > minScale) {
+      const copyFits = () => {
+        const previewBounds = preview.getBoundingClientRect();
+        const copyBounds = copy.getBoundingClientRect();
+        const brand = preview.querySelector(".preview-brand");
+        const brandBounds = brand && !brand.hidden ? brand.getBoundingClientRect() : null;
+        const topLimit = previewBounds.top + parseFloat(style.paddingTop);
+        const bottomLimit = brandBounds
+          ? brandBounds.top - 4
+          : previewBounds.bottom - parseFloat(style.paddingBottom);
+        return copyBounds.top >= topLimit - 1
+          && copyBounds.bottom <= bottomLimit + 1
+          && copy.scrollWidth <= copy.clientWidth + 1;
+      };
+      while (!copyFits() && scale > minScale) {
         scale = Math.max(minScale, Number((scale - 0.01).toFixed(2)));
         applyPreviewScale(preview, slide, scale);
       }
-      const overflow = copy.scrollHeight > usableHeight + 1;
+      const overflow = !copyFits();
       const notice = {
         schema: schemaWarning(slide),
         overflow: overflow ? "Testo ancora troppo denso nell’anteprima dopo la riduzione massima dell’8%. Riduci o dividi il testo." : "",
@@ -837,6 +970,7 @@
     if (!elements.slides) return;
     fitWarnings.clear();
     elements.slides.replaceChildren();
+    elements.slides.dataset.visualSystem = selectedVisualSystem;
     if (elements.slideCount) elements.slideCount.textContent = `${draftSlides.length} slide totali`;
     const items = itemPositions();
     draftSlides.forEach((slide, index) => {
@@ -848,10 +982,21 @@
       const colors = previewColors(index, slide.kind);
       preview.style.setProperty("--preview-bg", colors.bg);
       preview.style.setProperty("--preview-text", colors.text);
-      if (slide.kind === "cover" && model.cover_visual?.available && model.cover_visual.endpoint) {
+      preview.style.setProperty("--preview-accent", colors.accent);
+      preview.style.setProperty("--preview-dark-bg", colors.backgroundDark);
+      preview.style.setProperty("--preview-light-bg", colors.backgroundLight);
+      preview.style.setProperty("--preview-dark-text", colors.textOnDark);
+      preview.style.setProperty("--preview-light-text", colors.textOnLight);
+      preview.style.setProperty("--preview-accent-text", colors.accentText);
+      preview.dataset.kind = slide.kind;
+      preview.dataset.surface = colors.surface;
+      preview.dataset.constellationPosition = index % 2 === 0 ? "high" : "low";
+      preview.classList.add(`visual-system-${selectedVisualSystem}`);
+      const coverVisual = selectedVisualProof()?.cover_visual || model.cover_visual;
+      if (slide.kind === "cover" && coverVisual?.available && coverVisual.endpoint) {
         preview.classList.add("has-cover-image");
-        preview.style.setProperty("--preview-image", `url("${api(model.cover_visual.endpoint).replace(/"/g, "%22")}")`);
-        preview.style.setProperty("--preview-image-position", model.cover_visual.position || "50% 50%");
+        preview.style.setProperty("--preview-image", `url("${api(coverVisual.endpoint).replace(/"/g, "%22")}")`);
+        preview.style.setProperty("--preview-image-position", coverVisual.position || "50% 50%");
       }
       const previewCopy = create("div", "preview-copy");
       const previewTitle = create("h3", "preview-title");
@@ -864,13 +1009,32 @@
       }
       if (slide.kind === "item" && model.sequence_mode === "narrative" && !slide.title.trim()) previewTitle.hidden = true;
       previewCopy.append(previewTitle, previewSummary);
-      const previewBrand = create("div", "preview-brand");
-      const signature = String(model.brand?.signature || "").trim();
-      const website = String(model.brand?.website || "").trim();
-      if (signature) previewBrand.append(create("span", "preview-signature", signature));
-      if (website) previewBrand.append(create("span", "preview-website", website));
-      previewBrand.hidden = !signature && !website;
-      preview.append(previewCopy, previewBrand);
+      const pageCurrent = String(index + 1).padStart(2, "0");
+      const pageTotal = String(draftSlides.length).padStart(2, "0");
+      const pageNumber = create("span", "preview-page", `${pageCurrent} / ${pageTotal}`);
+      pageNumber.setAttribute("aria-label", `Pagina ${index + 1} di ${draftSlides.length}`);
+      const constellation = create("div", "preview-constellation");
+      constellation.setAttribute("aria-hidden", "true");
+      for (const role of ["primary", "core", "ring", "moon", "satellite"]) {
+        constellation.append(create("span", `preview-sphere preview-sphere-${role}`));
+      }
+      const previewBrandNode = create("div", "preview-brand");
+      const brand = previewBrand();
+      const signature = String(brand.signature || "").trim();
+      const website = String(brand.website || "").trim();
+      const logoRole = slide.kind === "cover" || slide.kind === "outro" || colors.surface === "dark" ? "on_dark" : "on_light";
+      const logo = brand.logos?.[logoRole];
+      const hasLogo = logo?.available === true && typeof logo.endpoint === "string" && logo.endpoint;
+      if (hasLogo) {
+        const image = document.createElement("img");
+        image.className = "preview-logo";
+        image.src = api(logo.endpoint);
+        image.alt = brand.name ? `Logo ${brand.name}` : "Logo del brand";
+        previewBrandNode.append(image);
+      } else if (signature) previewBrandNode.append(create("span", "preview-signature", signature));
+      if (website) previewBrandNode.append(create("span", "preview-website", website));
+      previewBrandNode.hidden = !hasLogo && !signature && !website;
+      preview.append(constellation, pageNumber, previewCopy, previewBrandNode);
       const form = create("div", "slide-form");
       const toolbar = create("div", "slide-toolbar");
       const identity = create("div", "slide-identity");
@@ -908,7 +1072,19 @@
         const copyApproved = model.workflow_state === "testi_approvati";
         const visualApproved = ["prova_visuale_approvata", "rendering", "qa", "consegnato"].includes(model.workflow_state);
         const delivered = model.workflow_state === "consegnato";
-        const coverVisualReady = (copyApproved || visualApproved) && model.cover_visual?.available;
+        const coverMode = resolvedCoverMode();
+        const proofReady = copyApproved || visualApproved;
+        const coverMessage = coverMode === "generated"
+          ? (proofReady
+              ? "Questa prova usa l’immagine generata: controlla crop, composizione, sito e firma."
+              : "Dopo l’approvazione dei testi verrà mostrata una prova con l’immagine generata.")
+          : coverMode === "provided"
+            ? (proofReady
+                ? "Questa prova usa l’immagine fornita: controlla crop, composizione, sito e firma."
+                : "Dopo l’approvazione dei testi verrà mostrata una prova con l’immagine fornita.")
+            : (proofReady
+                ? "Questa prova usa una copertina tipografica completa: controlla composizione, gerarchia, sito e firma."
+                : "Dopo l’approvazione dei testi verrà mostrata una copertina tipografica completa, senza dipendere dalla generazione di immagini.");
         form.append(create(
           "p",
           "cover-visual-note",
@@ -916,11 +1092,7 @@
             ? "La prova visuale è approvata e il layout dettagliato è stato consegnato."
             : visualApproved
               ? "La prova visuale è approvata. Il rendering completo può iniziare."
-              : coverVisualReady
-                ? "I testi sono approvati. Questa è la prova visuale della copertina: controlla immagine, composizione, sito e firma."
-                : copyApproved
-                  ? "I testi sono approvati. L’immagine di copertina viene preparata nella prova visuale successiva."
-                  : "La copertina finale conterrà anche un’immagine, che verrà generata dopo l’approvazione dei testi. In questa fase stai approvando profilo e copy.",
+              : coverMessage,
         ));
       }
       const showTitle = slide.kind !== "item" || model.sequence_mode === "sectional" || slide.title;
@@ -991,11 +1163,7 @@
 
   function renderAll() {
     if (elements.revisionLabel) elements.revisionLabel.textContent = `Revisione ${model.revision}`;
-    if (elements.sequenceLabel) {
-      const ratio = model.format?.ratio || "Formato non definito";
-      elements.sequenceLabel.textContent = `${labelForValue(sequenceLabels, model.sequence_mode, "Sequenza non definita")} · ${labelForValue(sourceLabels, model.source_type, "Fonte non definita")} · ${ratio}`;
-    }
-    const visualProofStage = model.workflow_state === "testi_approvati" && model.cover_visual?.available;
+    const visualProofStage = model.workflow_state === "testi_approvati";
     const visualApproved = ["prova_visuale_approvata", "rendering", "qa", "consegnato"].includes(model.workflow_state);
     const delivered = model.workflow_state === "consegnato";
     const approvalLabel = delivered
@@ -1011,11 +1179,17 @@
         : "Confermi profilo e testi?";
     }
     if (elements.approvalDialogCopy) {
+      const coverMode = resolvedCoverMode();
+      const coverLabel = coverMode === "generated"
+        ? "immagine generata"
+        : coverMode === "provided" ? "immagine fornita" : "copertina tipografica";
       elements.approvalDialogCopy.textContent = visualProofStage
-        ? "Confermi composizione, immagine di copertina, gerarchia tipografica, sito e firma. Il rendering completo inizierà soltanto dopo questa approvazione."
-        : "Le modifiche e i commenti saranno inviati insieme. L’agente eseguirà ancora i controlli editoriali prima di avanzare lo stato. Dopo l’approvazione dei testi verrà generata l’immagine della copertina e mostrata in una prova visuale separata.";
+        ? `Confermi composizione, ${coverLabel}, gerarchia tipografica, sito e firma. Il rendering completo inizierà soltanto dopo questa approvazione.`
+        : `Le modifiche e i commenti saranno inviati insieme. L’agente eseguirà ancora i controlli editoriali prima di avanzare lo stato. Dopo l’approvazione dei testi verrà mostrata una prova visuale separata con ${coverLabel}.`;
     }
     loadViewState();
+    selectedVisualSystem = resolveVisualSystem();
+    renderVisualSystemPicker();
     currentSlideId = currentSlideId && draftSlides.some((slide) => slide.id === currentSlideId) ? currentSlideId : draftSlides[0]?.id || null;
     renderBrand();
     renderSlides();
@@ -1070,7 +1244,7 @@
     if (validationError) return showToast(validationError, true);
     if (elements.sendButton) elements.sendButton.disabled = true;
     if (elements.approveButton) elements.approveButton.disabled = true;
-    const payload = { action, base_revision: model.revision, slides: normalizedSlides(draftSlides), comments: collectedComments(), overall_note: overallNote.trim() };
+    const payload = { action, base_revision: model.revision, slides: normalizedSlides(draftSlides), comments: collectedComments(), overall_note: overallNote.trim(), visual_style_system: selectedVisualSystem };
     try {
       const response = await fetch(api("/api/submit"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const data = await response.json();

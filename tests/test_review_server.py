@@ -57,9 +57,84 @@ class ManifestModelTest(unittest.TestCase):
         model = self.model(manifest)
         self.assertEqual(
             model["cover_visual"],
-            {"available": True, "endpoint": "/api/cover-image", "position": "40% 60%"},
+            {
+                "available": True,
+                "endpoint": "/api/cover-image",
+                "position": "40% 60%",
+                "mode": "provided",
+            },
         )
         self.assertNotIn(str(image), json.dumps(model))
+        self.assertEqual(model["cover_mode"], "provided")
+
+    def test_exposes_three_same_identity_visual_proofs_and_brand_default(self) -> None:
+        manifest = base_manifest()
+        manifest["brand"] = {
+            "name": "Studio",
+            "visual_signature": {"style_system": "corporate_modular"},
+        }
+        proofs = self.model(manifest)["visual_proofs"]
+        self.assertEqual(proofs["selected_style_system"], "corporate-modular")
+        self.assertEqual(
+            [option["id"] for option in proofs["options"]],
+            ["editorial-frame", "editorial-halftone", "corporate-modular"],
+        )
+        self.assertEqual(
+            [option["label"] for option in proofs["options"]],
+            ["Cornice editoriale", "Costellazione", "Modulare quieto"],
+        )
+        self.assertEqual(proofs["identity"]["brand"]["name"], "Studio")
+        self.assertEqual(proofs["identity"]["cover"]["mode"], "typographic")
+
+    def test_visual_style_override_is_validated_and_cover_modes_fall_back_safely(self) -> None:
+        image = self.workdir / "cover.png"
+        image.write_bytes(b"png")
+        manifest = base_manifest()
+        manifest.update(
+            {
+                "visual_style_system": "editorial-halftone",
+                "cover_mode": "generated",
+                "cover_image": "cover.png",
+            }
+        )
+        proofs = self.model(manifest)["visual_proofs"]
+        self.assertEqual(proofs["selected_style_system"], "editorial-halftone")
+        self.assertEqual(proofs["identity"]["cover"]["mode"], "generated")
+
+        del manifest["cover_mode"]
+        manifest["cover_visual_mode"] = "generative"
+        self.assertEqual(self.model(manifest)["cover_mode"], "generated")
+
+        manifest["visual_style_system"] = "non-esiste"
+        manifest["cover_image"] = "manca.png"
+        self.assertEqual(
+            self.model(manifest)["visual_proofs"]["selected_style_system"],
+            "editorial-frame",
+        )
+        self.assertEqual(
+            self.model(manifest)["visual_proofs"]["identity"]["cover"]["mode"],
+            "generated",
+        )
+        manifest["workflow_state"] = "testi_approvati"
+        self.assertEqual(self.model(manifest)["cover_mode"], "typographic")
+
+    def test_accepts_new_visual_system_aliases_without_breaking_canonical_ids(self) -> None:
+        manifest = base_manifest()
+        manifest["visual_style_system"] = "campo-cromatico"
+        self.assertEqual(
+            self.model(manifest)["visual_proofs"]["selected_style_system"],
+            "editorial-halftone",
+        )
+        manifest["visual_style_system"] = "costellazione"
+        self.assertEqual(
+            self.model(manifest)["visual_proofs"]["selected_style_system"],
+            "editorial-halftone",
+        )
+        manifest["visual_style_system"] = "modulare-quieto"
+        self.assertEqual(
+            self.model(manifest)["visual_proofs"]["selected_style_system"],
+            "corporate-modular",
+        )
 
     def test_puts_complete_sentences_on_new_lines_but_preserves_versions(self) -> None:
         manifest = base_manifest()
@@ -106,7 +181,64 @@ class ManifestModelTest(unittest.TestCase):
         self.assertEqual(brand["name"], "Studio")
         self.assertEqual(brand["sans"], "Brand Sans")
         self.assertEqual(brand["palette"]["accent"], "#C65A3A")
-        self.assertNotIn("logos", brand)
+        self.assertFalse(brand["logos"]["on_light"]["available"])
+        self.assertNotIn("assets/logo.svg", json.dumps(brand))
+
+    def test_exposes_safe_logo_metadata_without_local_paths(self) -> None:
+        logo_path = self.workdir / "logo.png"
+        logo_path.write_bytes(b"logo")
+        manifest = base_manifest()
+        manifest["brand"] = {
+            "name": "Studio",
+            "logos": {"on_light": "logo.png", "on_dark": "missing.png"},
+        }
+        brand = self.model(manifest)["brand"]
+        self.assertEqual(
+            brand["logos"]["on_light"],
+            {"available": True, "endpoint": "/api/logo/on-light"},
+        )
+        self.assertEqual(
+            brand["logos"]["on_dark"],
+            {"available": False, "endpoint": ""},
+        )
+        self.assertNotIn(str(logo_path), json.dumps(brand))
+
+    def test_exposes_distinct_display_and_body_roles(self) -> None:
+        display_path = self.workdir / "display.ttf"
+        body_path = self.workdir / "body.ttf"
+        display_path.write_bytes(b"display")
+        body_path.write_bytes(b"body")
+        manifest = base_manifest()
+        manifest["brand"] = {
+            "fonts": {
+                "display": {
+                    "family": "Studio Display",
+                    "file": "display.ttf",
+                    "source": "uploaded",
+                },
+                "body": {
+                    "family": "Studio Body",
+                    "file": "body.ttf",
+                    "source": "uploaded",
+                },
+            }
+        }
+        brand = self.model(manifest)["brand"]
+        self.assertEqual(brand["display"], "Studio Display")
+        self.assertEqual(brand["body"], "Studio Body")
+        self.assertEqual(brand["sans"], "Studio Body")
+        self.assertEqual(brand["font_assets"]["display"]["endpoint"], "/api/font/display")
+        self.assertEqual(brand["font_assets"]["body"]["endpoint"], "/api/font/body")
+        self.assertEqual(brand["font_assets"]["sans"]["endpoint"], "/api/font/sans")
+
+    def test_maps_legacy_sans_to_display_and_body(self) -> None:
+        manifest = base_manifest()
+        manifest["brand"] = {"fonts": {"sans": "Inter"}}
+        brand = self.model(manifest)["brand"]
+        self.assertEqual(brand["display"], "Inter")
+        self.assertEqual(brand["body"], "Inter")
+        self.assertTrue(brand["font_assets"]["display"]["available"])
+        self.assertTrue(brand["font_assets"]["body"]["available"])
 
     def test_normalizes_typography_and_never_scales_below_documented_floor(self) -> None:
         manifest = base_manifest()
@@ -139,26 +271,35 @@ class ManifestModelTest(unittest.TestCase):
 
     def test_exposes_only_exact_emphasis_for_each_slide_field(self) -> None:
         manifest = base_manifest()
+        manifest["cover_title_bold"] = ["La lezione", "assente"]
         manifest["cover_title_accent"] = ["La lezione", "assente", "operativa"]
         manifest["items"][0].update(
             {
                 "title": "Titolo da evidenziare",
+                "title_bold": ["evidenziare"],
                 "title_serif": ["Titolo", "da evidenziare", "non presente"],
                 "title_accent": "non e una lista",
+                "summary_bold": ["Prima frase."],
                 "summary_serif": ["Prima frase.", "Prima frase.", 4],
                 "summary_accent": ["assente"],
             }
         )
-        manifest["outro"].update({"title_serif": ["Chiusura"]})
+        manifest["outro"].update(
+            {"title_serif": ["Chiusura"], "summary_bold": ["Corpo"]}
+        )
         slides = {entry["id"]: entry for entry in self.model(manifest)["slides"]}
+        self.assertEqual(slides["cover"]["title_bold"], ["La lezione"])
         self.assertEqual(slides["cover"]["title_serif"], ["e operativa"])
         self.assertEqual(slides["cover"]["title_accent"], ["La lezione", "operativa"])
         self.assertEqual(slides["cover"]["summary_serif"], [])
+        self.assertEqual(slides["item-1"]["title_bold"], ["evidenziare"])
         self.assertEqual(slides["item-1"]["title_serif"], ["Titolo", "da evidenziare"])
         self.assertEqual(slides["item-1"]["title_accent"], [])
+        self.assertEqual(slides["item-1"]["summary_bold"], ["Prima frase."])
         self.assertEqual(slides["item-1"]["summary_serif"], ["Prima frase."])
         self.assertEqual(slides["item-1"]["summary_accent"], [])
         self.assertEqual(slides["outro"]["title_serif"], ["Chiusura"])
+        self.assertEqual(slides["outro"]["summary_bold"], ["Corpo"])
         self.assertEqual(slides["outro"]["summary_serif"], [])
 
     def test_exposes_font_metadata_without_local_paths(self) -> None:
@@ -219,6 +360,16 @@ class ManifestModelTest(unittest.TestCase):
         self.assertFalse(font["available"])
         self.assertEqual(font["endpoint"], "")
 
+    def test_rejects_a_logo_path_outside_the_manifest_directory(self) -> None:
+        outside = self.workdir.parent / f"{self.workdir.name}-outside-logo.png"
+        outside.write_bytes(b"private logo")
+        self.addCleanup(outside.unlink, missing_ok=True)
+        manifest = base_manifest()
+        manifest["brand"] = {"logos": {"on_light": f"../{outside.name}"}}
+        logo = self.model(manifest)["brand"]["logos"]["on_light"]
+        self.assertFalse(logo["available"])
+        self.assertEqual(logo["endpoint"], "")
+
 
 class ValidateFeedbackTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -252,6 +403,16 @@ class ValidateFeedbackTest(unittest.TestCase):
         self.assertEqual(result["action"], "feedback")
         self.assertTrue(result["feedback_id"].startswith("feedback-"))
         self.assertEqual(len(result["slides"]), 4)
+
+    def test_accepts_a_visual_style_choice_and_rejects_unknown_ones(self) -> None:
+        result = review_server.validate_feedback(
+            self.payload(visual_style_system="corporate_modular"), self.model
+        )
+        self.assertEqual(result["visual_style_system"], "corporate-modular")
+        with self.assertRaises(ValueError):
+            review_server.validate_feedback(
+                self.payload(visual_style_system="non-esiste"), self.model
+            )
 
     def test_accepts_deletion_and_reorder(self) -> None:
         slides = [
