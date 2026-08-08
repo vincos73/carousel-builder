@@ -4,6 +4,8 @@ Carousel Builder è una skill adattiva per trasformare URL, articoli, newsletter
 
 Può essere usata con ChatGPT e Claude (versioni web), ma dà il meglio quando viene usata con le versioni desktop. In particolare se usata con ChatGPT Desktop permette una revisione visiva delle slide del carosello attraverso un editor html.
 
+Se usi Claude tieni presente che Anthropic non dispone di un modello nativo per la generazione di immagini per cui ti restituirà delle slide molto scarne.
+
 <img width="1256" height="701" alt="carousel-builder-screenshot" src="https://github.com/user-attachments/assets/1e4de6de-2960-405d-881c-21d6d14b943c" />
 
 ## Inizia da qui
