@@ -2,11 +2,12 @@
 
 Carousel Builder è una skill adattiva per trasformare URL, articoli, newsletter, testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social (formato .pdf e .png).
 
-Può essere usata con ChatGPT e Claude (versioni web), ma dà il meglio quando viene usata con le versioni desktop. In particolare se usata con ChatGPT Desktop permette una revisione visiva delle slide del carosello attraverso un editor html.
+Può essere usata con ChatGPT e Claude (versioni web), ma dà il meglio quando viene usata con le versioni desktop. In particolare se usata con ChatGPT Desktop e Claude Code permette una revisione visiva delle slide del carosello attraverso un editor html.
 
 Se usi Claude tieni presente che Anthropic non dispone di un modello nativo per la generazione di immagini per cui ti restituirà delle slide molto scarne.
 
-<img width="1256" height="701" alt="carousel-builder-screenshot" src="https://github.com/user-attachments/assets/1e4de6de-2960-405d-881c-21d6d14b943c" />
+<img width="1557" height="845" alt="carousel-builder-screen" src="https://github.com/user-attachments/assets/cb3a3ead-513f-43b3-80c4-75da692b5857" />
+
 
 ## Inizia da qui
 
@@ -17,12 +18,12 @@ Puoi scaricare subito il pacchetto in formato ZIP:
 Non serve conoscere GitHub o usare il terminale per iniziare.
 
 1. Scarica il file ZIP dal link qui sopra.
-2. Se il tuo strumento permette di caricare una skill, carica direttamente il file ZIP. Se chiede una cartella, scompatta il file e seleziona la cartella `carousel-builder`.
-3. Dopo l'installazione, invoca la skill con `$carousel-builder` e incolla un URL, un testo o le tue note.
+2. Se il tuo strumento IA permette di caricare una skill, carica direttamente il file ZIP. Se chiede una cartella, scompatta il file e seleziona la cartella `carousel-builder`.
+3. Dopo l'installazione, invoca la skill con `$carousel-builder` o `/carousel-builder` e incolla un URL, un testo o le tue note.
 
 Il pacchetto contiene soltanto la skill, in una cartella già chiamata `carousel-builder` come richiesto da alcuni client. Se preferisci l'ultimo stato del repository invece dell'ultima versione pubblicata, puoi sempre scaricare [l'archivio del ramo `main`](https://github.com/vincos73/carousel-builder/archive/refs/heads/main.zip), che però include anche i file di sviluppo e si estrae come `carousel-builder-main`.
 
-Se usi ChatGPT Desktop e preferisci installarla dalla riga di comando, trovi il comando nella sezione [Installazione locale](#installazione-locale).
+Se preferisci installarla dalla riga di comando, trovi il comando nella sezione [Installazione locale](#installazione-locale).
 
 ## Cosa fa
 
@@ -30,20 +31,20 @@ Se usi ChatGPT Desktop e preferisci installarla dalla riga di comando, trovi il 
 - configura un'identità visiva da sito, brand kit, descrizione manuale o profilo JSON;
 - distingue tra sequenza narrativa e sequenza sezionale (titolo e corpo);
 - permette di approvare profilo e testi prima della produzione grafica;
-- offre un editor locale per correggere, riordinare, commentare e approvare le slide quando l'ambiente lo consente;
+- offre un editor locale per correggere, riordinare, commentare e approvare le slide quando l'ambiente lo consente (con ChatGPT desktop e Claude Code);
 - usa la revisione conversazionale come fallback negli altri ambienti;
-- produce PNG, PDF o un layout dettagliato, secondo gli strumenti disponibili;
+- produce PNG, PDF o un layout dettagliato, secondo gli strumenti messi a disposizione dall'ambiente di lavoro;
 - controlla leggibilità, contrasto, font, ritagli e corrispondenza con i testi approvati.
 
 ## Un'unica skill, due modalità
 
-La skill si adatta all'ambiente di lavoro dell'utente: in ChatGPT Web, Claude o altri client privi di accesso al browser locale, la skill funziona in modalità conversazionale. 
-In un ambiente agentivo compatibile, come ChatGPT Desktop può aprire l'editor locale per dar modo di fare modifiche mirate.
+La skill si adatta all'ambiente di lavoro dell'utente: in ChatGPT Web, Claude o altri client privi di accesso al browser locale, la skill funziona in modalità conversazionale, cioè fa domande all'utente per aiutarlo a configurare il carosello. 
+In un ambiente agentivo compatibile, come ChatGPT Desktop e Claude Code, può aprire l'editor locale per dar modo di fare modifiche mirate.
 
 | Capacità della sessione | Modalità usata |
 | --- | --- |
-| Python 3, apertura di un indirizzo locale nel browser e ricezione degli eventi del server: tutte e tre disponibili | Editor HTML locale con invio automatico di correzioni e approvazioni |
-| Anche se una sola delle tre non è disponibile | Revisione attraverso conversazione testuale |
+| ChatGPT/Codex Desktop e Claude Code con Python 3 e browser use disponibile | Editor HTML locale con invio automatico di correzioni e approvazioni |
+| Chatbot che non hanno disponibilità di questi strumenti | Revisione attraverso conversazione testuale |
 
 
 ## Flusso
@@ -61,7 +62,7 @@ In un ambiente agentivo compatibile, come ChatGPT Desktop può aprire l'editor l
 - esportazione ad alta definizione: **1440×1800 px**;
 - prova obbligatoria a **480×600 px**;
 - adattamento tipografico automatico massimo: **8%**;
-- immagine generata in copertina, con slide interne pulite per impostazione predefinita;
+- immagine generata in copertina (solo su ChatGPT o su chatbot che possono richiamare modelli per la creazione di immagini);
 - numerazione progressiva nell'angolo superiore destro per le sequenze narrative;
 - font e pesi derivati dal profilo approvato, senza imporre un carattere fisso.
 
@@ -96,6 +97,10 @@ python3 -m unittest discover -s tests -t tests -v
 
 - **Narrativa**: per una tesi sviluppata in passaggi dipendenti.
 - **Sezionale**: per raccolte e contenuti composti da sezioni autonome.
+
+## Sistemi editoriali
+
+- **3 template di carosello disponibili**: Editoriale, Geometrico e Istituzionale
 
 ## Evoluzione dalla Agent Edition
 
