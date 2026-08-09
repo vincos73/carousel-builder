@@ -21,21 +21,30 @@ python3 <skill>/scripts/review_server.py <manifest.json> --session-dir <session-
 
 Il server deve restare vincolato a `127.0.0.1`, usare un token casuale e servire soltanto gli asset inclusi e il modello editoriale ricavato dal manifest.
 
-## Interazioni dell'MVP
+## Interazioni dell'editor
 
 L'editor consente di:
 
 - modificare copertina, titoli sezionali, corpi e chiusura;
+- selezionare una locuzione e applicare o rimuovere grassetto, corsivo, sottolineatura ed evidenziatore adattivo, anche con `Cmd/Ctrl+B`, `Cmd/Ctrl+I`, `Cmd/Ctrl+U` e `Cmd/Ctrl+Maiusc+H`;
 - spostare le slide interne in alto o in basso;
 - eliminare una slide interna;
 - commentare una selezione testuale;
 - aggiungere un commento all'intera slide;
 - aggiungere una nota generale;
+- annullare l'ultima modifica locale prima dell'invio;
 - inviare correzioni oppure richiedere esplicitamente l'approvazione.
+- vedere le varianti di logo disponibili, scegliere `Logo automatico` oppure `Logo nascosto` per l'intero carosello e controllare quale variante viene usata sui diversi fondi.
 
 Nella card di copertina e nella conferma di approvazione, chiarire che la copertina finale non è ancora inclusa: dopo l'approvazione dei testi sarà mostrata in una prova visuale separata con immagine generata, immagine fornita o composizione tipografica.
 
-Non consentire di eliminare copertina o chiusura. Non interpretare grassetto, corsivo o altre formattazioni come enfasi semantiche.
+La copertina resta libera dagli elementi strutturali dei sistemi visivi: non mostrare cornice Editoriale, costellazione Geometrica o indice e guida Istituzionali. Conservare titolo, eventuale sottotitolo, numerazione, logo, firma e sito secondo il profilo, senza sovrapporli al visuale.
+
+Prima della conferma mostrare un riepilogo verificabile con numero complessivo di grassetti, corsivi, sottolineature ed evidenziazioni applicati, modalità del logo e disponibilità delle varianti per fondo chiaro e scuro.
+
+Non consentire di eliminare copertina o chiusura. Non inserire Markdown nei campi: i comandi tipografici aggiornano `*_bold`, `*_italic`, `*_underline` e `*_accent`. La rimozione di tutti i grassetti non genera avvisi e non blocca l'approvazione. Consentire l'invio di correzioni con avvisi transitori, ma bloccare la richiesta di approvazione se una card interna con corpo usa più di un trattamento tra corsivo, sottolineatura ed evidenziatore, usa un corsivo non disponibile, contiene una locuzione ambigua oppure sovrappone due trattamenti.
+
+Mostrare un solo messaggio per conflitto. Se la stessa locuzione ha più trattamenti, nominarla una volta e chiedere di sceglierne uno; non aggiungere anche l'avviso generale sul limite della card.
 
 ## Ricezione e applicazione
 
@@ -56,13 +65,15 @@ Lo script deve aggiornare soltanto i campi editoriali consentiti, preservare un 
 
 Lo script riallinea inoltre i riferimenti derivati dai testi:
 
-- rimuove dai campi `*_serif` e `*_accent` le frasi che non compaiono più nel testo aggiornato e le elenca in `emphasis_dropped`;
+- rimuove dai campi `*_bold`, `*_italic`, `*_serif` legacy, `*_underline` e `*_accent` le locuzioni che non compaiono più nel testo aggiornato e le elenca in `emphasis_dropped`;
 - ricostruisce `accessibility.reading_order` secondo la sequenza risultante;
 - elimina da `proof.slide_ids` gli ID delle slide non più presenti e li elenca in `proof_slide_ids_pruned`.
 
 Leggere sempre `warnings`, `stale_alt_text` e `stale_transcript` nell'output. Lo script non riscrive i testi descrittivi: gli `alt_text` delle slide modificate e la trascrizione di accessibilità restano invariati e vanno rigenerati dall'agente prima della produzione. Se il batch invalida una prova già approvata, lo script lo segnala senza modificare `proof.approved`.
 
-L'editor carica separatamente `display` per copertina e titoli e `body` per testi e metadati. Nei profili legacy usa `sans` per entrambi. Espone inoltre `cover_subtitle` come campo opzionale: se presente, l'anteprima lo rende nel secondo carattere corsivo; la stessa regola vale per tutte le enfasi serif.
+L'editor carica separatamente `display` per copertina e titoli e `body` per testi e metadati. Nei profili legacy usa `sans` per entrambi. Risolve `emphasis_italic` secondo [brand-profile.md](brand-profile.md), ne mostra il nome nell'interfaccia e non sintetizza un corsivo mancante. Espone inoltre `cover_subtitle` come campo opzionale e lo rende nello stesso ruolo corsivo.
+
+Per l'anteprima dei logo servire soltanto asset raster autorizzati. Quando il master dichiarato è SVG e nella stessa cartella esiste un PNG omonimo, usare il PNG come derivato di anteprima e indicarlo nel pannello Brand. Non servire SVG non sanitizzati e non sostituire il master usato nella produzione finale.
 
 Esaminare poi `comments` e `overall_note`. I commenti sono richieste da interpretare, non modifiche già effettuate. Applicare le correzioni necessarie al manifest, ripetere i controlli editoriali e aggiornare la revisione se occorre.
 

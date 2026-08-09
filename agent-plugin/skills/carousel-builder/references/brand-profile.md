@@ -5,7 +5,7 @@ Usare per i nuovi profili questo schema:
 ```json
 {
   "profile_type": "carousel-brand",
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "name": "Studio Example",
   "website": "example.com",
   "signature": "Studio Example",
@@ -17,7 +17,8 @@ Usare per i nuovi profili questo schema:
   "fonts": {
     "display": { "family": "Brand Display", "file": "assets/BrandDisplay.ttf", "source": "uploaded" },
     "body": { "family": "Brand Text", "file": "assets/BrandText.ttf", "source": "uploaded" },
-    "serif_italic": { "family": "Brand Serif", "file": "assets/BrandSerifItalic.ttf", "source": "uploaded" }
+    "body_italic": { "family": "Brand Text", "file": "assets/BrandTextItalic.ttf", "source": "uploaded" },
+    "emphasis_italic": { "family": "Brand Text", "file": "assets/BrandTextItalic.ttf", "source": "uploaded" }
   },
   "typography": {
     "cover_px": 112,
@@ -29,6 +30,7 @@ Usare per i nuovi profili questo schema:
     "section_title_weight": 800,
     "body_weight": 620,
     "body_line_height": 1.12,
+    "sentence_gap_em": 0.6,
     "cover_subtitle_line_height": 1.08,
     "body_tracking_em": -0.025,
     "metadata_px": 26
@@ -64,16 +66,18 @@ Usare per i nuovi profili questo schema:
 
 ## Regole
 
-- Usare `profile_type: carousel-brand` e `schema_version: 1.0` per riconoscere il file e consentire future migrazioni.
+- Usare `profile_type: carousel-brand` e `schema_version: 1.1` per i nuovi profili.
 - Consentire `surface_mode`: `light`, `dark` o `alternating`.
 - Usare `logos.on_light` sui fondi chiari e `logos.on_dark` sui fondi scuri.
 - Accettare TTF, OTF, WOFF e WOFF2. Usare `source`: `uploaded`, `bundled`, `system` o `fallback`.
 - Usare `display` per copertina e titoli e `body` per testi, CTA e metadati. Possono indicare la stessa famiglia oppure due famiglie diverse. Verificarne il caricamento effettivo prima della prova visuale.
-- Trattare `serif_italic` come ruolo espressivo opzionale per sottotitolo di copertina ed enfasi semantiche; non usarlo come sostituto del ruolo `body`.
+- Trattare `emphasis_italic` come ruolo espressivo opzionale per sottotitolo di copertina ed enfasi semantiche. Può coincidere con `body_italic`, cioè la vera variante corsiva del carattere principale, oppure indicare un secondo carattere corsivo approvato.
+- Risolvere il ruolo corsivo nell'ordine `emphasis_italic`, `body_italic`, `serif_italic` legacy. Non derivare un corsivo inclinando artificialmente il file regular e non usarlo come sostituto del ruolo `body`.
 - Se l'utente richiede un font esatto e il file non è disponibile, chiedere il file. Se indica soltanto una famiglia o un tono, proporre un sostituto disponibile e attenderne l'approvazione.
 - Inter e Playfair Display inclusi sono fallback del profilo neutro, non fallback automatici di ogni brand. Playfair Display va sempre usato nella variante corsiva.
 - Un font con `source: system` può essere usato dopo verifica locale, dichiarando che non è portabile senza il relativo file.
 - Usare la scala tipografica nominale indicata nel profilo. Scostamenti richiedono approvazione e restano soggetti al limite di riduzione dell'8%.
+- Usare `sentence_gap_em: 0.6` come spazio aggiuntivo fra blocchi-frase nelle card. Non incorporare questa distanza in `body_line_height` e non sostituirla con righe vuote nel testo.
 - Accettare per `visual_direction.mode`: `editorial-geometric`, `photographic`, `illustrated-collage`, `hand-drawn`, `3d` o `custom`.
 - Trattare `visual_direction.description` come istruzione primaria.
 - Usare riferimenti soltanto se forniti o approvati.
@@ -96,6 +100,8 @@ Le copie esatte generate per il singolo carosello appartengono al manifest, non 
 
 Il JSON non incorpora logo o font. Risolvere i percorsi relativi rispetto al JSON o al manifest che incorpora il profilo.
 
+Per i logo accettare una stringa oppure un oggetto con `file` e `preview_file`. Il master può essere SVG; l'anteprima locale deve usare un PNG, JPG o WebP dichiarato. Quando il valore è una stringa SVG e nella stessa cartella esiste un PNG omonimo, l'editor può usare quel PNG come derivato di anteprima, dichiarando la sostituzione nell'interfaccia e senza modificare il master.
+
 Se un asset referenziato manca:
 
 1. non sostituirlo silenziosamente con un asset fittizio;
@@ -110,6 +116,7 @@ Accettare profili senza `schema_version` come legacy:
 - convertire i font espressi come stringhe in oggetti con `source` coerente;
 - mappare `fonts.sans` sia a `display` sia a `body` quando i nuovi ruoli non sono presenti;
 - mappare `fonts.serif` a `serif_italic` quando il nuovo ruolo non è presente;
+- usare `fonts.serif_italic` come alias legacy di `fonts.emphasis_italic` quando i nuovi ruoli corsivi non sono presenti;
 - convertire `palettes` nella nuova `palette`, chiedendo chiarimento solo se esistono valori incompatibili;
 - migrare `visual_system` a `visual_signature.style_system` quando presente;
 - se `outro` contiene titolo o corpo ma non `copy_mode`, chiedere se siano testi fissi oppure specifici della vecchia fonte; non riutilizzarli automaticamente.
@@ -120,7 +127,7 @@ Usarlo soltanto dopo scelta esplicita:
 
 - `name`: `Editorial Carousel`;
 - nessun logo, sito, firma o tagline;
-- Inter nei ruoli `display` e `body`, Playfair Display corsivo come `serif_italic`;
+- Inter nei ruoli `display` e `body`, Playfair Display corsivo come `emphasis_italic`;
 - `surface_mode: alternating` con palette predefinita leggibile;
 - direzione `editorial-geometric`;
 - `visual_signature.style_system: editorial-frame`;

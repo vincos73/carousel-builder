@@ -20,8 +20,10 @@
     <header class="topbar">
       <div>
         <h1>
-          <span class="product-title">Carousel Builder</span>
-          <span class="review-title"><span class="title-separator">-</span> <em>Revisione editoriale</em></span>
+          <span class="product-title">
+            <span class="product-title-primary">Carousel</span>
+            <span class="product-title-secondary">Builder</span>
+          </span>
         </h1>
       </div>
       <div class="topbar-meta">
@@ -64,6 +66,18 @@
           <section class="panel brand-panel">
             <h2 id="brand-name">Profilo del carosello</h2>
             <dl id="brand-details" class="brand-details"></dl>
+            <section class="logo-controls" aria-labelledby="logo-controls-title">
+              <div class="panel-heading">
+                <h3 id="logo-controls-title" class="subpanel-title">Logo nelle anteprime</h3>
+                <span id="logo-preference-status" class="control-status" aria-live="polite"></span>
+              </div>
+              <div id="logo-preference" class="segmented-control" role="radiogroup" aria-label="Preferenza globale del logo">
+                <button type="button" class="segment-button" data-logo-mode="auto" role="radio" aria-checked="true">Logo automatico</button>
+                <button type="button" class="segment-button" data-logo-mode="hidden" role="radio" aria-checked="false">Logo nascosto</button>
+              </div>
+              <div id="logo-variants" class="logo-variants" aria-label="Varianti del logo"></div>
+              <p id="logo-warning" class="inline-warning" hidden role="status" aria-live="polite"></p>
+            </section>
             <div id="palette" class="palette" aria-label="Palette del profilo"></div>
             <label class="field-label" for="brand-note">Commento sul profilo</label>
             <textarea id="brand-note" rows="3" placeholder="Per esempio: usa un fondo più chiaro"></textarea>
@@ -100,6 +114,7 @@
         <span id="change-label">Nessuna modifica</span>
       </div>
       <div class="actions">
+        <button id="undo-button" class="button button-ghost" type="button" disabled>Annulla ultima</button>
         <button id="reset-button" class="button button-ghost" type="button">Ripristina</button>
         <button id="send-button" class="button button-secondary" type="button">Invia correzioni</button>
         <button id="approve-button" class="button button-primary" type="button">Approva profilo e testi</button>
@@ -137,6 +152,7 @@
         <h2 id="mobile-actions-dialog-title">Azioni di revisione</h2>
         <p class="dialog-copy">Scegli come proseguire con la revisione corrente.</p>
         <div class="mobile-actions-list">
+          <button id="mobile-undo-button" class="button button-ghost" type="button" disabled>Annulla ultima modifica</button>
           <button id="mobile-send-button" class="button button-secondary" type="button">Invia correzioni</button>
           <button id="mobile-approve-button" class="button button-primary" type="button">Approva profilo e testi</button>
           <button id="mobile-reset-button" class="button button-ghost" type="button">Ripristina modifiche</button>

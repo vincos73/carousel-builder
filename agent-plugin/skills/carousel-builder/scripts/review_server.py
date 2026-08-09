@@ -31,6 +31,7 @@ TYPOGRAPHY_DEFAULTS = {
     "section_title_weight": 800,
     "body_weight": 620,
     "body_line_height": 1.12,
+    "sentence_gap_em": 0.6,
     "cover_subtitle_line_height": 1.08,
     "body_tracking_em": -0.025,
     "min_auto_scale": 0.92,
@@ -62,6 +63,9 @@ FONT_ROLE_FALLBACKS = {
     "body": ("body", "sans"),
     "serif": ("serif_italic", "serif"),
 }
+EMPHASIS_ROLES = ("bold", "italic", "serif", "accent", "underline")
+EMPHASIS_MAX_PER_ROLE = 2
+LOGO_MODES = {"auto", "hidden"}
 VISUAL_STYLE_SYSTEMS = {
     "editorial-frame": "Editoriale",
     "editorial-halftone": "Geometrico",
@@ -197,6 +201,7 @@ def normalize_typography(manifest: dict) -> dict:
         "section_title_weight": positive_int("section_title_weight"),
         "body_weight": positive_int("body_weight"),
         "body_line_height": finite_number("body_line_height", lower=0.5, upper=3.0),
+        "sentence_gap_em": finite_number("sentence_gap_em", lower=0.2, upper=1.2),
         "cover_subtitle_line_height": finite_number(
             "cover_subtitle_line_height", lower=0.5, upper=3.0
         ),
@@ -226,6 +231,57 @@ def validated_emphasis(value: object, content: str) -> list[str]:
             if len(result) == 2:
                 break
     return result
+
+
+def validate_emphasis_values(value: object, content: str, *, field: str) -> list[str]:
+    """Validate exact, unambiguous selections made by the review editor."""
+    if not isinstance(value, list):
+        raise ValueError(f"{field} deve essere una lista")
+    if len(value) > EMPHASIS_MAX_PER_ROLE:
+        raise ValueError(f"{field} può contenere al massimo {EMPHASIS_MAX_PER_ROLE} enfasi")
+    result: list[str] = []
+    for index, phrase in enumerate(value):
+        if not isinstance(phrase, str) or not phrase:
+            raise ValueError(f"{field}[{index}] deve essere una frase non vuota")
+        if phrase in result:
+            raise ValueError(f"{field} contiene un valore non univoco: {phrase!r}")
+        if content.count(phrase) != 1:
+            raise ValueError(
+                f"{field}[{index}] deve comparire una sola volta nel testo della card"
+            )
+        result.append(phrase)
+    return result
+
+
+def validate_emphasis_overlap(values: dict[str, list[str]], content: str, *, field: str) -> None:
+    """Selections for separate visual roles must never share characters."""
+    special_roles = {"italic", "serif", "accent", "underline"}
+    ranges: list[tuple[int, int, str, str]] = []
+    for role, phrases in values.items():
+        for phrase in phrases:
+            start = content.find(phrase)
+            end = start + len(phrase)
+            for other_start, other_end, other_role, other_phrase in ranges:
+                if start < other_end and other_start < end:
+                    if start == other_start and end == other_end:
+                        if role in special_roles and other_role in special_roles:
+                            raise ValueError(
+                                f"{field}: “{phrase}” ha più trattamenti. Scegline uno: corsivo, sottolineatura oppure evidenziatore"
+                            )
+                        raise ValueError(
+                            f"{field}: “{phrase}” ha più stili. Mantienine uno solo"
+                        )
+                    raise ValueError(
+                        f"{field}: i trattamenti su “{other_phrase}” e “{phrase}” si sovrappongono. Correggi le selezioni oppure mantienine uno solo"
+                    )
+            ranges.append((start, end, role, phrase))
+
+
+def normalized_logo_mode(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    mode = value.strip().casefold()
+    return mode if mode in LOGO_MODES else None
 
 
 def normalized_visual_style_system(value: object) -> str | None:
@@ -354,6 +410,68 @@ def _font_asset(manifest: dict, manifest_path: Path, key: str) -> tuple[dict, Pa
     return public, resolved
 
 
+def _italic_font_asset(manifest: dict, manifest_path: Path) -> tuple[dict, Path | None]:
+    """Resolve the italic role without pretending an upright font is italic.
+
+    The explicit brand role wins.  A body/display italic is accepted only when
+    it has its own local file; a legacy serif italic may use the bundled
+    Playfair italic asset.
+    """
+    brand = manifest.get("brand") if isinstance(manifest.get("brand"), dict) else {}
+    fonts = brand.get("fonts") if isinstance(brand.get("fonts"), dict) else {}
+    root = manifest_path.parent.resolve()
+
+    for role in ("emphasis_italic", "body_italic", "display_italic", "serif_italic"):
+        configured = fonts.get(role)
+        if configured is None:
+            continue
+        family = _short_string(configured.get("family")) if isinstance(configured, dict) else _short_string(configured)
+        source = "fallback"
+        file_name: object = None
+        if isinstance(configured, dict):
+            declared_source = configured.get("source")
+            if isinstance(declared_source, str) and declared_source in FONT_SOURCES:
+                source = declared_source
+            file_name = configured.get("file")
+        resolved: Path | None = None
+        if isinstance(file_name, str) and file_name:
+            candidate = Path(file_name)
+            if not candidate.is_absolute() and candidate.suffix.lower() in FONT_MIME_TYPES:
+                candidate = (root / candidate).resolve()
+                try:
+                    candidate.relative_to(root)
+                except ValueError:
+                    candidate = None
+                if candidate is not None and candidate.is_file():
+                    resolved = candidate
+                    if source == "fallback":
+                        source = "uploaded"
+        if (
+            resolved is None
+            and role == "serif_italic"
+            and family.casefold() == BUNDLED_FONT_ASSETS["serif"][0].casefold()
+            and BUNDLED_FONT_ASSETS["serif"][1].is_file()
+        ):
+            resolved = BUNDLED_FONT_ASSETS["serif"][1]
+            source = "bundled"
+        if resolved is not None:
+            return {
+                "family": family,
+                "source": source,
+                "available": True,
+                "endpoint": "/api/font/italic",
+                "role": role,
+            }, resolved
+
+    return {
+        "family": "",
+        "source": "fallback",
+        "available": False,
+        "endpoint": "",
+        "role": "",
+    }, None
+
+
 def font_assets(manifest: dict, manifest_path: Path) -> tuple[dict, dict[str, Path]]:
     """Build public font metadata and the private, manifest-resolved allowlist."""
     public: dict = {}
@@ -363,6 +481,10 @@ def font_assets(manifest: dict, manifest_path: Path) -> tuple[dict, dict[str, Pa
         public[key] = entry
         if resolved is not None:
             allowed[key] = resolved
+    italic, resolved_italic = _italic_font_asset(manifest, manifest_path)
+    public["italic"] = italic
+    if resolved_italic is not None:
+        allowed["italic"] = resolved_italic
     # ``sans`` remains a read-only compatibility alias for older editor clients.
     public["sans"] = {**public["body"], "endpoint": "/api/font/sans" if public["body"]["available"] else ""}
     if "body" in allowed:
@@ -393,7 +515,12 @@ def cover_image_asset(manifest: dict, manifest_path: Path) -> tuple[dict, Path |
 
 
 def logo_assets(manifest: dict, manifest_path: Path) -> tuple[dict, dict[str, Path]]:
-    """Resolve light/dark logo variants inside the manifest directory."""
+    """Resolve safe raster previews for local light/dark logo masters.
+
+    SVG is deliberately never served: an SVG master may contain active content.
+    A manifest may nevertheless declare one when an adjacent PNG preview with
+    the same basename is available.
+    """
     brand = manifest.get("brand") if isinstance(manifest.get("brand"), dict) else {}
     logos = brand.get("logos") if isinstance(brand.get("logos"), dict) else {}
     root = manifest_path.parent.resolve()
@@ -402,9 +529,13 @@ def logo_assets(manifest: dict, manifest_path: Path) -> tuple[dict, dict[str, Pa
     for key, endpoint in (("on_light", "/api/logo/on-light"), ("on_dark", "/api/logo/on-dark")):
         value = logos.get(key)
         resolved: Path | None = None
+        source = ""
+        master_format = ""
         if isinstance(value, str) and value:
             candidate = Path(value)
-            if not candidate.is_absolute() and candidate.suffix.lower() in IMAGE_MIME_TYPES:
+            suffix = candidate.suffix.lower()
+            master_format = suffix.removeprefix(".")
+            if not candidate.is_absolute() and suffix in IMAGE_MIME_TYPES:
                 candidate = (root / candidate).resolve()
                 try:
                     candidate.relative_to(root)
@@ -412,9 +543,23 @@ def logo_assets(manifest: dict, manifest_path: Path) -> tuple[dict, dict[str, Pa
                     candidate = None
                 if candidate is not None and candidate.is_file():
                     resolved = candidate
+                    source = "manifest"
+            elif not candidate.is_absolute() and suffix == ".svg":
+                svg_candidate = (root / candidate).resolve()
+                try:
+                    svg_candidate.relative_to(root)
+                except ValueError:
+                    svg_candidate = None
+                if svg_candidate is not None:
+                    png_candidate = svg_candidate.with_suffix(".png")
+                    if png_candidate.is_file():
+                        resolved = png_candidate
+                        source = "sibling_png"
         public[key] = {
             "available": resolved is not None,
             "endpoint": endpoint if resolved is not None else "",
+            "source": source,
+            "master_format": master_format,
         }
         if resolved is not None:
             allowed[key] = resolved
@@ -436,15 +581,26 @@ def brand_summary(manifest: dict, manifest_path: Path | None = None) -> dict:
             return _short_string(value.get("family"))
         return _short_string(value)
 
+    italic_role = next(
+        (key for key in ("emphasis_italic", "body_italic", "display_italic", "serif_italic") if key in fonts),
+        "",
+    )
     asset_metadata = {
         "display": {"family": font_name("display", "sans"), "source": "fallback", "available": False, "endpoint": ""},
         "body": {"family": font_name("body", "sans"), "source": "fallback", "available": False, "endpoint": ""},
         "serif": {"family": font_name("serif_italic", "serif"), "source": "fallback", "available": False, "endpoint": ""},
+        "italic": {
+            "family": font_name(italic_role) if italic_role else "",
+            "source": "fallback",
+            "available": False,
+            "endpoint": "",
+            "role": italic_role,
+        },
     }
     asset_metadata["sans"] = dict(asset_metadata["body"])
     logo_metadata = {
-        "on_light": {"available": False, "endpoint": ""},
-        "on_dark": {"available": False, "endpoint": ""},
+        "on_light": {"available": False, "endpoint": "", "source": "", "master_format": ""},
+        "on_dark": {"available": False, "endpoint": "", "source": "", "master_format": ""},
     }
     if manifest_path is not None:
         asset_metadata, _ = font_assets(manifest, manifest_path)
@@ -458,6 +614,7 @@ def brand_summary(manifest: dict, manifest_path: Path | None = None) -> dict:
         "body": font_name("body", "sans"),
         "sans": font_name("body", "sans"),
         "serif": font_name("serif_italic", "serif"),
+        "emphasis_italic": asset_metadata["italic"],
         "font_assets": asset_metadata,
         "logos": logo_metadata,
         "palette": {
@@ -508,15 +665,33 @@ def manifest_model(manifest_path: Path) -> dict:
             "title_serif": validated_emphasis(
                 manifest.get("cover_title_serif"), text(manifest.get("cover_title"), field="cover_title")
             ),
+            "title_italic": validated_emphasis(
+                manifest.get("cover_title_italic"), text(manifest.get("cover_title"), field="cover_title")
+            ),
             "title_bold": validated_emphasis(
                 manifest.get("cover_title_bold"), text(manifest.get("cover_title"), field="cover_title")
             ),
             "title_accent": validated_emphasis(
                 manifest.get("cover_title_accent"), text(manifest.get("cover_title"), field="cover_title")
             ),
-            "summary_bold": [],
-            "summary_serif": [],
-            "summary_accent": [],
+            "title_underline": validated_emphasis(
+                manifest.get("cover_title_underline"), text(manifest.get("cover_title"), field="cover_title")
+            ),
+            "summary_bold": validated_emphasis(
+                manifest.get("cover_subtitle_bold"), text(manifest.get("cover_subtitle"), field="cover_subtitle")
+            ),
+            "summary_italic": validated_emphasis(
+                manifest.get("cover_subtitle_italic"), text(manifest.get("cover_subtitle"), field="cover_subtitle")
+            ),
+            "summary_serif": validated_emphasis(
+                manifest.get("cover_subtitle_serif"), text(manifest.get("cover_subtitle"), field="cover_subtitle")
+            ),
+            "summary_accent": validated_emphasis(
+                manifest.get("cover_subtitle_accent"), text(manifest.get("cover_subtitle"), field="cover_subtitle")
+            ),
+            "summary_underline": validated_emphasis(
+                manifest.get("cover_subtitle_underline"), text(manifest.get("cover_subtitle"), field="cover_subtitle")
+            ),
             "deletable": False,
         }
     ]
@@ -533,11 +708,17 @@ def manifest_model(manifest_path: Path) -> dict:
                 "title_serif": validated_emphasis(
                     item.get("title_serif"), text(item.get("title"), field=f"{item['id']}.title")
                 ),
+                "title_italic": validated_emphasis(
+                    item.get("title_italic"), text(item.get("title"), field=f"{item['id']}.title")
+                ),
                 "title_bold": validated_emphasis(
                     item.get("title_bold"), text(item.get("title"), field=f"{item['id']}.title")
                 ),
                 "title_accent": validated_emphasis(
                     item.get("title_accent"), text(item.get("title"), field=f"{item['id']}.title")
+                ),
+                "title_underline": validated_emphasis(
+                    item.get("title_underline"), text(item.get("title"), field=f"{item['id']}.title")
                 ),
                 "summary_bold": validated_emphasis(
                     item.get("summary_bold"), text(item.get("summary"), field=f"{item['id']}.summary")
@@ -545,8 +726,14 @@ def manifest_model(manifest_path: Path) -> dict:
                 "summary_serif": validated_emphasis(
                     item.get("summary_serif"), text(item.get("summary"), field=f"{item['id']}.summary")
                 ),
+                "summary_italic": validated_emphasis(
+                    item.get("summary_italic"), text(item.get("summary"), field=f"{item['id']}.summary")
+                ),
                 "summary_accent": validated_emphasis(
                     item.get("summary_accent"), text(item.get("summary"), field=f"{item['id']}.summary")
+                ),
+                "summary_underline": validated_emphasis(
+                    item.get("summary_underline"), text(item.get("summary"), field=f"{item['id']}.summary")
                 ),
                 "deletable": True,
             }
@@ -566,11 +753,17 @@ def manifest_model(manifest_path: Path) -> dict:
                 "title_serif": validated_emphasis(
                     outro.get("title_serif"), text(outro.get("title"), field="outro.title")
                 ),
+                "title_italic": validated_emphasis(
+                    outro.get("title_italic"), text(outro.get("title"), field="outro.title")
+                ),
                 "title_bold": validated_emphasis(
                     outro.get("title_bold"), text(outro.get("title"), field="outro.title")
                 ),
                 "title_accent": validated_emphasis(
                     outro.get("title_accent"), text(outro.get("title"), field="outro.title")
+                ),
+                "title_underline": validated_emphasis(
+                    outro.get("title_underline"), text(outro.get("title"), field="outro.title")
                 ),
                 "summary_bold": validated_emphasis(
                     outro.get("summary_bold"), text(outro.get("body"), field="outro.body")
@@ -578,8 +771,14 @@ def manifest_model(manifest_path: Path) -> dict:
                 "summary_serif": validated_emphasis(
                     outro.get("summary_serif"), text(outro.get("body"), field="outro.body")
                 ),
+                "summary_italic": validated_emphasis(
+                    outro.get("summary_italic"), text(outro.get("body"), field="outro.body")
+                ),
                 "summary_accent": validated_emphasis(
                     outro.get("summary_accent"), text(outro.get("body"), field="outro.body")
+                ),
+                "summary_underline": validated_emphasis(
+                    outro.get("summary_underline"), text(outro.get("body"), field="outro.body")
                 ),
                 "deletable": False,
             }
@@ -607,6 +806,7 @@ def manifest_model(manifest_path: Path) -> dict:
         "brand": brand,
         "cover_visual": cover_visual,
         "cover_mode": cover_visual["mode"],
+        "logo_mode": normalized_logo_mode(manifest.get("logo_mode")) or "auto",
         "visual_proofs": visual_proofs(
             manifest,
             brand=brand,
@@ -636,6 +836,10 @@ def validate_feedback(payload: object, model: dict) -> dict:
     seen: set[str] = set()
     normalized_slides: list[dict] = []
     item_count = 0
+    warnings: list[str] = []
+    italic_font_available = bool(
+        model.get("brand", {}).get("font_assets", {}).get("italic", {}).get("available")
+    )
     for position, slide in enumerate(slides):
         if not isinstance(slide, dict):
             raise ValueError("Ogni slide deve essere un oggetto")
@@ -648,14 +852,52 @@ def validate_feedback(payload: object, model: dict) -> dict:
             raise ValueError(f"Tipo non valido per {slide_id}")
         if source["kind"] == "item":
             item_count += 1
+        title = text(slide.get("title"), field=f"slides[{position}].title")
+        summary = sentence_line_breaks(
+            text(slide.get("summary"), field=f"slides[{position}].summary")
+        )
+        emphasis: dict[str, list[str]] = {}
+        for field, content in (("title", title), ("summary", summary)):
+            values = {
+                role: validate_emphasis_values(
+                    slide.get(f"{field}_{role}", source.get(f"{field}_{role}", [])),
+                    content,
+                    field=f"slides[{position}].{field}_{role}",
+                )
+                for role in EMPHASIS_ROLES
+            }
+            validate_emphasis_overlap(values, content, field=f"slides[{position}].{field}")
+            if (values["italic"] or values["serif"]) and not italic_font_available:
+                message = f"{slide_id}.{field} usa il corsivo senza un font corsivo reale disponibile"
+                if action == "approve":
+                    raise ValueError(message)
+                warnings.append(message)
+            emphasis.update({f"{field}_{role}": phrases for role, phrases in values.items()})
+
+        if source["kind"] == "item" and summary:
+            italic_count = len(emphasis["summary_italic"]) + len(emphasis["summary_serif"])
+            secondary_count = (
+                italic_count
+                + len(emphasis["summary_accent"])
+                + len(emphasis["summary_underline"])
+            )
+            if action == "approve":
+                if secondary_count > 1:
+                    raise ValueError(
+                        f"{slide_id} può usare un solo trattamento tra corsivo, sottolineatura ed evidenziatore prima dell'approvazione"
+                    )
+            else:
+                if secondary_count > 1:
+                    warnings.append(
+                        f"{slide_id}: in approvazione sarà ammesso un solo trattamento tra corsivo, sottolineatura ed evidenziatore"
+                    )
         normalized_slides.append(
             {
                 "id": slide_id,
                 "kind": source["kind"],
-                "title": text(slide.get("title"), field=f"slides[{position}].title"),
-                "summary": sentence_line_breaks(
-                    text(slide.get("summary"), field=f"slides[{position}].summary")
-                ),
+                "title": title,
+                "summary": summary,
+                **emphasis,
             }
         )
 
@@ -708,6 +950,10 @@ def validate_feedback(payload: object, model: dict) -> dict:
                 raise ValueError("visual_style_system non valido")
             break
 
+    logo_mode = normalized_logo_mode(payload.get("logo_mode", model.get("logo_mode", "auto")))
+    if logo_mode is None:
+        raise ValueError("logo_mode deve essere auto oppure hidden")
+
     result = {
         "feedback_id": f"feedback-{secrets.token_hex(8)}",
         "submitted_at": now_iso(),
@@ -718,6 +964,8 @@ def validate_feedback(payload: object, model: dict) -> dict:
         "overall_note": text(
             payload.get("overall_note"), field="overall_note", limit=10_000
         ),
+        "logo_mode": logo_mode,
+        "warnings": warnings,
     }
     if visual_style_system is not None:
         result["visual_style_system"] = visual_style_system
@@ -846,6 +1094,10 @@ def main() -> int:
                     BUNDLED_FONT_ASSETS["serif"][1],
                     "font/ttf",
                 ),
+                "/assets/fonts/Orbitron-Variable.ttf": (
+                    assets_dir.parent / "fonts" / "Orbitron-Variable.ttf",
+                    "font/ttf",
+                ),
             }
             static_asset = static_assets.get(parsed.path)
             if static_asset is not None:
@@ -865,6 +1117,7 @@ def main() -> int:
                 "/api/font/body": "body",
                 "/api/font/sans": "sans",
                 "/api/font/serif": "serif",
+                "/api/font/italic": "italic",
             }.get(parsed.path)
             if font_key is not None:
                 if not self.authorized(query):
