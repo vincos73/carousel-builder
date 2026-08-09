@@ -94,7 +94,7 @@ Chiedere fondi chiari, scuri o alternati; colori principali e accento; abbinamen
 
 #### C: tipografia
 
-Chiedere il carattere per titoli (`display`) e quello per testi (`body`); possono coincidere. Chiedere separatamente un eventuale carattere espressivo corsivo. Verificare la disponibilità dei file quando la riproduzione esatta è essenziale. Distinguere una richiesta esatta, come `Lato`, da una richiesta di famiglia, come `tipo Lato`.
+Chiedere il carattere per titoli (`display`) e quello per testi (`body`); possono coincidere. Chiedere separatamente quale corsivo usare per le enfasi: la vera variante italic del carattere principale oppure un secondo carattere corsivo. Verificare la disponibilità del relativo file e non sintetizzare il corsivo. Distinguere una richiesta esatta, come `Lato`, da una richiesta di famiglia, come `tipo Lato`.
 
 - Per un font esatto, usare il file fornito oppure una copia già disponibile e verificata. Se manca, chiedere il file.
 - Per una richiesta di famiglia, proporre un sostituto disponibile nominandolo prima della prova visuale.
@@ -127,7 +127,7 @@ Consentire descrizioni libere come blueprint, disegno a mano, 3D, minimal line a
 Mostrare quattro blocchi:
 
 - `Identità`: nome, logo sui fondi chiari e scuri, firma, sito e tagline;
-- `Sistema visivo`: palette, modalità dei fondi, font display e body richiesti, font effettivamente disponibili, secondo carattere opzionale ed eventuali fallback da approvare;
+- `Sistema visivo`: palette, modalità dei fondi, font display e body richiesti, ruolo corsivo effettivamente risolto, font disponibili ed eventuali fallback da approvare;
 - `Direzione`: sistema visivo, stile, riferimenti, composizione ed elementi da evitare;
 - `Chiusura e stato`: presenza della chiusura, obiettivo, modalità della CTA e valori proposti o incerti.
 

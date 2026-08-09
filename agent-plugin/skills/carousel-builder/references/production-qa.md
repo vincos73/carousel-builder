@@ -10,6 +10,16 @@ Prima dell'onboarding determinare, senza installare nulla, se la sessione può:
 - esportare PNG e PDF;
 - rendere disponibili gli artefatti finali.
 
+Risolvere le capacità nell'ordine seguente, prima di generare la copertina o promettere gli output:
+
+1. interrogare l'ambiente per runtime, librerie e percorsi bundled o già configurati;
+2. provare per primo il runtime dichiarato dall'ambiente e soltanto dopo gli interpreti generici presenti nel sistema;
+3. verificare gli import necessari e, quando utile, un rendering minimo in memoria o in una cartella temporanea;
+4. considerare il fallimento di un singolo candidato un dettaglio interno se un altro runtime disponibile supera la verifica;
+5. informare l'utente soltanto quando il limite cambia davvero gli artefatti producibili, richiede un'autorizzazione oppure nessun runtime disponibile consente il rendering.
+
+Non annunciare un fallback `layout` mentre resta da verificare un runtime configurato dalla sessione. Se il secondo tentativo riesce senza cambiare il risultato promesso, proseguire senza interrompere il flusso con un avviso tecnico.
+
 Classificare la capacità disponibile:
 
 - `renderer`: un renderer verificato può produrre prova, PNG e PDF in modo ripetibile;
@@ -33,8 +43,9 @@ Qualunque modalità diversa da `layout` deve:
 1. usare l'ultimo manifest approvato senza riscrivere silenziosamente i testi;
 2. dichiarare prima della produzione quali artefatti può creare;
 3. rispettare dimensioni, profilo, ordine delle slide, font e campi di enfasi;
-4. produrre prima la prova visuale e soltanto dopo il batch completo, usando strutture HTML/CSS/SVG deterministiche e trattando l'immagine come asset opzionale di copertina;
-5. restituire errori e output verificabili, senza sostituire asset o font in modo invisibile.
+4. dichiarare in `production.supported_style_systems` i sistemi visivi realmente implementati e includere quello selezionato nel manifest;
+5. produrre prima la prova visuale e soltanto dopo il batch completo, usando strutture HTML/CSS/SVG deterministiche e trattando l'immagine come asset opzionale di copertina;
+6. restituire errori e output verificabili, senza sostituire asset, font o firma strutturale in modo invisibile.
 
 Se un renderer o adapter non soddisfa questi requisiti, usare `layout` come fallback dichiarato.
 
@@ -51,6 +62,7 @@ Usare sul canvas 1080×1350 questa scala nominale:
 - testo principale e statement: 64 px, peso 620;
 - etichette e metadati: 26 px;
 - interlinea del corpo: 1.12;
+- spazio aggiuntivo dopo ogni frase: 0.6 em;
 - tracking del corpo: -0.025 em.
 
 Adattare le dimensioni alle metriche reali del font mantenendo gerarchia e rapporti. Consentire una riduzione automatica massima dell'8%, quindi non scendere sotto il 92% della dimensione scelta. Se il contenuto continua a non entrare, restituire un errore di fit e richiedere una revisione del copy. Non ridurre ancora il carattere.
@@ -65,7 +77,7 @@ Dopo l'approvazione dei testi creare una prova con:
 2. card con maggiore densità testuale;
 3. chiusura, quando prevista.
 
-Controllare obbligatoriamente la prova anche a 480×600, ottenuta dal master senza reflow, per simulare una visualizzazione desktop ridotta. Verificare inoltre la prova a risoluzione leggibile. Controllare gerarchia, densità, crop, famiglia e peso effettivi del font, ritorni a capo, contrasto e coerenza con il profilo. Mostrare la prova all'utente e attendere l'approvazione prima di produrre le altre card. Ripetere la prova per ogni variante con rapporto diverso dal master.
+Controllare obbligatoriamente la prova anche a 480×600, ottenuta dal master senza reflow, per simulare una visualizzazione desktop ridotta. Verificare inoltre la prova a risoluzione leggibile. Controllare gerarchia, densità, crop, famiglia e peso effettivi del font, ritorni a capo, contrasto e coerenza con il profilo. Verificare che la copertina sia priva di cornice, costellazione e indice modulare; sulla card densa e sulla chiusura verificare invece la firma strutturale obbligatoria descritta in [visual-systems.md](visual-systems.md). Impostare `proof.style_system_verified: true` soltanto dopo entrambi i controlli. Mostrare la prova all'utente e attendere l'approvazione prima di produrre le altre card. Ripetere la prova per ogni variante con rapporto diverso dal master.
 
 ## Controllo testuale
 
@@ -78,8 +90,10 @@ Confrontare ogni card con l'ultima anteprima approvata e verificare:
 - chiusura specifica della fonte corrente;
 - corrispondenza esatta di titolo e dell'eventuale sottotitolo approvato in copertina;
 - font display effettivo su copertina e titoli e font body effettivo su testi, CTA e metadati;
-- gerarchia subordinata del sottotitolo e carattere `serif_italic` approvato; se è Playfair Display, verificarne sempre la variante corsiva;
+- gerarchia subordinata del sottotitolo e ruolo `emphasis_italic` effettivamente risolto; se è Playfair Display, verificarne sempre la variante corsiva;
 - ritorno a capo dopo ogni punto di frase, senza spezzare decimali, versioni o abbreviazioni;
+- presenza di un blocco distinto per ogni frase e di uno spazio `sentence_gap_em` dopo ogni frase tranne l'ultima, aggiuntivo rispetto a `body_line_height`;
+- `summary_bold` proposta di default nelle card interne con corpo, ma facoltativa e liberamente rimovibile; al massimo un trattamento complessivo tra `summary_italic`, `summary_underline` e `summary_accent`;
 - in modalità `narrative`, titoli interni vuoti e assenza di etichette tecniche;
 
 ## Controllo visivo
@@ -98,16 +112,20 @@ Verificare:
 
 - testi tagliati, sovrapposti o troppo vicini ai bordi;
 - contrasto tra testo e sfondo;
-- logo corretto per il fondo oppure firma testuale prevista;
+- logo corretto per il fondo quando `logo_mode` è `auto`, oppure sua assenza intenzionale quando è `hidden`; verificare separatamente le varianti per fondo chiaro e scuro e segnalare quelle mancanti;
 - numerazione progressiva delle pagine nell'angolo superiore destro di ogni card, inclusi copertina e chiusura, dentro la safe area e senza interferire con testo, logo o visuale;
 - coerenza dell'alternanza cromatica;
-- enfasi serif e accenti cromatici approvati;
+- grassetti, corsivi, sottolineature ed evidenziatori approvati, senza corsivi sintetici o sovrapposizioni;
+- evidenziatore adattato separatamente a ogni fondo: accento originale quando leggibile, variante derivata scura con testo chiaro oppure chiara con testo scuro, sempre con contrasto del testo almeno 4.5:1;
 - sistema visivo risolto, varianti controllate e struttura HTML/CSS/SVG coerenti;
+- firma strutturale obbligatoria presente sulle card interne e sulla chiusura e geometricamente coerente con la prova approvata: cornice completa per `editorial-frame`, costellazione di cinque corpi per `editorial-halftone`, indice modulare e guida orizzontale per `corporate-modular`;
+- copertina priva degli elementi strutturali dei tre sistemi, così immagine, titolo, numerazione e firma non entrano in conflitto;
 - eventuale immagine di copertina che non interferisca con la lettura;
 - dimensioni e rapporto d'aspetto richiesti;
 - sfondo esteso esattamente da `x=0`, `y=0` fino a 1080×1350, senza strisce o margini introdotti dal renderer;
 - assenza di SVG, filtri o elementi nascosti che occupino spazio nel flusso del documento;
 - in modalità `narrative`, slide interne pulite e prive di visuali decorativi non approvati;
+- distanza fra frasi visibilmente maggiore dell'interlinea fra righe avvolte della stessa frase, anche nella prova a 480 px;
 - coerenza della tecnica visiva tra tutte le card che contengono immagini.
 
 ## Accessibilità
@@ -117,7 +135,7 @@ Verificare inoltre:
 - contrasto di almeno 4.5:1 per testo normale e 3:1 per testo grande;
 - leggibilità del testo alla dimensione effettiva del feed, non soltanto alla risoluzione originale;
 - leggibilità di titoli, corpo, etichette e metadati nella prova a 480 px di larghezza;
-- assenza di significati affidati esclusivamente a colore, serif, corsivo o posizione;
+- assenza di significati affidati esclusivamente a colore, peso, corsivo, famiglia o posizione;
 - ordine di lettura coerente tra copertina, contenuti e chiusura;
 - presenza nel manifest di alt text per ogni slide oppure di una trascrizione completa e ordinata del carosello;
 - descrizione del visuale quando aggiunge informazione non presente nei testi.
@@ -137,6 +155,7 @@ Prima della consegna verificare:
 - caricamento dei font previsti e assenza di fallback inattesi;
 - corrispondenza tra font richiesto, font approvato e famiglia effettivamente renderizzata;
 - corrispondenza tra testi approvati, manifest e artefatti;
+- in modalità `renderer` o `adapter`, presenza di `production.supported_style_systems` con il sistema selezionato e di `proof.style_system_verified: true`;
 - assenza di file incompleti o duplicati presentati come finali.
 
 Se un controllo fallisce, conservare gli output validi, mantenere lo stato precedente e offrire ripetizione o fallback. Non avanzare a `consegnato`.

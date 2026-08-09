@@ -3,10 +3,10 @@
 ## Regole comuni
 
 - Formulare un `cover_title` breve, fedele e comprensibile autonomamente.
-- Aggiungere `cover_subtitle` soltanto se l'utente lo fornisce o lo approva esplicitamente. È sempre subordinato al titolo e renderizzato in Playfair Display corsivo.
-- Nei testi, inserire almeno un ritorno a capo dopo ogni punto che conclude una frase. Non spezzare decimali e versioni (`1.2`) né abbreviazioni comuni (`es.`, `ecc.`).
+- Aggiungere `cover_subtitle` soltanto se l'utente lo fornisce o lo approva esplicitamente. È sempre subordinato al titolo e renderizzato nel ruolo `emphasis_italic` risolto dal profilo.
+- Nei testi, inserire un ritorno a capo dopo ogni punto che conclude una frase, senza righe vuote. Non spezzare decimali e versioni (`1.2`) né abbreviazioni comuni (`es.`, `ecc.`).
 - Mantenere la promessa della copertina lungo tutta la sequenza.
-- Inserire un ritorno a capo dopo ogni frase compiuta.
+- Nel rendering trasformare ciascuna frase in un blocco distinto e applicare `sentence_gap_em: 0.6` fra blocchi consecutivi, oltre alla normale interlinea interna.
 - Conservare cautele, attribuzioni e condizioni che cambiano il significato.
 - Non aggiungere ordinamenti, nessi causali o conclusioni che la fonte non formula.
 
@@ -74,7 +74,7 @@ Se la distinzione è incerta e cambia sensibilmente il risultato, proporre la mo
 - Mostrare sempre l'intera sequenza prima della produzione.
 - Numerare la copertina come slide 1.
 - Dichiarare profilo, fonte, formato e numero totale di slide.
-- Mostrare tra asterischi soltanto le eventuali frasi proposte nel secondo carattere approvato.
+- Nel fallback conversazionale mostrare tra asterischi soltanto le eventuali frasi proposte nel ruolo corsivo approvato; nell'editor locale usare i comandi di enfasi senza inserire asterischi nel testo.
 - Non mostrare campi tecnici o prompt visuali.
 - Mostrare e contare la chiusura per `newsletter` e `article`, salvo esclusione.
 - Nel percorso rapido, anteporre l'anteprima del profilo e offrire `Approva profilo e testi`, `Modifica il profilo` e `Modifica i testi`.
@@ -89,6 +89,6 @@ Se la distinzione è incerta e cambia sensibilmente il risultato, proporre la mo
 - Evitare che il corpo ripeta letteralmente il titolo senza aggiungere informazione.
 - Segnalare card senza titolo oltre 320 caratteri e riassunti con titolo oltre 180 caratteri.
 - Trattare le soglie in caratteri come avvisi preliminari; la decisione finale dipende dal fit reale sul master 1080×1350 e dalla prova a 480 px.
-- Verificare asterischi bilanciati e massimo due segmenti per card.
+- Nel fallback conversazionale verificare gli asterischi bilanciati. Nel manifest e nell'editor proporre un grassetto nelle card interne con corpo, senza renderlo obbligatorio; verificare al massimo un trattamento tra corsivo, sottolineatura ed evidenziatore e nessuna sovrapposizione.
 - Trattare nomi propri composti come unità indivisibili.
 - Verificare che nessuna riga contenga due frasi compiute.

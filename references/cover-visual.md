@@ -16,7 +16,7 @@ Per newsletter eterogenee, rappresentare il tema dominante o il filo comune; evi
 
 ## Prompt
 
-Preparare il prompt solo in modalità `generative`. In modalità `provided`, verificare che l'asset supporti metafora, crop e contrasto. In modalità `typographic`, tradurre metafora e composizione in gerarchia testuale, superfici e segni del sistema scelto, senza inventare un'immagine.
+Preparare il prompt solo in modalità `generative`. In modalità `provided`, verificare che l'asset supporti metafora, crop e contrasto. In modalità `typographic`, tradurre metafora e composizione in gerarchia testuale, superfici e contrasto, senza inventare un'immagine e senza aggiungere cornice, costellazione o indice modulare.
 
 Costruire il prompt con:
 

@@ -148,6 +148,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
             "/assets/fonts/Inter-Variable.ttf",
             "/assets/fonts/PlayfairDisplay-Variable.ttf",
             "/assets/fonts/PlayfairDisplay-Italic-Variable.ttf",
+            "/assets/fonts/Orbitron-Variable.ttf",
         ):
             status, payload = request(f"{self.origin}{path}")
             self.assertEqual(status, 200, path)
@@ -183,6 +184,23 @@ class ReviewServerHTTPTest(unittest.TestCase):
             self.assertEqual(response.headers["Content-Type"], "font/woff2")
             self.assertEqual(response.read(), b"test font bytes")
 
+    def test_serves_the_resolved_italic_font_role(self) -> None:
+        italic_path = self.workdir / "body-italic.ttf"
+        italic_path.write_bytes(b"italic font bytes")
+        manifest = base_manifest()
+        manifest["brand"] = {
+            "fonts": {
+                "body_italic": {
+                    "family": "Review Body Italic",
+                    "file": "body-italic.ttf",
+                }
+            }
+        }
+        write_json(self.manifest_path, manifest)
+        with urllib.request.urlopen(self.api("/api/font/italic"), timeout=10) as response:
+            self.assertEqual(response.headers["Content-Type"], "font/ttf")
+            self.assertEqual(response.read(), b"italic font bytes")
+
     def test_rejects_a_wrong_token_for_a_font(self) -> None:
         self.assertEqual(request(f"{self.origin}/api/font/sans?token=sbagliato")[0], 403)
 
@@ -202,6 +220,19 @@ class ReviewServerHTTPTest(unittest.TestCase):
             self.assertEqual(response.read(), b"test logo bytes")
         self.assertEqual(request(self.api("/api/logo/on-dark"))[0], 404)
         self.assertEqual(request(f"{self.origin}/api/logo/on-light?token=sbagliato")[0], 403)
+
+    def test_serves_a_png_preview_but_never_the_declared_svg_master(self) -> None:
+        (self.workdir / "logo.svg").write_text("<svg><script>alert(1)</script></svg>", encoding="utf-8")
+        manifest = base_manifest()
+        manifest["brand"] = {"logos": {"on_light": "logo.svg"}}
+        write_json(self.manifest_path, manifest)
+        status, session = json_request(self.api("/api/session"))
+        self.assertEqual(status, 200)
+        self.assertEqual(session["brand"]["logos"]["on_light"]["source"], "sibling_png")
+        self.assertEqual(session["brand"]["logos"]["on_light"]["master_format"], "svg")
+        with urllib.request.urlopen(self.api("/api/logo/on-light"), timeout=10) as response:
+            self.assertEqual(response.headers["Content-Type"], "image/png")
+            self.assertEqual(response.read(), b"test logo bytes")
 
     def test_reports_a_missing_font_without_falling_back_to_a_path(self) -> None:
         self.assertEqual(request(self.api("/api/font/serif"))[0], 404)
@@ -232,6 +263,30 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.assertEqual(feedback["feedback_id"], payload["feedback_id"])
         state = json.loads((self.session_dir / "session-state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["last_feedback_id"], payload["feedback_id"])
+
+    def test_accepts_logo_mode_and_emphasis_in_a_batch(self) -> None:
+        payload = json.loads(self.batch().decode("utf-8"))
+        payload["logo_mode"] = "hidden"
+        payload["slides"][1].update(
+            {
+                "summary_bold": ["Prima"],
+                "summary_italic": ["frase."],
+                "summary_serif": [],
+                "summary_accent": [],
+                "summary_underline": [],
+            }
+        )
+        status, response = json_request(
+            self.api("/api/submit"),
+            method="POST",
+            body=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, response)
+        feedback = json.loads((self.session_dir / "feedback.json").read_text(encoding="utf-8"))
+        self.assertEqual(feedback["logo_mode"], "hidden")
+        self.assertEqual(feedback["slides"][1]["summary_italic"], ["frase."])
+        self.assertEqual(feedback["slides"][1]["summary_underline"], [])
 
     def test_reports_the_revision_in_the_status(self) -> None:
         status, payload = json_request(self.api("/api/status"))

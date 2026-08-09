@@ -39,6 +39,10 @@
     brandName: document.querySelector("#brand-name"),
     brandDetails: document.querySelector("#brand-details"),
     palette: document.querySelector("#palette"),
+    logoPreference: document.querySelector("#logo-preference"),
+    logoPreferenceStatus: document.querySelector("#logo-preference-status"),
+    logoVariants: document.querySelector("#logo-variants"),
+    logoWarning: document.querySelector("#logo-warning"),
     brandNote: document.querySelector("#brand-note"),
     slideCount: document.querySelector("#slide-count"),
     slides: document.querySelector("#slides"),
@@ -47,6 +51,7 @@
     commentCount: document.querySelector("#comment-count"),
     dirtyDot: document.querySelector("#dirty-dot"),
     changeLabel: document.querySelector("#change-label"),
+    undoButton: document.querySelector("#undo-button"),
     resetButton: document.querySelector("#reset-button"),
     sendButton: document.querySelector("#send-button"),
     approveButton: document.querySelector("#approve-button"),
@@ -62,6 +67,7 @@
     fontStatus: document.querySelector("#font-status"),
     mobileActionsButton: document.querySelector("#mobile-actions-button"),
     mobileActionsDialog: document.querySelector("#mobile-actions-dialog"),
+    mobileUndoButton: document.querySelector("#mobile-undo-button"),
     mobileResetButton: document.querySelector("#mobile-reset-button"),
     mobileSendButton: document.querySelector("#mobile-send-button"),
     mobileApproveButton: document.querySelector("#mobile-approve-button"),
@@ -91,6 +97,8 @@
   let viewedSlideIds = new Set();
   let pointerDrag = null;
   let selectedVisualSystem = "editorial-frame";
+  let logoMode = "auto";
+  let undoState = null;
   const fitWarnings = new Map();
 
   const visualSystems = [
@@ -226,13 +234,85 @@
     return (lighter + 0.05) / (darker + 0.05);
   }
 
+  function mixHexColor(source, target, amount) {
+    const channels = (hex) => [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16));
+    const mixed = channels(source).map((value, index) => Math.round(value + (channels(target)[index] - value) * amount));
+    return `#${mixed.map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  function adaptiveHighlightBackground(colors) {
+    const candidates = [{ color: colors.accent, distance: 0 }];
+    for (const target of ["#000000", "#ffffff"]) {
+      for (let step = 1; step <= 20; step += 1) {
+        candidates.push({ color: mixHexColor(colors.accent, target, step / 20), distance: step / 20 });
+      }
+    }
+    for (const color of [colors.backgroundDark, colors.backgroundLight]) {
+      candidates.push({ color, distance: 0.35 });
+    }
+    const eligible = candidates.filter(({ color }) => (
+      contrastRatio(color, colors.text) >= 4.5
+      && contrastRatio(color, colors.bg) >= 1.08
+    ));
+    eligible.sort((first, second) => (
+      first.distance - second.distance
+      || contrastRatio(second.color, colors.bg) - contrastRatio(first.color, colors.bg)
+    ));
+    if (eligible.length) return eligible[0].color;
+    return relativeLuminance(colors.text) > 0.5 ? "#000000" : "#ffffff";
+  }
+
   function selectorValue(value) {
     if (window.CSS?.escape) return window.CSS.escape(value);
     return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
   }
 
   function normalizedSlides(slides) {
-    return slides.map(({ id, kind, title, summary }) => ({ id, kind, title, summary }));
+    const knownEmphasisFields = [
+      "title_bold", "title_italic", "title_serif", "title_accent", "title_underline",
+      "summary_bold", "summary_italic", "summary_serif", "summary_accent", "summary_underline",
+      "cover_title_bold", "cover_title_italic", "cover_title_serif", "cover_title_accent", "cover_title_underline",
+    ];
+    return slides.map((slide) => {
+      const normalized = {
+        id: slide.id,
+        kind: slide.kind,
+        title: slide.title,
+        summary: slide.summary,
+      };
+      const emphasisFields = new Set([
+        ...knownEmphasisFields,
+        ...Object.keys(slide).filter((key) => /_(bold|italic|serif|accent|underline)$/.test(key)),
+      ]);
+      for (const key of emphasisFields) normalized[key] = Array.isArray(slide[key]) ? slide[key].filter((value) => typeof value === "string" && value) : [];
+      return normalized;
+    });
+  }
+
+  function initialLogoMode() {
+    return model?.logo_mode === "hidden" ? "hidden" : "auto";
+  }
+
+  function logoRoleForSlide(slide, index) {
+    const colors = previewColors(index, slide.kind);
+    return colors.surface === "dark" ? "on_dark" : "on_light";
+  }
+
+  function logoMetadata(role) {
+    const logos = previewBrand().logos && typeof previewBrand().logos === "object" ? previewBrand().logos : {};
+    const value = logos[role];
+    if (value && typeof value === "object") return value;
+    if (typeof value === "string" && value.trim()) return { declared: true, available: false, endpoint: "", master_format: value.split(".").pop() || "" };
+    return { declared: false, available: false, endpoint: "" };
+  }
+
+  function logoAvailabilityWarning() {
+    if (logoMode === "hidden") return "";
+    const required = new Set(draftSlides.map((slide, index) => logoRoleForSlide(slide, index)));
+    const missing = [...required].filter((role) => logoMetadata(role).available !== true);
+    if (!missing.length) return "";
+    const labels = { on_light: "fondo chiaro", on_dark: "fondo scuro" };
+    return `Logo automatico: manca una variante raster sicura per ${missing.map((role) => labels[role]).join(" e ")}. Le anteprime useranno la firma testuale dove possibile.`;
   }
 
   function displayLabel(slide, index) {
@@ -295,8 +375,12 @@
   }
 
   function resolveVisualSystem() {
+    return supportedVisualSystem(safeStorageGet(visualSystemStorageKey())) || modelVisualSystem();
+  }
+
+  function modelVisualSystem() {
     const modelValue = model?.visual_proofs?.selected_style_system || model?.visual_style_system || model?.visual_system || model?.visual_style || model?.brand?.visual_system;
-    return supportedVisualSystem(safeStorageGet(visualSystemStorageKey())) || supportedVisualSystem(modelValue) || "editorial-frame";
+    return supportedVisualSystem(modelValue) || "editorial-frame";
   }
 
   function renderVisualSystemPicker() {
@@ -322,6 +406,7 @@
   function setVisualSystem(systemId) {
     const next = supportedVisualSystem(systemId);
     if (!next || next === selectedVisualSystem) return;
+    recordUndo("sistema visivo");
     selectedVisualSystem = next;
     safeStorageSet(visualSystemStorageKey(), next);
     renderVisualSystemPicker();
@@ -329,6 +414,9 @@
     for (const preview of elements.slides?.querySelectorAll(".slide-preview") || []) {
       for (const system of visualSystems) preview.classList.toggle(`visual-system-${system.id}`, system.id === next);
     }
+    renderBrand();
+    configurePreviewTypography();
+    persistDraft();
     window.requestAnimationFrame(measurePreviews);
   }
 
@@ -353,8 +441,10 @@
     if (baselineSlides.map((slide) => slide.id).join("|") !== draftSlides.map((slide) => slide.id).join("|")) count += 1;
     for (const slide of draftSlides) {
       const before = beforeById.get(slide.id);
-      if (!before || before.title !== slide.title || before.summary !== slide.summary) count += 1;
+      if (!before || before.title !== slide.title || before.summary !== slide.summary || JSON.stringify(normalizedSlides([before])) !== JSON.stringify(normalizedSlides([slide]))) count += 1;
     }
+    if (logoMode !== initialLogoMode()) count += 1;
+    if (selectedVisualSystem !== modelVisualSystem()) count += 1;
     count += selectionComments.length;
     count += Object.values(slideNotes).filter((value) => typeof value === "string" && value.trim()).length;
     if (brandNote.trim()) count += 1;
@@ -364,6 +454,7 @@
 
   function syncMobileActions() {
     const pairs = [
+      [elements.mobileUndoButton, elements.undoButton],
       [elements.mobileResetButton, elements.resetButton],
       [elements.mobileSendButton, elements.sendButton],
       [elements.mobileApproveButton, elements.approveButton],
@@ -383,6 +474,7 @@
       elements.dirtyDot?.classList.add("active");
       if (elements.changeLabel) elements.changeLabel.textContent = `L'agente ha pubblicato la revisione ${staleRevision}. Ricarica per continuare.`;
       if (elements.resetButton) elements.resetButton.disabled = false;
+      if (elements.undoButton) elements.undoButton.disabled = true;
       if (elements.sendButton) elements.sendButton.disabled = true;
       if (elements.approveButton) elements.approveButton.disabled = true;
       syncMobileActions();
@@ -397,6 +489,7 @@
           : `${count} ${count === 1 ? "intervento" : "interventi"} · bozza salvata nel browser`;
     }
     if (elements.resetButton) elements.resetButton.disabled = count === 0 || waiting;
+    if (elements.undoButton) elements.undoButton.disabled = !undoState || waiting;
     if (elements.sendButton) elements.sendButton.disabled = count === 0 || waiting;
     if (elements.approveButton) {
       const approvalComplete = ["prova_visuale_approvata", "rendering", "qa", "consegnato"].includes(model.workflow_state);
@@ -437,6 +530,7 @@
       slide_notes: slideNotes,
       brand_note: brandNote,
       overall_note: overallNote,
+      logo_mode: logoMode,
       awaiting_feedback_id: awaitingFeedbackId,
       saved_at: new Date().toISOString(),
     }));
@@ -450,6 +544,8 @@
     slideNotes = {};
     brandNote = "";
     overallNote = "";
+    logoMode = initialLogoMode();
+    undoState = null;
     awaitingFeedbackId = null;
     try {
       const saved = JSON.parse(safeStorageGet(storageKey) || "null");
@@ -463,6 +559,8 @@
       slideNotes = saved.slide_notes && typeof saved.slide_notes === "object" ? saved.slide_notes : {};
       brandNote = typeof saved.brand_note === "string" ? saved.brand_note : "";
       overallNote = typeof saved.overall_note === "string" ? saved.overall_note : "";
+      const savedLogoMode = saved.logo_mode || saved.logo_preference;
+      logoMode = savedLogoMode === "hidden" ? "hidden" : initialLogoMode();
       awaitingFeedbackId = typeof saved.awaiting_feedback_id === "string" && saved.awaiting_feedback_id ? saved.awaiting_feedback_id : null;
     } catch (_error) {
       safeStorageRemove(storageKey);
@@ -472,6 +570,20 @@
   function fontStack(family, fallback) {
     const safeFamily = String(family || "").replace(/["\\]/g, "").trim();
     return safeFamily ? `"${safeFamily}", ${fallback}` : fallback;
+  }
+
+  function italicFontAsset() {
+    const assets = previewBrand().font_assets && typeof previewBrand().font_assets === "object" ? previewBrand().font_assets : {};
+    const candidates = [assets.italic, assets.emphasis_italic, assets.body_italic, assets.display_italic, assets.serif_italic];
+    return candidates.find((asset) => asset?.available === true && asset.family && asset.endpoint) || null;
+  }
+
+  function italicFontLabel() {
+    return italicFontAsset()?.family || "corsivo reale disponibile";
+  }
+
+  function hasRealItalicFont() {
+    return Boolean(italicFontAsset());
   }
 
   function setFontStatus(message, error = false) {
@@ -486,11 +598,12 @@
     const assets = brand.font_assets && typeof brand.font_assets === "object" ? brand.font_assets : {};
     const sansFallback = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
     const fallbacks = { display: sansFallback, body: sansFallback, serif: "Georgia, 'Times New Roman', serif" };
-    const labels = { display: "Titoli", body: "Testi", serif: "Secondario corsivo" };
+    const labels = { display: "Titoli", body: "Testi", serif: "Secondario corsivo", italic: "Corsivo" };
     const loaded = {};
     const outcomes = [];
-    for (const kind of ["display", "body", "serif"]) {
-      const asset = assets[kind] || (kind === "body" ? assets.sans : null);
+    const resolvedItalic = italicFontAsset();
+    for (const kind of ["display", "body", "serif", "italic"]) {
+      const asset = kind === "italic" ? resolvedItalic : assets[kind] || (kind === "body" ? assets.sans : null);
       if (!asset || asset.available !== true || !asset.family || !asset.endpoint || typeof FontFace === "undefined") {
         outcomes.push(`${labels[kind]}: fallback dichiarato`);
         continue;
@@ -499,7 +612,7 @@
         const face = new FontFace(
           asset.family,
           `url("${api(asset.endpoint).replace(/"/g, "%22")}")`,
-          kind === "serif" ? { style: "italic" } : {},
+          kind === "serif" || kind === "italic" ? { style: "italic" } : {},
         );
         await face.load();
         document.fonts.add(face);
@@ -513,6 +626,7 @@
     document.documentElement.style.setProperty("--preview-body", fontStack(loaded.body, fallbacks.body));
     document.documentElement.style.setProperty("--preview-sans", fontStack(loaded.body, fallbacks.body));
     document.documentElement.style.setProperty("--preview-serif", fontStack(loaded.serif, fallbacks.serif));
+    document.documentElement.style.setProperty("--preview-italic", fontStack(loaded.italic, loaded.serif || fallbacks.serif));
     setFontStatus(
       `Tipografia anteprima — ${outcomes.join(" · ")} · Non verifica immagini o crop finali.`,
       outcomes.some((outcome) => outcome.includes("non riuscito")),
@@ -560,6 +674,7 @@
       summary.style.fontSize = `${previewFontBase(slide, "summary", preview) * scale}px`;
       summary.style.fontWeight = String(numberValue(slide.kind === "cover" ? type.cover_subtitle_weight : type.body_weight, slide.kind === "cover" ? 500 : 620));
       summary.style.lineHeight = String(numberValue(slide.kind === "cover" ? type.cover_subtitle_line_height : type.body_line_height, slide.kind === "cover" ? 1.08 : 1.12));
+      summary.style.setProperty("--sentence-gap", `${numberValue(type.sentence_gap_em, 0.6)}em`);
       summary.style.letterSpacing = slide.kind === "cover"
         ? "0em"
         : `${numberValue(Math.abs(type.body_tracking_em), 0.025) * -1}em`;
@@ -571,13 +686,119 @@
   function emphasisFor(slide, field) {
     const legacyPrefix = slide.kind === "cover" && field === "title" ? "cover_title" : field;
     const bold = slide[`${field}_bold`] ?? slide[`${legacyPrefix}_bold`];
-    const serif = slide[`${field}_serif`] ?? slide[`${legacyPrefix}_serif`];
+    const canonicalItalic = slide[`${field}_italic`] ?? slide[`${legacyPrefix}_italic`];
+    const legacyItalic = slide[`${field}_serif`] ?? slide[`${legacyPrefix}_serif`];
+    const italic = Array.isArray(canonicalItalic) && canonicalItalic.length ? canonicalItalic : legacyItalic;
     const accent = slide[`${field}_accent`] ?? slide[`${legacyPrefix}_accent`];
+    const underline = slide[`${field}_underline`] ?? slide[`${legacyPrefix}_underline`];
     return {
       bold: Array.isArray(bold) ? bold : [],
-      serif: Array.isArray(serif) ? serif : [],
+      italic: Array.isArray(italic) ? italic : [],
       accent: Array.isArray(accent) ? accent : [],
+      underline: Array.isArray(underline) ? underline : [],
     };
+  }
+
+  function emphasisKey(slide, field, kind) {
+    return `${field}_${kind}`;
+  }
+
+  function legacyEmphasisKey(slide, field) {
+    return `${field}_serif`;
+  }
+
+  function emphasisSegments(slide, field, kind) {
+    const key = emphasisKey(slide, field, kind);
+    const legacy = kind === "italic" ? legacyEmphasisKey(slide, field) : "";
+    const canonical = slide[key];
+    const value = kind === "italic" && Array.isArray(canonical) && canonical.length === 0
+      ? slide[legacy]
+      : canonical ?? (legacy ? slide[legacy] : undefined);
+    return Array.isArray(value) ? value : [];
+  }
+
+  function setEmphasisSegments(slide, field, kind, segments) {
+    const key = emphasisKey(slide, field, kind);
+    slide[key] = [...segments];
+    if (kind === "italic") {
+      const legacy = legacyEmphasisKey(slide, field);
+      if (legacy !== key) slide[legacy] = [];
+    }
+  }
+
+  function textRanges(text, segment) {
+    if (typeof text !== "string" || typeof segment !== "string" || !segment) return [];
+    const ranges = [];
+    let start = text.indexOf(segment);
+    while (start !== -1) {
+      ranges.push({ start, end: start + segment.length });
+      start = text.indexOf(segment, start + 1);
+    }
+    return ranges;
+  }
+
+  function emphasisWarningsFor(slide, field) {
+    const text = typeof slide[field] === "string" ? slide[field] : "";
+    const warnings = [];
+    const ranges = [];
+    const specialKinds = new Set(["italic", "accent", "underline"]);
+    let hasSpecialOverlap = false;
+    for (const kind of ["bold", "italic", "accent", "underline"]) {
+      for (const segment of emphasisSegments(slide, field, kind)) {
+        const occurrences = textRanges(text, segment);
+        if (!occurrences.length) {
+          warnings.push({ kind: "ambiguous", message: `La selezione “${segment}” non è più presente nel testo.` });
+          continue;
+        }
+        if (occurrences.length > 1) warnings.push({ kind: "ambiguous", message: `La selezione “${segment}” compare ${occurrences.length} volte: rendila univoca.` });
+        for (const range of occurrences) ranges.push({ ...range, kind, segment });
+      }
+    }
+    ranges.sort((a, b) => a.start - b.start || a.end - b.end);
+    for (let index = 1; index < ranges.length; index += 1) {
+      const previous = ranges[index - 1];
+      const current = ranges[index];
+      if (current.start < previous.end) {
+        const bothSpecial = specialKinds.has(previous.kind) && specialKinds.has(current.kind);
+        if (bothSpecial) hasSpecialOverlap = true;
+        if (previous.start === current.start && previous.end === current.end) {
+          warnings.push({
+            kind: bothSpecial ? "secondary" : "overlap",
+            message: bothSpecial
+              ? `“${current.segment}” ha più trattamenti. Scegline uno: corsivo, sottolineatura oppure evidenziatore.`
+              : `“${current.segment}” ha più stili. Mantienine uno solo.`,
+          });
+        } else {
+          warnings.push({
+            kind: "overlap",
+            message: `I trattamenti su “${previous.segment}” e “${current.segment}” si sovrappongono. Correggi le selezioni oppure mantienine uno solo.`,
+          });
+        }
+      }
+    }
+    const fieldItalicCount = emphasisSegments(slide, field, "italic").length;
+    if (fieldItalicCount && !hasRealItalicFont()) warnings.push({
+      kind: "italic",
+      message: "Il corsivo selezionato non ha un font reale disponibile.",
+    });
+    if (slide.kind === "item" && field === "summary" && text.trim()) {
+      const italicCount = fieldItalicCount;
+      const secondaryCount = italicCount
+        + emphasisSegments(slide, field, "accent").length
+        + emphasisSegments(slide, field, "underline").length;
+      if (secondaryCount > 1 && !hasSpecialOverlap) warnings.push({
+        kind: "secondary",
+        message: "La card interna può usare un solo trattamento tra corsivo, sottolineatura ed evidenziatore.",
+      });
+    }
+    return warnings;
+  }
+
+  function allEmphasisWarnings() {
+    return draftSlides.flatMap((slide) => ["title", "summary"].flatMap((field) => {
+      if (typeof slide[field] !== "string") return [];
+      return emphasisWarningsFor(slide, field).map((warning) => ({ slide, field, ...warning }));
+    }));
   }
 
   function renderEmphasizedText(node, text, emphasis) {
@@ -593,7 +814,7 @@
         }
       }
     }
-    const priority = { serif: 0, bold: 1, accent: 2 };
+    const priority = { italic: 0, bold: 1, underline: 2, accent: 3 };
     matches.sort((a, b) => a.start - b.start || b.end - a.end || priority[a.kind] - priority[b.kind]);
     const accepted = [];
     let cursor = 0;
@@ -633,13 +854,15 @@
   }
 
   function renderBrand() {
-    const brand = model.brand || {};
+    const brand = previewBrand();
     elements.brandName.textContent = brand.name || "Profilo senza nome";
     elements.brandDetails.replaceChildren();
-    const logoCount = Object.values(brand.logos || {}).filter((logo) => logo?.available).length;
-    const logoLabel = logoCount === 1 ? "1 variante disponibile" : logoCount > 1 ? `${logoCount} varianti disponibili` : "Non previsto";
-    const rows = [["Sito", brand.website || "Non mostrato"], ["Firma", brand.signature || "Non mostrata"], ["Logo", logoLabel], ["Titoli", brand.display || brand.sans || "Non dichiarato"], ["Testi", brand.body || brand.sans || "Non dichiarato"], ["Secondario corsivo", brand.serif || "Non previsto"]];
+    const logoCount = ["on_light", "on_dark"].filter((role) => logoMetadata(role).available === true).length;
+    const italicFamily = italicFontAsset()?.family || brand.serif || "Non previsto";
+    const logoLabel = logoCount === 2 ? "2 varianti disponibili" : logoCount === 1 ? "1 variante disponibile" : "Varianti da verificare";
+    const rows = [["Sito", brand.website || "Non mostrato"], ["Firma", brand.signature || "Non mostrata"], ["Logo", logoLabel], ["Titoli", brand.display || brand.sans || "Non dichiarato"], ["Testi", brand.body || brand.sans || "Non dichiarato"], ["Corsivo", italicFamily]];
     for (const [label, value] of rows) elements.brandDetails.append(create("dt", "", label), create("dd", "", value));
+    renderLogoControls();
     elements.palette.replaceChildren();
     const palette = brand.palette || {};
     const colors = [["Sfondo chiaro", palette.background_light], ["Sfondo scuro", palette.background_dark], ["Testo", palette.text_on_light], ["Accento", palette.accent]];
@@ -655,6 +878,61 @@
     elements.brandNote.value = brandNote;
   }
 
+  function renderLogoControls() {
+    if (!elements.logoPreference) return;
+    for (const button of elements.logoPreference.querySelectorAll("[data-logo-mode]")) {
+      const selected = button.dataset.logoMode === logoMode;
+      button.setAttribute("aria-checked", String(selected));
+      button.classList.toggle("is-selected", selected);
+    }
+    const automatic = logoMode === "auto";
+    if (elements.logoPreferenceStatus) elements.logoPreferenceStatus.textContent = automatic ? "attivo" : "disattivato";
+    if (elements.logoVariants) {
+      elements.logoVariants.replaceChildren();
+      const labels = { on_light: "Su fondo chiaro", on_dark: "Su fondo scuro" };
+      for (const role of ["on_light", "on_dark"]) {
+        const metadata = logoMetadata(role);
+        const card = create("article", `logo-variant logo-variant-${role}`);
+        const heading = create("div", "logo-variant-heading");
+        heading.append(create("strong", "", labels[role]), create("span", metadata.available ? "asset-status is-ready" : "asset-status", metadata.available ? "Disponibile" : metadata.declared ? "Dichiarata, preview assente" : "Manca"));
+        const stage = create("div", "logo-variant-stage");
+        if (metadata.available && metadata.endpoint) {
+          const image = document.createElement("img");
+          image.src = api(metadata.endpoint);
+          image.alt = `${labels[role]}: logo ${previewBrand().name || "brand"}`;
+          stage.append(image);
+        } else {
+          stage.append(create("span", "logo-variant-placeholder", metadata.declared ? "Anteprima non disponibile" : "Nessuna variante"));
+        }
+        card.append(heading, stage);
+        elements.logoVariants.append(card);
+      }
+    }
+    const warning = logoAvailabilityWarning();
+    if (elements.logoWarning) {
+      elements.logoWarning.hidden = !warning;
+      elements.logoWarning.textContent = warning;
+    }
+  }
+
+  function setLogoMode(value) {
+    if (value !== "auto" && value !== "hidden") return;
+    if (logoMode === value) return;
+    recordUndo("modalità logo");
+    logoMode = value;
+    renderLogoControls();
+    renderSlides();
+    persistDraft();
+  }
+
+  function renderFieldWarning(node, slide, field) {
+    const warnings = emphasisWarningsFor(slide, field);
+    node.hidden = !warnings.length;
+    node.textContent = warnings.map((warning) => warning.message).join(" ");
+    node.setAttribute("role", "status");
+    node.setAttribute("aria-live", "polite");
+  }
+
   function makeField(slide, field, label, multiline, onPreview) {
     const group = create("div", "field-group");
     const heading = create("div", "field-heading");
@@ -666,10 +944,27 @@
     const count = create("span", "char-count");
     count.dataset.countFor = `${slide.id}:${field}`;
     updateCharacterCount(count, slide, field);
-    const commentButton = create("button", "comment-selection", "Commenta selezione");
+    const selectionToolbar = create("div", "selection-toolbar");
+    selectionToolbar.setAttribute("aria-label", "Strumenti di enfasi della selezione");
+    const makeFormatButton = (kind, text, label) => {
+      const button = create("button", `format-button format-${kind}`, text);
+      button.type = "button";
+      button.title = label;
+      button.setAttribute("aria-label", label);
+      button.setAttribute("aria-pressed", "false");
+      button.disabled = true;
+      return button;
+    };
+    const boldButton = makeFormatButton("bold", "B", "Applica o rimuovi il grassetto dalla selezione");
+    const italicButton = makeFormatButton("italic", "I", `Applica o rimuovi il corsivo ${italicFontLabel()} dalla selezione`);
+    const underlineButton = makeFormatButton("underline", "U", "Applica o rimuovi la sottolineatura dalla selezione");
+    const accentButton = makeFormatButton("accent", "A", "Applica o rimuovi l’evidenziatore adattivo del brand dalla selezione");
+    const commentButton = create("button", "comment-selection", "Commenta");
     commentButton.type = "button";
+    commentButton.setAttribute("aria-label", "Commenta la selezione");
     commentButton.disabled = true;
-    tools.append(count, commentButton);
+    selectionToolbar.append(boldButton, italicButton, underlineButton, accentButton, commentButton);
+    tools.append(count, selectionToolbar);
     heading.append(tools);
     group.append(heading);
     const input = document.createElement(multiline ? "textarea" : "input");
@@ -679,23 +974,83 @@
     input.dataset.field = field;
     if (multiline) input.rows = field === "summary" ? 6 : 3;
     else input.type = "text";
-    const refreshSelection = () => {
+    const warning = create("p", "inline-warning emphasis-warning");
+    warning.hidden = true;
+    const refreshEmphasisUi = () => {
       const start = input.selectionStart ?? 0;
       const end = input.selectionEnd ?? 0;
-      commentButton.disabled = end <= start || Boolean(awaitingFeedbackId);
+      const quote = end > start ? input.value.slice(start, end) : "";
+      const hasSelection = Boolean(quote) && !awaitingFeedbackId;
+      const setButton = (button, kind, available = true) => {
+        const active = hasSelection && emphasisSegments(slide, field, kind).includes(quote);
+        button.disabled = !hasSelection || !available;
+        button.setAttribute("aria-pressed", String(active));
+      };
+      setButton(boldButton, "bold");
+      setButton(italicButton, "italic", hasRealItalicFont());
+      setButton(underlineButton, "underline");
+      setButton(accentButton, "accent");
+      italicButton.title = `Applica o rimuovi il corsivo ${italicFontLabel()} dalla selezione${hasRealItalicFont() ? "" : " (non disponibile)"}`;
+      italicButton.setAttribute("aria-label", italicButton.title);
+      commentButton.disabled = !hasSelection;
+    };
+    const refreshSelection = () => {
+      refreshEmphasisUi();
     };
     input.addEventListener("select", refreshSelection);
     input.addEventListener("keyup", refreshSelection);
     input.addEventListener("mouseup", refreshSelection);
+    input.addEventListener("focus", () => { input._undoCaptured = false; });
+    input.addEventListener("blur", () => { input._undoCaptured = false; });
     input.addEventListener("input", () => {
+      if (!input._undoCaptured) {
+        recordUndo("modifica testo");
+        input._undoCaptured = true;
+      }
       slide[field] = input.value;
       refreshCharacterCounts();
       onPreview(input.value);
       refreshSelection();
+      renderFieldWarning(warning, slide, field);
       persistDraft();
       window.requestAnimationFrame(measurePreviews);
     });
+    const toggleSelectionEmphasis = (kind) => {
+      const start = input.selectionStart ?? 0;
+      const end = input.selectionEnd ?? 0;
+      if (end <= start || (kind === "italic" && !hasRealItalicFont())) return;
+      recordUndo("enfasi tipografica");
+      const quote = input.value.slice(start, end);
+      const segments = emphasisSegments(slide, field, kind).slice();
+      const existingIndex = segments.indexOf(quote);
+      if (existingIndex >= 0) segments.splice(existingIndex, 1);
+      else segments.push(quote);
+      setEmphasisSegments(slide, field, kind, segments);
+      onPreview(slide[field]);
+      refreshEmphasisUi();
+      renderFieldWarning(warning, slide, field);
+      persistDraft();
+      input.focus();
+      input.setSelectionRange(start, end);
+      window.requestAnimationFrame(measurePreviews);
+    };
+    boldButton.addEventListener("mousedown", (event) => event.preventDefault());
+    italicButton.addEventListener("mousedown", (event) => event.preventDefault());
+    underlineButton.addEventListener("mousedown", (event) => event.preventDefault());
+    accentButton.addEventListener("mousedown", (event) => event.preventDefault());
     commentButton.addEventListener("mousedown", (event) => event.preventDefault());
+    boldButton.addEventListener("click", () => toggleSelectionEmphasis("bold"));
+    italicButton.addEventListener("click", () => toggleSelectionEmphasis("italic"));
+    underlineButton.addEventListener("click", () => toggleSelectionEmphasis("underline"));
+    accentButton.addEventListener("click", () => toggleSelectionEmphasis("accent"));
+    input.addEventListener("keydown", (event) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if (!["b", "i", "u", "h"].includes(key) || (key === "h" && !event.shiftKey)) return;
+      event.preventDefault();
+      const shortcutKinds = { b: "bold", i: "italic", u: "underline", h: "accent" };
+      toggleSelectionEmphasis(shortcutKinds[key]);
+    });
     commentButton.addEventListener("click", () => {
       const start = input.selectionStart ?? 0;
       const end = input.selectionEnd ?? 0;
@@ -707,6 +1062,9 @@
       elements.commentFeedback.focus();
     });
     group.append(input);
+    group.append(warning);
+    refreshEmphasisUi();
+    renderFieldWarning(warning, slide, field);
     return group;
   }
 
@@ -745,6 +1103,7 @@
     const itemPosition = positions.findIndex(({ slide }) => slide.id === slideId);
     const targetPosition = itemPosition + direction;
     if (itemPosition < 0 || targetPosition < 0 || targetPosition >= positions.length) return;
+    recordUndo("ordine delle slide");
     const from = positions[itemPosition].index;
     const to = positions[targetPosition].index;
     [draftSlides[from], draftSlides[to]] = [draftSlides[to], draftSlides[from]];
@@ -787,6 +1146,7 @@
     const dragged = draftSlides.find((slide) => slide.id === draggedId);
     const target = draftSlides.find((slide) => slide.id === targetId);
     if (dragged?.kind !== "item" || target?.kind !== "item") return;
+    recordUndo("ordine delle slide");
     const reordered = draftSlides.filter((slide) => slide.id !== draggedId);
     const targetIndex = reordered.findIndex((slide) => slide.id === targetId);
     reordered.splice(targetIndex + (placeAfter ? 1 : 0), 0, dragged);
@@ -810,6 +1170,7 @@
     const annotations = annotationCountForSlide(slideId);
     const suffix = annotations === 1 ? "Sarà rimossa 1 annotazione." : `Saranno rimosse ${annotations} annotazioni.`;
     if (!window.confirm(`Eliminare ${displayLabel(draftSlides[index], index)} dalla sequenza? ${suffix}`)) return;
+    recordUndo("eliminazione slide");
     draftSlides = draftSlides.filter((slide) => slide.id !== slideId);
     selectionComments = selectionComments.filter((comment) => comment.slide_id !== slideId);
     delete slideNotes[slideId];
@@ -832,9 +1193,10 @@
     const accentText = accentUsesLightText ? textOnDark : textOnLight;
     const accentLogoRole = accentUsesLightText ? "on_dark" : "on_light";
     const shared = { accent, backgroundDark, backgroundLight, textOnDark, textOnLight, accentText, accentLogoRole, surface: useDark ? "dark" : "light" };
-    return useDark
+    const resolved = useDark
       ? { bg: backgroundDark, text: textOnDark, ...shared }
       : { bg: backgroundLight, text: textOnLight, ...shared };
+    return { ...resolved, highlight: adaptiveHighlightBackground(resolved) };
   }
 
   function schemaWarning(slide) {
@@ -847,11 +1209,12 @@
   function updateFitNotice(slideId, notice) {
     const node = elements.slides?.querySelector(`[data-fit-warning-for="${selectorValue(slideId)}"]`);
     if (!node) return;
-    const parts = [notice.schema, notice.overflow].filter(Boolean);
+    const parts = [notice.schema, notice.overflow, ...(notice.emphasis || []).map((warning) => warning.message)].filter(Boolean);
     node.hidden = parts.length === 0;
     node.textContent = parts.join(" ");
-    node.setAttribute("role", notice.overflow ? "alert" : "status");
-    node.setAttribute("aria-live", notice.overflow ? "assertive" : "polite");
+    const assertive = Boolean(notice.overflow);
+    node.setAttribute("role", assertive ? "alert" : "status");
+    node.setAttribute("aria-live", assertive ? "assertive" : "polite");
   }
 
   function applyViewedClasses() {
@@ -902,9 +1265,9 @@
       const seen = viewedSlideIds.has(slide.id);
       const commented = commentsForSlide(slide.id);
       button.classList.toggle("is-viewed", seen);
-      button.classList.toggle("has-warning", Boolean(warning?.schema || warning?.overflow));
+      button.classList.toggle("has-warning", Boolean(warning?.schema || warning?.overflow || warning?.emphasis?.length));
       button.classList.toggle("has-comments", commented);
-      button.setAttribute("aria-label", `${label}${seen ? ", vista" : ", non ancora vista"}${commented ? ", con commenti" : ""}${warning?.schema || warning?.overflow ? ", richiede revisione della densità" : ""}`);
+      button.setAttribute("aria-label", `${label}${seen ? ", vista" : ", non ancora vista"}${commented ? ", con commenti" : ""}${warning?.schema || warning?.overflow || warning?.emphasis?.length ? ", richiede revisione" : ""}`);
       button.addEventListener("click", () => jumpToSlide(slide.id));
       list.append(button);
     });
@@ -958,10 +1321,11 @@
       const notice = {
         schema: schemaWarning(slide),
         overflow: overflow ? "Testo ancora troppo denso nell’anteprima dopo la riduzione massima dell’8%. Riduci o dividi il testo." : "",
+        emphasis: ["title", "summary"].flatMap((field) => emphasisWarningsFor(slide, field)),
       };
       fitWarnings.set(slide.id, notice);
       updateFitNotice(slide.id, notice);
-      preview.toggleAttribute("data-fit-warning", Boolean(notice.schema || notice.overflow));
+      preview.toggleAttribute("data-fit-warning", Boolean(notice.schema || notice.overflow || notice.emphasis.length));
     }
     renderSequenceNav();
   }
@@ -983,6 +1347,8 @@
       preview.style.setProperty("--preview-bg", colors.bg);
       preview.style.setProperty("--preview-text", colors.text);
       preview.style.setProperty("--preview-accent", colors.accent);
+      preview.style.setProperty("--preview-highlight", colors.highlight);
+      preview.style.setProperty("--preview-highlight-text", colors.text);
       preview.style.setProperty("--preview-dark-bg", colors.backgroundDark);
       preview.style.setProperty("--preview-light-bg", colors.backgroundLight);
       preview.style.setProperty("--preview-dark-text", colors.textOnDark);
@@ -1015,17 +1381,19 @@
       pageNumber.setAttribute("aria-label", `Pagina ${index + 1} di ${draftSlides.length}`);
       const constellation = create("div", "preview-constellation");
       constellation.setAttribute("aria-hidden", "true");
-      for (const role of ["primary", "core", "ring", "moon", "satellite"]) {
-        constellation.append(create("span", `preview-sphere preview-sphere-${role}`));
+      if (slide.kind !== "cover") {
+        for (const role of ["primary", "core", "ring", "moon", "satellite"]) {
+          constellation.append(create("span", `preview-sphere preview-sphere-${role}`));
+        }
       }
       const previewBrandNode = create("div", "preview-brand");
       const brand = previewBrand();
       const signature = String(brand.signature || "").trim();
       const website = String(brand.website || "").trim();
-      const logoRole = slide.kind === "cover" || slide.kind === "outro" || colors.surface === "dark" ? "on_dark" : "on_light";
+      const logoRole = logoRoleForSlide(slide, index);
       const logo = brand.logos?.[logoRole];
       const hasLogo = logo?.available === true && typeof logo.endpoint === "string" && logo.endpoint;
-      if (hasLogo) {
+      if (logoMode === "auto" && hasLogo) {
         const image = document.createElement("img");
         image.className = "preview-logo";
         image.src = api(logo.endpoint);
@@ -1033,8 +1401,9 @@
         previewBrandNode.append(image);
       } else if (signature) previewBrandNode.append(create("span", "preview-signature", signature));
       if (website) previewBrandNode.append(create("span", "preview-website", website));
-      previewBrandNode.hidden = !hasLogo && !signature && !website;
-      preview.append(constellation, pageNumber, previewCopy, previewBrandNode);
+      previewBrandNode.hidden = logoMode === "hidden" ? !signature && !website : !hasLogo && !signature && !website;
+      if (slide.kind !== "cover") preview.append(constellation);
+      preview.append(pageNumber, previewCopy, previewBrandNode);
       const form = create("div", "slide-form");
       const toolbar = create("div", "slide-toolbar");
       const identity = create("div", "slide-identity");
@@ -1151,6 +1520,7 @@
       const body = create("span", "", comment.feedback);
       const remove = createIconButton("comment-remove", "close", "Rimuovi commento", "Rimuovi commento");
       remove.addEventListener("click", () => {
+        recordUndo("commento su selezione");
         selectionComments = selectionComments.filter((item) => item.id !== comment.id);
         renderComments();
         persistDraft();
@@ -1215,7 +1585,7 @@
     renderAll();
   }
 
-  function validateDraft() {
+  function validateDraft(action = "feedback") {
     const cover = draftSlides.find((slide) => slide.kind === "cover");
     if (!cover || !cover.title.trim()) return "Il titolo della copertina non può essere vuoto.";
     const items = draftSlides.filter((slide) => slide.kind === "item");
@@ -1226,6 +1596,10 @@
     }
     const outro = draftSlides.find((slide) => slide.kind === "outro");
     if (outro && !outro.title.trim() && !outro.summary.trim()) return "La chiusura non può essere vuota.";
+    if (action === "approve") {
+      const emphasisWarning = allEmphasisWarnings()[0];
+      if (emphasisWarning) return `${displayLabel(emphasisWarning.slide, draftSlides.indexOf(emphasisWarning.slide))}: ${emphasisWarning.message}`;
+    }
     return "";
   }
 
@@ -1239,12 +1613,33 @@
     return comments;
   }
 
+  function approvalMetrics() {
+    const fields = ["title", "summary"];
+    let bold = 0;
+    let italic = 0;
+    let underline = 0;
+    let accent = 0;
+    for (const slide of draftSlides) {
+      for (const field of fields) {
+        bold += emphasisSegments(slide, field, "bold").length;
+        italic += emphasisSegments(slide, field, "italic").length;
+        underline += emphasisSegments(slide, field, "underline").length;
+        accent += emphasisSegments(slide, field, "accent").length;
+      }
+    }
+    const logoSlides = logoMode === "hidden"
+      ? 0
+      : draftSlides.filter((slide, index) => logoMetadata(logoRoleForSlide(slide, index)).available === true).length;
+    const logoTotal = logoMode === "hidden" ? 0 : draftSlides.length;
+    return { bold, italic, underline, accent, logoSlides, logoTotal, warningCount: allEmphasisWarnings().length };
+  }
+
   async function submit(action) {
-    const validationError = validateDraft();
+    const validationError = validateDraft(action);
     if (validationError) return showToast(validationError, true);
     if (elements.sendButton) elements.sendButton.disabled = true;
     if (elements.approveButton) elements.approveButton.disabled = true;
-    const payload = { action, base_revision: model.revision, slides: normalizedSlides(draftSlides), comments: collectedComments(), overall_note: overallNote.trim(), visual_style_system: selectedVisualSystem };
+    const payload = { action, base_revision: model.revision, slides: normalizedSlides(draftSlides), comments: collectedComments(), overall_note: overallNote.trim(), visual_style_system: selectedVisualSystem, logo_mode: logoMode };
     try {
       const response = await fetch(api("/api/submit"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const data = await response.json();
@@ -1327,20 +1722,79 @@
     showToast("Bozza locale ripristinata.");
   }
 
+  function currentDraftState(label = "modifica") {
+    return {
+      label,
+      slides: clone(draftSlides),
+      comments: clone(selectionComments),
+      slideNotes: clone(slideNotes),
+      brandNote,
+      overallNote,
+      logoMode,
+      visualSystem: selectedVisualSystem,
+    };
+  }
+
+  function recordUndo(label) {
+    if (!model || awaitingFeedbackId || staleRevision !== null) return;
+    undoState = currentDraftState(label);
+    if (elements.undoButton) elements.undoButton.disabled = false;
+    syncMobileActions();
+  }
+
+  function undoLastChange() {
+    if (!undoState || awaitingFeedbackId || staleRevision !== null) return;
+    const previous = undoState;
+    undoState = null;
+    draftSlides = clone(previous.slides);
+    selectionComments = clone(previous.comments);
+    slideNotes = clone(previous.slideNotes);
+    brandNote = previous.brandNote;
+    overallNote = previous.overallNote;
+    logoMode = previous.logoMode;
+    selectedVisualSystem = previous.visualSystem;
+    safeStorageSet(visualSystemStorageKey(), selectedVisualSystem);
+    renderAll();
+    persistDraft();
+    showToast(`Annullata: ${previous.label}.`);
+  }
+
   elements.brandNote?.addEventListener("input", () => {
+    if (!elements.brandNote._undoCaptured) {
+      recordUndo("commento sul profilo");
+      elements.brandNote._undoCaptured = true;
+    }
     brandNote = elements.brandNote.value;
     persistDraft();
   });
   elements.overallNote?.addEventListener("input", () => {
+    if (!elements.overallNote._undoCaptured) {
+      recordUndo("nota generale");
+      elements.overallNote._undoCaptured = true;
+    }
     overallNote = elements.overallNote.value;
     persistDraft();
   });
+  for (const node of [elements.brandNote, elements.overallNote]) {
+    node?.addEventListener("focus", () => { node._undoCaptured = false; });
+    node?.addEventListener("blur", () => { node._undoCaptured = false; });
+  }
+  elements.logoPreference?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-logo-mode]");
+    if (button) setLogoMode(button.dataset.logoMode);
+  });
+  elements.undoButton?.addEventListener("click", undoLastChange);
   elements.resetButton?.addEventListener("click", resetDraft);
   elements.sendButton?.addEventListener("click", () => submit("feedback"));
   elements.approveButton?.addEventListener("click", () => {
+    const validationError = validateDraft("approve");
+    if (validationError) return showToast(`${validationError} Puoi comunque inviare una correzione.`, true);
     if (elements.approvalSummary) {
       const warnings = [...fitWarnings.values()].filter((warning) => warning.schema || warning.overflow).length;
-      elements.approvalSummary.textContent = `Hai visualizzato ${viewedSlideIds.size} di ${draftSlides.length} slide. ${warnings === 0 ? "Nessun avviso di densità." : `${warnings} ${warnings === 1 ? "avviso" : "avvisi"} di densità da considerare.`}`;
+      const metrics = approvalMetrics();
+      const logoSummary = logoMode === "hidden" ? "Logo nascosto" : `Logo disponibile su ${metrics.logoSlides}/${metrics.logoTotal} slide`;
+      const densitySummary = warnings === 0 ? "Nessun avviso di densità." : `${warnings} ${warnings === 1 ? "avviso" : "avvisi"} di densità da considerare.`;
+      elements.approvalSummary.textContent = `Hai visualizzato ${viewedSlideIds.size} di ${draftSlides.length} slide. ${logoSummary}. Enfasi applicate: ${metrics.bold} ${metrics.bold === 1 ? "grassetto" : "grassetti"}, ${metrics.italic} ${metrics.italic === 1 ? "corsivo" : "corsivi"}, ${metrics.underline} ${metrics.underline === 1 ? "sottolineatura" : "sottolineature"}, ${metrics.accent} ${metrics.accent === 1 ? "evidenziazione" : "evidenziazioni"}. ${densitySummary}`;
     }
     elements.approvalDialog?.showModal();
   });
@@ -1352,6 +1806,7 @@
     event.preventDefault();
     const feedback = elements.commentFeedback?.value.trim() || "";
     if (!pendingSelection || !feedback) return showToast("Scrivi il commento prima di aggiungerlo.", true);
+    recordUndo("commento su selezione");
     const { focusTarget, ...selection } = pendingSelection;
     selectionComments.push({ id: `selection-${crypto.randomUUID()}`, kind: "selection", ...selection, feedback });
     clearPendingSelection({ focus: true });
@@ -1374,6 +1829,10 @@
   elements.mobileResetButton?.addEventListener("click", () => {
     elements.mobileActionsDialog?.close();
     elements.resetButton?.click();
+  });
+  elements.mobileUndoButton?.addEventListener("click", () => {
+    elements.mobileActionsDialog?.close();
+    elements.undoButton?.click();
   });
   elements.mobileSendButton?.addEventListener("click", () => {
     elements.mobileActionsDialog?.close();

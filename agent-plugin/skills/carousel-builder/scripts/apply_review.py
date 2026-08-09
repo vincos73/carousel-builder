@@ -47,10 +47,13 @@ def require_text(value: object, field: str) -> str:
 
 
 EMPHASIS_KEYS = {
-    "cover_title": ("cover_title_bold", "cover_title_serif", "cover_title_accent"),
-    "title": ("title_bold", "title_serif", "title_accent"),
-    "summary": ("summary_bold", "summary_serif", "summary_accent"),
+    "cover_title": ("cover_title_bold", "cover_title_italic", "cover_title_serif", "cover_title_accent", "cover_title_underline"),
+    "cover_subtitle": ("cover_subtitle_bold", "cover_subtitle_italic", "cover_subtitle_serif", "cover_subtitle_accent", "cover_subtitle_underline"),
+    "title": ("title_bold", "title_italic", "title_serif", "title_accent", "title_underline"),
+    "summary": ("summary_bold", "summary_italic", "summary_serif", "summary_accent", "summary_underline"),
 }
+EMPHASIS_ROLES = ("bold", "italic", "serif", "accent", "underline")
+LOGO_MODES = {"auto", "hidden"}
 VISUAL_STYLE_SYSTEMS = {
     "editorial-frame",
     "editorial-halftone",
@@ -103,6 +106,13 @@ def normalized_visual_style_system(value: object) -> str | None:
     return normalized if normalized in VISUAL_STYLE_SYSTEMS else None
 
 
+def normalized_logo_mode(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    mode = value.strip().casefold()
+    return mode if mode in LOGO_MODES else None
+
+
 def emphasis_phrases(container: dict, field: str) -> list[tuple[str, str]]:
     """Elenca le coppie (chiave, frase) di enfasi associate a un campo testuale."""
     pairs: list[tuple[str, str]] = []
@@ -117,7 +127,7 @@ def emphasis_phrases(container: dict, field: str) -> list[tuple[str, str]]:
 def prune_emphasis(container: dict, field: str, new_text: str) -> list[str]:
     """Rimuove le frasi di enfasi che non compaiono più nel testo aggiornato.
 
-    I campi ``*_serif`` e ``*_accent`` indicano frasi esatte contenute nel testo.
+    I campi ``*_serif``, ``*_accent`` e ``*_underline`` indicano frasi esatte contenute nel testo.
     Quando l'utente riscrive il testo nell'editor, le frasi precedenti possono non
     esistere più: conservarle produrrebbe un manifest che viola le regole della
     skill e un rendering con enfasi mancanti o sbagliate.
@@ -147,6 +157,133 @@ def stale_emphasis(container: dict, field: str, text_value: str) -> list[str]:
         for _key, phrase in emphasis_phrases(container, field)
         if not phrase or phrase not in text_value
     ]
+
+
+def _received_emphasis(value: object, *, field: str) -> list[str]:
+    """Validate a client-provided emphasis list before it reaches the manifest."""
+    if not isinstance(value, list):
+        raise ValueError(f"{field} deve essere una lista")
+    result: list[str] = []
+    for index, phrase in enumerate(value):
+        if not isinstance(phrase, str) or not phrase:
+            raise ValueError(f"{field}[{index}] deve essere una frase non vuota")
+        if phrase in result:
+            raise ValueError(f"{field} contiene un valore non univoco: {phrase!r}")
+        result.append(phrase)
+    return result
+
+
+def sync_emphasis(
+    container: dict,
+    *,
+    manifest_field: str,
+    new_text: str,
+    slide: dict,
+    slide_field: str,
+    text_changed: bool,
+    warnings: list[str],
+) -> list[str]:
+    """Persist explicit emphasis, prune stale fragments, retain legacy omissions.
+
+    Missing keys mean an older review client: existing values are retained (and
+    only pruned after an associated text change).  Present keys are authoritative
+    even when empty, so users can deliberately remove an emphasis.
+    """
+    dropped: list[str] = []
+    for role, key in zip(EMPHASIS_ROLES, EMPHASIS_KEYS[manifest_field]):
+        feedback_key = f"{slide_field}_{role}"
+        if feedback_key in slide:
+            received = _received_emphasis(slide[feedback_key], field=feedback_key)
+            kept = [phrase for phrase in received if phrase in new_text]
+            dropped.extend(phrase for phrase in received if phrase not in kept)
+            for phrase in kept:
+                if new_text.count(phrase) != 1:
+                    raise ValueError(
+                        f"{feedback_key} deve comparire una sola volta nel testo della card"
+                    )
+            container[key] = kept
+        elif text_changed:
+            phrases = container.get(key)
+            if isinstance(phrases, list):
+                kept = [
+                    phrase
+                    for phrase in phrases
+                    if isinstance(phrase, str) and phrase and phrase in new_text
+                ]
+                dropped.extend(str(phrase) for phrase in phrases if phrase not in kept)
+                container[key] = kept
+        else:
+            phrases = container.get(key)
+            stale = (
+                [
+                    phrase
+                    for phrase in phrases
+                    if isinstance(phrase, str) and (not phrase or phrase not in new_text)
+                ]
+                if isinstance(phrases, list)
+                else []
+            )
+            if stale:
+                warnings.append(
+                    f"Enfasi già incoerenti con {manifest_field}.{role}, non modificate: "
+                    + ", ".join(repr(phrase) for phrase in stale)
+                )
+    validate_no_overlap(container, manifest_field, new_text)
+    return dropped
+
+
+def validate_no_overlap(container: dict, field: str, text_value: str) -> None:
+    """Reject visual-role selections that would address the same characters."""
+    special_roles = {"italic", "serif", "accent", "underline"}
+    ranges: list[tuple[int, int, str, str]] = []
+    for key in EMPHASIS_KEYS[field]:
+        phrases = container.get(key)
+        if not isinstance(phrases, list):
+            continue
+        for phrase in phrases:
+            if not isinstance(phrase, str) or not phrase or text_value.count(phrase) != 1:
+                continue
+            start = text_value.find(phrase)
+            end = start + len(phrase)
+            role = key.rsplit("_", 1)[-1]
+            for other_start, other_end, other_key, other_phrase in ranges:
+                if start < other_end and other_start < end:
+                    other_role = other_key.rsplit("_", 1)[-1]
+                    if start == other_start and end == other_end:
+                        if role in special_roles and other_role in special_roles:
+                            raise ValueError(
+                                f"{field}: “{phrase}” ha più trattamenti. Scegline uno: corsivo, sottolineatura oppure evidenziatore"
+                            )
+                        raise ValueError(
+                            f"{field}: “{phrase}” ha più stili. Mantienine uno solo"
+                        )
+                    raise ValueError(
+                        f"{field}: i trattamenti su “{other_phrase}” e “{phrase}” si sovrappongono. Correggi le selezioni oppure mantienine uno solo"
+                    )
+            ranges.append((start, end, key, phrase))
+
+
+def approval_warnings(items: list[dict]) -> list[str]:
+    """Return the publish-time emphasis constraints for every body card."""
+    issues: list[str] = []
+    for item in items:
+        summary = item.get("summary")
+        if not isinstance(summary, str) or not summary:
+            continue
+        item_id = item.get("id", "slide")
+        italic = item.get("summary_italic") if isinstance(item.get("summary_italic"), list) else []
+        serif = item.get("summary_serif") if isinstance(item.get("summary_serif"), list) else []
+        accent = item.get("summary_accent") if isinstance(item.get("summary_accent"), list) else []
+        underline = item.get("summary_underline") if isinstance(item.get("summary_underline"), list) else []
+        if len(italic) + len(serif) + len(accent) + len(underline) > 1:
+            issues.append(
+                f"{item_id}: è ammesso un solo trattamento tra corsivo, sottolineatura ed evidenziatore"
+            )
+        try:
+            validate_no_overlap(item, "summary", summary)
+        except ValueError as exc:
+            issues.append(str(exc))
+    return issues
 
 
 def main() -> int:
@@ -196,6 +333,11 @@ def main() -> int:
             )
             if selected_visual_style is None:
                 raise ValueError("visual_style_system non valido")
+        selected_logo_mode = None
+        if "logo_mode" in feedback:
+            selected_logo_mode = normalized_logo_mode(feedback.get("logo_mode"))
+            if selected_logo_mode is None:
+                raise ValueError("logo_mode deve essere auto oppure hidden")
 
         original_items = manifest.get("items")
         if not isinstance(original_items, list) or not original_items:
@@ -226,24 +368,36 @@ def main() -> int:
 
         cover_emphasis = {
             key: list(manifest[key])
-            for key in EMPHASIS_KEYS["cover_title"]
+            for field in ("cover_title", "cover_subtitle")
+            for key in EMPHASIS_KEYS[field]
             if isinstance(manifest.get(key), list)
         }
         cover_copy_changed = (
             manifest.get("cover_title", "") != new_cover
             or manifest.get("cover_subtitle", "") != new_cover_subtitle
         )
-        if manifest.get("cover_title", "") != new_cover:
-            dropped = prune_emphasis(cover_emphasis, "cover_title", new_cover)
-            if dropped:
-                emphasis_dropped["cover"] = dropped
-        else:
-            stale = stale_emphasis(manifest, "cover_title", new_cover)
-            if stale:
-                warnings.append(
-                    "Enfasi già incoerenti con cover_title, non modificate: "
-                    + ", ".join(repr(phrase) for phrase in stale)
-                )
+        cover_dropped = sync_emphasis(
+            cover_emphasis,
+            manifest_field="cover_title",
+            new_text=new_cover,
+            slide=cover,
+            slide_field="title",
+            text_changed=manifest.get("cover_title", "") != new_cover,
+            warnings=warnings,
+        )
+        cover_dropped.extend(
+            sync_emphasis(
+                cover_emphasis,
+                manifest_field="cover_subtitle",
+                new_text=new_cover_subtitle,
+                slide=cover,
+                slide_field="summary",
+                text_changed=manifest.get("cover_subtitle", "") != new_cover_subtitle,
+                warnings=warnings,
+            )
+        )
+        if cover_dropped:
+            emphasis_dropped["cover"] = cover_dropped
         if cover_copy_changed and manifest.get("cover_alt_text"):
             stale_alt_text.append("cover")
 
@@ -262,19 +416,30 @@ def main() -> int:
             updated["summary"] = sentence_line_breaks(
                 require_text(slide.get("summary"), f"{item_id}.summary")
             )
-            dropped: list[str] = []
-            text_changed = False
-            for field in ("title", "summary"):
-                if previous.get(field, "") != updated[field]:
-                    text_changed = True
-                    dropped.extend(prune_emphasis(updated, field, updated[field]))
-                else:
-                    stale = stale_emphasis(updated, field, updated[field])
-                    if stale:
-                        warnings.append(
-                            f"Enfasi già incoerenti con {item_id}.{field}, non modificate: "
-                            + ", ".join(repr(phrase) for phrase in stale)
-                        )
+            dropped = sync_emphasis(
+                updated,
+                manifest_field="title",
+                new_text=updated["title"],
+                slide=slide,
+                slide_field="title",
+                text_changed=previous.get("title", "") != updated["title"],
+                warnings=warnings,
+            )
+            dropped.extend(
+                sync_emphasis(
+                    updated,
+                    manifest_field="summary",
+                    new_text=updated["summary"],
+                    slide=slide,
+                    slide_field="summary",
+                    text_changed=previous.get("summary", "") != updated["summary"],
+                    warnings=warnings,
+                )
+            )
+            text_changed = (
+                previous.get("title", "") != updated["title"]
+                or previous.get("summary", "") != updated["summary"]
+            )
             if dropped:
                 emphasis_dropped[str(item_id)] = dropped
             if text_changed and updated.get("alt_text"):
@@ -299,6 +464,28 @@ def main() -> int:
             )
             if outro_changed and new_outro.get("alt_text"):
                 stale_alt_text.append("outro")
+            outro_dropped = sync_emphasis(
+                new_outro,
+                manifest_field="title",
+                new_text=new_outro["title"],
+                slide=outro_slide,
+                slide_field="title",
+                text_changed=manifest["outro"].get("title", "") != new_outro["title"],
+                warnings=warnings,
+            )
+            outro_dropped.extend(
+                sync_emphasis(
+                    new_outro,
+                    manifest_field="summary",
+                    new_text=new_outro["body"],
+                    slide=outro_slide,
+                    slide_field="summary",
+                    text_changed=manifest["outro"].get("body", "") != new_outro["body"],
+                    warnings=warnings,
+                )
+            )
+            if outro_dropped:
+                emphasis_dropped["outro"] = outro_dropped
 
         changed: list[str] = []
         if manifest.get("cover_title", "") != new_cover:
@@ -313,6 +500,11 @@ def main() -> int:
             manifest.get(key) != value for key, value in cover_emphasis.items()
         ):
             changed.append("cover_emphasis")
+        if (
+            selected_logo_mode is not None
+            and manifest.get("logo_mode") != selected_logo_mode
+        ):
+            changed.append("logo_mode")
 
         # La sequenza può cambiare per riordino o eliminazione: gli ID derivati
         # dal manifest vanno riallineati, altrimenti restano puntatori a slide
@@ -374,6 +566,12 @@ def main() -> int:
                 "proof.approved resta true ma il contenuto della prova è cambiato: la prova visuale va riapprovata"
             )
 
+        approval_issues = approval_warnings(new_items)
+        if feedback["action"] == "approve" and approval_issues:
+            raise ValueError("Approvazione bloccata: " + "; ".join(approval_issues))
+        if feedback["action"] == "feedback":
+            warnings.extend(approval_issues)
+
         existing_review = manifest.get("review") if isinstance(manifest.get("review"), dict) else {}
         review = dict(existing_review)
         review.update(
@@ -409,6 +607,8 @@ def main() -> int:
                     proof["slide_ids"] = new_proof_ids
                 if selected_visual_style is not None:
                     manifest["visual_style_system"] = selected_visual_style
+                if selected_logo_mode is not None:
+                    manifest["logo_mode"] = selected_logo_mode
                 manifest["revision"] = revision + 1
             manifest["review"] = review
             atomic_write_json(manifest_path, manifest)
@@ -438,6 +638,7 @@ def main() -> int:
             "stale_transcript": stale_transcript,
             "warnings": warnings,
             "visual_style_system": manifest.get("visual_style_system"),
+            "logo_mode": normalized_logo_mode(manifest.get("logo_mode")) or "auto",
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0

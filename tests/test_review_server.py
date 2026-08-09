@@ -200,13 +200,73 @@ class ManifestModelTest(unittest.TestCase):
         brand = self.model(manifest)["brand"]
         self.assertEqual(
             brand["logos"]["on_light"],
-            {"available": True, "endpoint": "/api/logo/on-light"},
+            {
+                "available": True,
+                "endpoint": "/api/logo/on-light",
+                "source": "manifest",
+                "master_format": "png",
+            },
         )
         self.assertEqual(
             brand["logos"]["on_dark"],
-            {"available": False, "endpoint": ""},
+            {
+                "available": False,
+                "endpoint": "",
+                "source": "",
+                "master_format": "png",
+            },
         )
         self.assertNotIn(str(logo_path), json.dumps(brand))
+
+    def test_uses_a_sibling_png_preview_for_an_svg_logo_master(self) -> None:
+        (self.workdir / "logo.svg").write_text("<svg><script>alert(1)</script></svg>", encoding="utf-8")
+        (self.workdir / "logo.png").write_bytes(b"safe preview")
+        manifest = base_manifest()
+        manifest["brand"] = {"logos": {"on_light": "logo.svg"}}
+        logo = self.model(manifest)["brand"]["logos"]["on_light"]
+        self.assertEqual(
+            logo,
+            {
+                "available": True,
+                "endpoint": "/api/logo/on-light",
+                "source": "sibling_png",
+                "master_format": "svg",
+            },
+        )
+
+    def test_exposes_default_logo_mode_and_an_resolved_italic_role(self) -> None:
+        italic_path = self.workdir / "body-italic.ttf"
+        italic_path.write_bytes(b"italic")
+        manifest = base_manifest()
+        manifest["brand"] = {
+            "fonts": {
+                "body_italic": {
+                    "family": "Studio Body Italic",
+                    "file": "body-italic.ttf",
+                    "source": "uploaded",
+                },
+                "serif_italic": "Playfair Display",
+            }
+        }
+        model = self.model(manifest)
+        self.assertEqual(model["logo_mode"], "auto")
+        self.assertEqual(model["brand"]["emphasis_italic"]["role"], "body_italic")
+        self.assertEqual(model["brand"]["emphasis_italic"]["endpoint"], "/api/font/italic")
+
+    def test_prefers_an_explicit_italic_role_over_body_or_legacy_serif(self) -> None:
+        for name in ("explicit.ttf", "body-italic.ttf"):
+            (self.workdir / name).write_bytes(name.encode("utf-8"))
+        manifest = base_manifest()
+        manifest["brand"] = {
+            "fonts": {
+                "emphasis_italic": {"family": "Explicit", "file": "explicit.ttf"},
+                "body_italic": {"family": "Body", "file": "body-italic.ttf"},
+                "serif_italic": "Playfair Display",
+            }
+        }
+        italic = self.model(manifest)["brand"]["font_assets"]["italic"]
+        self.assertEqual(italic["role"], "emphasis_italic")
+        self.assertEqual(italic["family"], "Explicit")
 
     def test_exposes_distinct_display_and_body_roles(self) -> None:
         display_path = self.workdir / "display.ttf"
@@ -255,6 +315,7 @@ class ManifestModelTest(unittest.TestCase):
             "section_title_weight": None,
             "body_weight": 630,
             "body_line_height": "dense",
+            "sentence_gap_em": "tight",
             "body_tracking_em": 2,
             "min_auto_scale": 0.4,
             "overflow_policy": "shrink_forever",
@@ -269,6 +330,7 @@ class ManifestModelTest(unittest.TestCase):
         self.assertEqual(typography["section_title_weight"], 800)
         self.assertEqual(typography["body_weight"], 630)
         self.assertEqual(typography["body_line_height"], 1.12)
+        self.assertEqual(typography["sentence_gap_em"], 0.6)
         self.assertEqual(typography["cover_subtitle_line_height"], 1.08)
         self.assertEqual(typography["body_tracking_em"], -0.025)
         self.assertEqual(typography["min_auto_scale"], 0.92)
@@ -278,15 +340,18 @@ class ManifestModelTest(unittest.TestCase):
         manifest = base_manifest()
         manifest["cover_title_bold"] = ["La lezione", "assente"]
         manifest["cover_title_accent"] = ["La lezione", "assente", "operativa"]
+        manifest["cover_title_underline"] = ["operativa", "assente"]
         manifest["items"][0].update(
             {
                 "title": "Titolo da evidenziare",
                 "title_bold": ["evidenziare"],
                 "title_serif": ["Titolo", "da evidenziare", "non presente"],
                 "title_accent": "non e una lista",
+                "title_underline": ["da"],
                 "summary_bold": ["Prima frase."],
                 "summary_serif": ["Prima frase.", "Prima frase.", 4],
                 "summary_accent": ["assente"],
+                "summary_underline": ["frase."],
             }
         )
         manifest["outro"].update(
@@ -296,13 +361,16 @@ class ManifestModelTest(unittest.TestCase):
         self.assertEqual(slides["cover"]["title_bold"], ["La lezione"])
         self.assertEqual(slides["cover"]["title_serif"], ["e operativa"])
         self.assertEqual(slides["cover"]["title_accent"], ["La lezione", "operativa"])
+        self.assertEqual(slides["cover"]["title_underline"], ["operativa"])
         self.assertEqual(slides["cover"]["summary_serif"], [])
         self.assertEqual(slides["item-1"]["title_bold"], ["evidenziare"])
         self.assertEqual(slides["item-1"]["title_serif"], ["Titolo", "da evidenziare"])
         self.assertEqual(slides["item-1"]["title_accent"], [])
+        self.assertEqual(slides["item-1"]["title_underline"], ["da"])
         self.assertEqual(slides["item-1"]["summary_bold"], ["Prima frase."])
         self.assertEqual(slides["item-1"]["summary_serif"], ["Prima frase."])
         self.assertEqual(slides["item-1"]["summary_accent"], [])
+        self.assertEqual(slides["item-1"]["summary_underline"], ["frase."])
         self.assertEqual(slides["outro"]["title_serif"], ["Chiusura"])
         self.assertEqual(slides["outro"]["summary_bold"], ["Corpo"])
         self.assertEqual(slides["outro"]["summary_serif"], [])
@@ -408,6 +476,94 @@ class ValidateFeedbackTest(unittest.TestCase):
         self.assertEqual(result["action"], "feedback")
         self.assertTrue(result["feedback_id"].startswith("feedback-"))
         self.assertEqual(len(result["slides"]), 4)
+
+    def test_transports_all_emphasis_roles_and_preserves_legacy_serif(self) -> None:
+        slides = self.payload()["slides"]
+        slides[1]["summary"] = "Prima frase utile."
+        slides[1].update(
+            {
+                "summary_bold": ["Prima"],
+                "summary_italic": [],
+                "summary_serif": ["frase"],
+                "summary_accent": [],
+                "summary_underline": ["utile"],
+                "title_bold": [],
+                "title_italic": [],
+                "title_serif": [],
+                "title_accent": [],
+                "title_underline": [],
+            }
+        )
+        result = review_server.validate_feedback(self.payload(slides), self.model)
+        item = result["slides"][1]
+        self.assertEqual(item["summary_bold"], ["Prima"])
+        self.assertEqual(item["summary_serif"], ["frase"])
+        self.assertIn("summary_italic", item)
+        self.assertEqual(item["summary_underline"], ["utile"])
+
+    def test_rejects_ambiguous_or_overlapping_emphasis(self) -> None:
+        slides = self.payload()["slides"]
+        slides[1]["summary_bold"] = ["a"]
+        with self.assertRaises(ValueError):
+            review_server.validate_feedback(self.payload(slides), self.model)
+
+        slides = self.payload()["slides"]
+        slides[1]["summary_bold"] = ["Prima"]
+        slides[1]["summary_italic"] = ["Prima frase."]
+        with self.assertRaises(ValueError):
+            review_server.validate_feedback(self.payload(slides), self.model)
+
+    def test_same_selection_with_two_treatments_has_one_actionable_error(self) -> None:
+        slides = self.payload()["slides"]
+        slides[1]["summary_serif"] = []
+        slides[1]["summary_underline"] = ["Prima"]
+        slides[1]["summary_accent"] = ["Prima"]
+        with self.assertRaisesRegex(
+            ValueError,
+            "“Prima” ha più trattamenti.*Scegline uno",
+        ):
+            review_server.validate_feedback(self.payload(slides), self.model)
+
+    def test_missing_bold_neither_warns_nor_blocks_approval(self) -> None:
+        feedback = review_server.validate_feedback(self.payload(), self.model)
+        self.assertFalse(any("summary_bold" in warning for warning in feedback["warnings"]))
+        slides = self.payload()["slides"]
+        slides[0]["title_serif"] = []
+        slides[1]["summary_serif"] = []
+        approved = review_server.validate_feedback(
+            self.payload(slides, action="approve"), self.model
+        )
+        self.assertEqual(approved["action"], "approve")
+
+    def test_approve_rejects_more_than_one_secondary_emphasis(self) -> None:
+        slides = self.payload()["slides"]
+        slides[1]["summary"] = "Prima seconda terza."
+        slides[1]["summary_bold"] = ["Prima"]
+        slides[1]["summary_underline"] = ["seconda"]
+        slides[1]["summary_accent"] = ["terza."]
+        slides[0]["title_serif"] = []
+        slides[1]["summary_serif"] = []
+        slides[2]["summary_accent"] = []
+        with self.assertRaisesRegex(ValueError, "un solo trattamento"):
+            review_server.validate_feedback(
+                self.payload(slides, action="approve"), self.model
+            )
+
+    def test_approve_rejects_italic_when_no_real_italic_font_is_available(self) -> None:
+        slides = self.payload()["slides"]
+        slides[0]["title_serif"] = []
+        slides[1].update({"summary_bold": ["Prima"], "summary_serif": ["frase."]})
+        slides[2]["summary_bold"] = ["Seconda"]
+        with self.assertRaisesRegex(ValueError, "font corsivo reale"):
+            review_server.validate_feedback(
+                self.payload(slides, action="approve"), self.model
+            )
+
+    def test_validates_and_transports_logo_mode(self) -> None:
+        result = review_server.validate_feedback(self.payload(logo_mode="hidden"), self.model)
+        self.assertEqual(result["logo_mode"], "hidden")
+        with self.assertRaises(ValueError):
+            review_server.validate_feedback(self.payload(logo_mode="always"), self.model)
 
     def test_accepts_a_visual_style_choice_and_rejects_unknown_ones(self) -> None:
         result = review_server.validate_feedback(
