@@ -52,7 +52,7 @@ In un ambiente agentivo compatibile, come ChatGPT Desktop e Claude Code, può ap
 1. **Fonte**: URL, testo, note o file.
 2. **Brand**: configurazione, profilo salvato oppure tema neutro.
 3. **Anteprima editoriale**: profilo e testi completi da revisionare e approvare.
-4. **Prova visivae**: copertina, slide più densa e chiusura.
+4. **Prova visuale**: copertina, slide più densa e chiusura.
 5. **Produzione**: sequenza completa soltanto dopo la seconda approvazione.
 6. **Controllo finale**: verifica di tutti gli artefatti prodotti.
 
@@ -119,9 +119,13 @@ Per segnalare problemi o proporre miglioramenti, apri una Issue indicando:
 
 ## Licenza
 
-Distribuita gratuitamente con licenza [MIT](LICENSE). Puoi usare, modificare e
-ridistribuire la skill, mantenendo l'avviso di copyright e il testo della
-licenza.
+Il codice e la documentazione sono distribuiti gratuitamente con licenza
+[MIT](LICENSE). Puoi usarli, modificarli e ridistribuirli mantenendo l'avviso
+di copyright e il testo della licenza.
+
+I font inclusi in [`assets/fonts/`](assets/fonts/) restano soggetti alle
+rispettive licenze SIL Open Font License riportate nei file `*-OFL.txt` e non
+sono coperti dalla licenza MIT del progetto.
 
 ## Autore
 

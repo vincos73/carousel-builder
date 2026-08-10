@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -148,10 +149,40 @@ class ReviewServerHTTPTest(unittest.TestCase):
             "/assets/fonts/Inter-Variable.ttf",
             "/assets/fonts/PlayfairDisplay-Variable.ttf",
             "/assets/fonts/PlayfairDisplay-Italic-Variable.ttf",
+            "/assets/fonts/InstrumentSerif-Regular.ttf",
+            "/assets/fonts/Onest-Regular.ttf",
+            "/assets/fonts/Onest-Medium.ttf",
+            "/assets/fonts/Onest-Semibold.ttf",
+            "/assets/fonts/Onest-Bold.ttf",
             "/assets/fonts/Orbitron-Variable.ttf",
         ):
             status, payload = request(f"{self.origin}{path}")
             self.assertEqual(status, 200, path)
+            self.assertTrue(payload)
+
+    def test_serves_every_font_declared_by_the_editor_stylesheet(self) -> None:
+        status, stylesheet = request(f"{self.origin}/assets/styles.css")
+        self.assertEqual(status, 200)
+        font_paths = {
+            match.decode("utf-8")
+            for match in re.findall(rb'url\("(/assets/fonts/[^\"]+)"\)', stylesheet)
+        }
+        self.assertEqual(
+            font_paths,
+            {
+                "/assets/fonts/InstrumentSerif-Regular.ttf",
+                "/assets/fonts/Inter-Variable.ttf",
+                "/assets/fonts/Onest-Bold.ttf",
+                "/assets/fonts/Onest-Medium.ttf",
+                "/assets/fonts/Onest-Regular.ttf",
+                "/assets/fonts/Onest-Semibold.ttf",
+                "/assets/fonts/Orbitron-Variable.ttf",
+                "/assets/fonts/PlayfairDisplay-Italic-Variable.ttf",
+            },
+        )
+        for path in font_paths:
+            font_status, payload = request(f"{self.origin}{path}")
+            self.assertEqual(font_status, 200, path)
             self.assertTrue(payload)
 
     def test_serves_bundled_fonts_with_a_safe_mime_type(self) -> None:
@@ -287,6 +318,67 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.assertEqual(feedback["logo_mode"], "hidden")
         self.assertEqual(feedback["slides"][1]["summary_italic"], ["frase."])
         self.assertEqual(feedback["slides"][1]["summary_underline"], [])
+
+    def test_comment_only_batch_keeps_sparse_manifest_defaults_implicit(self) -> None:
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        emphasis_suffixes = ("_bold", "_italic", "_serif", "_accent", "_underline")
+        for container in (manifest, *manifest["items"], manifest["outro"]):
+            for key in list(container):
+                if key.endswith(emphasis_suffixes):
+                    del container[key]
+        manifest["proof"]["approved"] = True
+        write_json(self.manifest_path, manifest)
+
+        payload = json.loads(self.batch().decode("utf-8"))
+        payload["slides"][-1]["summary"] = "Corpo della chiusura."
+        payload["comments"] = [
+            {
+                "id": "commento-brand",
+                "kind": "brand",
+                "slide_id": "",
+                "feedback": "Solo un commento.",
+            }
+        ]
+        status, submitted = json_request(
+            self.api("/api/submit"),
+            method="POST",
+            body=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, submitted)
+
+        applied = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "apply_review.py"),
+                str(self.manifest_path),
+                str(self.session_dir / "feedback.json"),
+                "--session-dir",
+                str(self.session_dir),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(applied.returncode, 0, applied.stderr)
+        result = json.loads(applied.stdout)
+        written = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(result["changed"], [])
+        self.assertEqual(result["manifest_revision"], 1)
+        self.assertFalse(result["stale_transcript"])
+        self.assertNotIn("logo_mode", written)
+        self.assertEqual(
+            [
+                key
+                for container in (written, *written["items"], written["outro"])
+                for key in container
+                if key.endswith(emphasis_suffixes)
+            ],
+            [],
+        )
+        self.assertEqual(list((self.session_dir / "backups").glob("*.json")), [])
+        self.assertEqual(written["review"]["comments_pending"], 1)
 
     def test_reports_the_revision_in_the_status(self) -> None:
         status, payload = json_request(self.api("/api/status"))

@@ -1316,6 +1316,26 @@ def main() -> int:
                     BUNDLED_FONT_ASSETS["serif"][1],
                     "font/ttf",
                 ),
+                "/assets/fonts/InstrumentSerif-Regular.ttf": (
+                    assets_dir.parent / "fonts" / "InstrumentSerif-Regular.ttf",
+                    "font/ttf",
+                ),
+                "/assets/fonts/Onest-Regular.ttf": (
+                    assets_dir.parent / "fonts" / "Onest-Regular.ttf",
+                    "font/ttf",
+                ),
+                "/assets/fonts/Onest-Medium.ttf": (
+                    assets_dir.parent / "fonts" / "Onest-Medium.ttf",
+                    "font/ttf",
+                ),
+                "/assets/fonts/Onest-Semibold.ttf": (
+                    assets_dir.parent / "fonts" / "Onest-Semibold.ttf",
+                    "font/ttf",
+                ),
+                "/assets/fonts/Onest-Bold.ttf": (
+                    assets_dir.parent / "fonts" / "Onest-Bold.ttf",
+                    "font/ttf",
+                ),
                 "/assets/fonts/Orbitron-Variable.ttf": (
                     assets_dir.parent / "fonts" / "Orbitron-Variable.ttf",
                     "font/ttf",

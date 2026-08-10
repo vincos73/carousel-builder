@@ -279,8 +279,9 @@ def sync_emphasis(
     """Persist explicit emphasis, prune stale fragments, retain legacy omissions.
 
     Missing keys mean an older review client: existing values are retained (and
-    only pruned after an associated text change).  Present keys are authoritative
-    even when empty, so users can deliberately remove an emphasis.
+    only pruned after an associated text change). Present keys are authoritative,
+    but an empty default does not materialize a key that was already absent.
+    Existing emphasis can still be deliberately cleared with an empty list.
     """
     dropped: list[str] = []
     for role, key in zip(EMPHASIS_ROLES, EMPHASIS_KEYS[manifest_field]):
@@ -294,7 +295,8 @@ def sync_emphasis(
                     raise ValueError(
                         f"{feedback_key} deve comparire una sola volta nel testo della card"
                     )
-            container[key] = kept
+            if received or key in container:
+                container[key] = kept
         elif text_changed:
             phrases = container.get(key)
             if isinstance(phrases, list):
@@ -634,10 +636,12 @@ def main() -> int:
             manifest.get(key) != value for key, value in cover_emphasis.items()
         ):
             changed.append("cover_emphasis")
-        if (
+        logo_mode_changed = (
             selected_logo_mode is not None
-            and manifest.get("logo_mode") != selected_logo_mode
-        ):
+            and (normalized_logo_mode(manifest.get("logo_mode")) or "auto")
+            != selected_logo_mode
+        )
+        if logo_mode_changed:
             changed.append("logo_mode")
 
         # La sequenza può cambiare per riordino o eliminazione: gli ID derivati
@@ -739,7 +743,7 @@ def main() -> int:
                     proof["slide_ids"] = new_proof_ids
                 if selected_visual_style is not None:
                     manifest["visual_style_system"] = selected_visual_style
-                if selected_logo_mode is not None:
+                if logo_mode_changed:
                     manifest["logo_mode"] = selected_logo_mode
                 manifest["revision"] = revision + 1
             manifest["review"] = review
