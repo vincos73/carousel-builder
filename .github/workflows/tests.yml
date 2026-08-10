@@ -22,6 +22,18 @@ jobs:
       - name: Run tests
         run: python -m unittest discover -s tests -t tests -v
 
+  windows-unittest:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Compile scripts
+        run: python -m compileall -q scripts tests
+      - name: Run tests
+        run: python -m unittest discover -s tests -t tests -v
+
   package-sync:
     runs-on: ubuntu-latest
     steps:
@@ -37,3 +49,5 @@ jobs:
           plugin_version=$(python3 -c "import json;print(json.load(open('agent-plugin/plugin.json'))['version'])")
           echo "SKILL.md=$skill_version plugin.json=$plugin_version"
           test "$skill_version" = "$plugin_version"
+      - name: La licenza MIT deve essere inclusa nel pacchetto Agent Plugin
+        run: cmp LICENSE agent-plugin/LICENSE
