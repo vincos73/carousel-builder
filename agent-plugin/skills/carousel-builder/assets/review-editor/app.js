@@ -555,6 +555,7 @@
       if (!validSlides) return;
       const metadata = new Map(model.slides.map((slide) => [slide.id, slide]));
       draftSlides = saved.slides.map((slide) => ({ ...metadata.get(slide.id), ...slide }));
+      pruneStaleEmphasis(draftSlides);
       selectionComments = Array.isArray(saved.comments) ? saved.comments : [];
       slideNotes = saved.slide_notes && typeof saved.slide_notes === "object" ? saved.slide_notes : {};
       brandNote = typeof saved.brand_note === "string" ? saved.brand_note : "";
@@ -724,6 +725,23 @@
       const legacy = legacyEmphasisKey(slide, field);
       if (legacy !== key) slide[legacy] = [];
     }
+  }
+
+  function pruneStaleEmphasis(slides) {
+    let dropped = 0;
+    for (const slide of slides) {
+      for (const field of ["title", "summary"]) {
+        const text = typeof slide[field] === "string" ? slide[field] : "";
+        for (const kind of ["bold", "italic", "accent", "underline"]) {
+          const segments = emphasisSegments(slide, field, kind);
+          const kept = segments.filter((segment) => typeof segment === "string" && segment && text.includes(segment));
+          if (kept.length === segments.length) continue;
+          dropped += segments.length - kept.length;
+          setEmphasisSegments(slide, field, kind, kept);
+        }
+      }
+    }
+    return dropped;
   }
 
   function textRanges(text, segment) {
@@ -972,7 +990,7 @@
     input.value = slide[field];
     input.dataset.slideId = slide.id;
     input.dataset.field = field;
-    if (multiline) input.rows = field === "summary" ? 6 : 3;
+    if (multiline) input.rows = slide.kind === "cover" ? 3 : field === "summary" ? 6 : 3;
     else input.type = "text";
     const warning = create("p", "inline-warning emphasis-warning");
     warning.hidden = true;
@@ -983,14 +1001,17 @@
       const hasSelection = Boolean(quote) && !awaitingFeedbackId;
       const setButton = (button, kind, available = true) => {
         const active = hasSelection && emphasisSegments(slide, field, kind).includes(quote);
-        button.disabled = !hasSelection || !available;
+        button.disabled = !hasSelection || (!available && !active);
         button.setAttribute("aria-pressed", String(active));
       };
       setButton(boldButton, "bold");
       setButton(italicButton, "italic", hasRealItalicFont());
       setButton(underlineButton, "underline");
       setButton(accentButton, "accent");
-      italicButton.title = `Applica o rimuovi il corsivo ${italicFontLabel()} dalla selezione${hasRealItalicFont() ? "" : " (non disponibile)"}`;
+      const italicActive = hasSelection && emphasisSegments(slide, field, "italic").includes(quote);
+      italicButton.title = !hasRealItalicFont() && italicActive
+        ? "Rimuovi il corsivo non disponibile dalla selezione"
+        : `Applica o rimuovi il corsivo ${italicFontLabel()} dalla selezione${hasRealItalicFont() ? "" : " (non disponibile)"}`;
       italicButton.setAttribute("aria-label", italicButton.title);
       commentButton.disabled = !hasSelection;
     };
@@ -1008,6 +1029,7 @@
         input._undoCaptured = true;
       }
       slide[field] = input.value;
+      pruneStaleEmphasis([slide]);
       refreshCharacterCounts();
       onPreview(input.value);
       refreshSelection();
@@ -1018,11 +1040,12 @@
     const toggleSelectionEmphasis = (kind) => {
       const start = input.selectionStart ?? 0;
       const end = input.selectionEnd ?? 0;
-      if (end <= start || (kind === "italic" && !hasRealItalicFont())) return;
-      recordUndo("enfasi tipografica");
+      if (end <= start) return;
       const quote = input.value.slice(start, end);
       const segments = emphasisSegments(slide, field, kind).slice();
       const existingIndex = segments.indexOf(quote);
+      if (kind === "italic" && !hasRealItalicFont() && existingIndex < 0) return;
+      recordUndo("enfasi tipografica");
       if (existingIndex >= 0) segments.splice(existingIndex, 1);
       else segments.push(quote);
       setEmphasisSegments(slide, field, kind, segments);
@@ -1467,7 +1490,7 @@
       const showTitle = slide.kind !== "item" || model.sequence_mode === "sectional" || slide.title;
       if (showTitle) {
         const titleLabel = slide.kind === "cover" ? "Titolo della copertina" : "Titolo";
-        form.append(makeField(slide, "title", titleLabel, false, (value) => {
+        form.append(makeField(slide, "title", titleLabel, slide.kind === "cover", (value) => {
           renderEmphasizedText(previewTitle, value, emphasisFor(slide, "title"));
         }));
       }
@@ -1475,7 +1498,7 @@
         const summaryLabel = slide.kind === "cover"
           ? "Sottotitolo della copertina (opzionale)"
           : slide.kind === "outro" ? "Testo della chiusura" : "Testo della slide";
-        form.append(makeField(slide, "summary", summaryLabel, slide.kind !== "cover", (value) => {
+        form.append(makeField(slide, "summary", summaryLabel, true, (value) => {
           renderEmphasizedText(previewSummary, value, emphasisFor(slide, "summary"));
           if (slide.kind === "cover") previewSummary.hidden = !value.trim();
         }));
