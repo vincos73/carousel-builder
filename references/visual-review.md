@@ -50,6 +50,7 @@ Mostrare un solo messaggio per conflitto. Se la stessa locuzione ha più trattam
 
 Quando il server segnala un batch, riprendere automaticamente il lavoro e leggere `<session-dir>/feedback.json`. Prima di applicarlo controllare che:
 
+- `session-state.json` associ la cartella di sessione allo stesso manifest richiesto;
 - `base_revision` corrisponda alla revisione corrente del manifest;
 - tutti gli ID delle slide appartengano al manifest corrente;
 - resti almeno una slide interna;
@@ -61,7 +62,7 @@ Applicare le modifiche dirette con:
 python3 <skill>/scripts/apply_review.py <manifest.json> <session-dir>/feedback.json --session-dir <session-dir>
 ```
 
-Lo script deve aggiornare soltanto i campi editoriali consentiti, preservare un backup nella cartella di sessione, incrementare `revision` quando cambia il testo o l'ordine e non modificare automaticamente `workflow_state`.
+Lo script deve accettare soltanto il `feedback.json` appartenente alla cartella di sessione e al manifest associato, aggiornare soltanto i campi editoriali consentiti, preservare un backup atomico nella cartella di sessione, incrementare `revision` quando cambia il testo o l'ordine e non modificare automaticamente `workflow_state`.
 
 Lo script riallinea inoltre i riferimenti derivati dai testi:
 
@@ -81,7 +82,7 @@ Se `action` è `approve`, trattarla come richiesta esplicita di approvazione. Im
 
 ## Ripresa e chiusura
 
-Il browser conserva una bozza locale finché il batch non viene inviato. Il server conserva l'ultimo batch nella cartella di sessione. Se il processo si interrompe, riavviarlo con gli stessi manifest e cartella di sessione.
+Il browser conserva una bozza locale finché il batch non viene inviato. Il server conserva l'ultimo batch nella cartella di sessione, riemette all'avvio un batch ancora pendente e rifiuta un secondo processo sulla stessa sessione. Se il processo si interrompe, riavviarlo con gli stessi manifest e cartella di sessione: un journal completa l'eventuale commit interrotto di feedback e stato prima di accettare nuovi invii.
 
 Dopo aver applicato il batch, lo script registra l'esito in `session-state.json`; l'editor rileva il nuovo stato e ricarica il manifest aggiornato. L'editor confronta anche la revisione del manifest con quella che sta mostrando: quando l'agente incrementa `revision` risolvendo i commenti, la pagina si aggiorna da sola se non ci sono modifiche locali in sospeso, altrimenti blocca l'invio e propone il ricarico. Non chiedere all'utente di aggiornare la pagina a mano. Chiudere il processo del server quando la revisione è terminata o l'utente interrompe il lavoro.
 

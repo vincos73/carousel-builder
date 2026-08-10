@@ -89,6 +89,37 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertIn("revisione", json.loads(result.stderr)["error"])
         self.assertEqual(self.manifest()["revision"], 1)
 
+    def test_rejects_a_session_bound_to_another_manifest(self) -> None:
+        other_manifest = self.workdir / "other" / "manifest.json"
+        result = self.apply(
+            base_manifest(),
+            base_feedback(self.full_batch()),
+            state={"manifest": str(other_manifest.resolve())},
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("manifest diverso", json.loads(result.stderr)["error"])
+        self.assertEqual(self.manifest()["revision"], 1)
+
+    def test_recovers_state_when_the_manifest_commit_already_succeeded(self) -> None:
+        manifest = base_manifest()
+        manifest["revision"] = 2
+        manifest["review"] = {"last_feedback_id": "feedback-test"}
+        result = self.apply(
+            manifest,
+            base_feedback(self.full_batch(), base_revision=1),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "recovered")
+        self.assertEqual(payload["manifest_revision"], 2)
+        state = json.loads(
+            (self.workdir / "session" / "session-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(state["applied_feedback_id"], "feedback-test")
+        self.assertEqual(self.manifest()["revision"], 2)
+
     def test_rejects_feedback_not_matching_session(self) -> None:
         result = self.apply(
             base_manifest(),

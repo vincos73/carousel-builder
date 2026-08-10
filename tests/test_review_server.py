@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from support import base_manifest, slide
+from support import base_manifest, slide, write_json
 
 SPEC = importlib.util.spec_from_file_location(
     "review_server", Path(__file__).resolve().parent.parent / "scripts" / "review_server.py"
@@ -665,6 +665,74 @@ class ValidateFeedbackTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             review_server.validate_feedback(
                 self.payload(comments=comments), self.model
+            )
+
+
+class FeedbackTransactionTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.workdir = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.manifest_path = (self.workdir / "manifest.json").resolve()
+        self.session_dir = self.workdir / "session"
+        self.state_path = self.session_dir / "session-state.json"
+        self.feedback_path = self.session_dir / "feedback.json"
+        self.journal_path = self.session_dir / "feedback-commit.json"
+        self.state = {
+            "manifest": str(self.manifest_path),
+            "manifest_revision": 1,
+            "last_feedback_id": None,
+            "applied_feedback_id": None,
+        }
+        self.feedback = {
+            "feedback_id": "feedback-transaction",
+            "submitted_at": "2026-01-01T00:00:00+00:00",
+            "action": "feedback",
+        }
+        write_json(self.manifest_path, base_manifest())
+        write_json(self.state_path, self.state)
+
+    def commit(self) -> dict:
+        return review_server.commit_feedback(
+            journal_path=self.journal_path,
+            feedback_path=self.feedback_path,
+            state_path=self.state_path,
+            manifest_path=self.manifest_path,
+            current_state=self.state,
+            feedback=self.feedback,
+            manifest_revision=1,
+        )
+
+    def test_recovers_an_interrupted_feedback_commit(self) -> None:
+        self.commit()
+        self.feedback_path.unlink()
+        write_json(self.state_path, self.state)
+
+        event = review_server.recover_feedback_commit(
+            journal_path=self.journal_path,
+            feedback_path=self.feedback_path,
+            state_path=self.state_path,
+            manifest_path=self.manifest_path,
+        )
+
+        self.assertEqual(event["feedback_id"], "feedback-transaction")
+        recovered_feedback = json.loads(self.feedback_path.read_text(encoding="utf-8"))
+        recovered_state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(recovered_feedback, self.feedback)
+        self.assertEqual(recovered_state["last_feedback_id"], "feedback-transaction")
+
+    def test_rejects_recovery_after_an_unrelated_state_change(self) -> None:
+        self.commit()
+        conflicting = dict(self.state)
+        conflicting["last_feedback_id"] = "feedback-unrelated"
+        write_json(self.state_path, conflicting)
+
+        with self.assertRaisesRegex(ValueError, "stato è cambiato"):
+            review_server.recover_feedback_commit(
+                journal_path=self.journal_path,
+                feedback_path=self.feedback_path,
+                state_path=self.state_path,
+                manifest_path=self.manifest_path,
             )
 
 
