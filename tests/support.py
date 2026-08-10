@@ -84,13 +84,20 @@ def run_apply(
     state: dict | None = None,
 ) -> subprocess.CompletedProcess:
     manifest_path = workdir / "manifest.json"
-    feedback_path = workdir / "feedback.json"
     session_dir = workdir / "session"
+    feedback_path = session_dir / "feedback.json"
     write_json(manifest_path, manifest)
     write_json(feedback_path, feedback)
+    default_state = {
+        "token": "t",
+        "manifest": str(manifest_path.resolve()),
+        "last_feedback_id": feedback["feedback_id"],
+    }
+    if state is not None:
+        default_state.update(state)
     write_json(
         session_dir / "session-state.json",
-        state if state is not None else {"token": "t", "last_feedback_id": feedback["feedback_id"]},
+        default_state,
     )
     return subprocess.run(
         [

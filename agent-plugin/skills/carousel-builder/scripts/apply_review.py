@@ -8,10 +8,59 @@ import json
 import os
 import re
 import secrets
-import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
+
+class LockUnavailableError(RuntimeError):
+    """Raised when another process is updating the same review session."""
+
+
+class InterprocessLock:
+    """Cross-platform, non-blocking advisory lock backed by a persistent file."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._stream = None
+
+    def acquire(self) -> "InterprocessLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        stream = self.path.open("a+b")
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() == 0:
+            stream.write(b"\0")
+            stream.flush()
+        stream.seek(0)
+        try:
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            stream.close()
+            raise LockUnavailableError(f"Risorsa già in uso: {self.path}") from exc
+        self._stream = stream
+        return self
+
+    def release(self) -> None:
+        stream = self._stream
+        if stream is None:
+            return
+        try:
+            stream.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            stream.close()
+            self._stream = None
 
 
 def now_iso() -> str:
@@ -31,11 +80,55 @@ def read_json(path: Path) -> dict:
 
 
 def atomic_write_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    os.replace(temporary, path)
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def atomic_copy(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.{secrets.token_hex(6)}.tmp")
+    try:
+        with source.open("rb") as source_stream, temporary.open("wb") as target_stream:
+            while True:
+                chunk = source_stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                target_stream.write(chunk)
+            target_stream.flush()
+            os.fsync(target_stream.fileno())
+        os.replace(temporary, destination)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def canonical_path(path: Path | str) -> str:
+    return os.path.normcase(os.path.realpath(os.fspath(path)))
+
+
+def same_path(left: Path | str, right: Path | str) -> bool:
+    return canonical_path(left) == canonical_path(right)
+
+
+def validate_state_manifest(state: dict, manifest_path: Path) -> None:
+    bound_manifest = state.get("manifest")
+    if not isinstance(bound_manifest, str) or not bound_manifest:
+        raise ValueError("session-state.json non contiene un manifest valido")
+    if not same_path(bound_manifest, manifest_path):
+        raise ValueError("La sessione è associata a un manifest diverso")
 
 
 def require_text(value: object, field: str) -> str:
@@ -297,18 +390,28 @@ def main() -> int:
     feedback_path = args.feedback.expanduser().resolve()
     session_dir = args.session_dir.expanduser().resolve()
     state_path = session_dir / "session-state.json"
+    expected_feedback_path = (session_dir / "feedback.json").resolve()
+    locks: list[InterprocessLock] = []
 
     try:
+        if not same_path(feedback_path, expected_feedback_path):
+            raise ValueError("Il feedback deve essere <session-dir>/feedback.json")
+        locks = [
+            InterprocessLock(
+                manifest_path.with_name(f".{manifest_path.name}.review.lock")
+            ),
+            InterprocessLock(session_dir / ".review-transaction.lock"),
+        ]
+        for lock in locks:
+            lock.acquire()
+
         manifest = read_json(manifest_path)
         feedback = read_json(feedback_path)
         state = read_json(state_path)
+        validate_state_manifest(state, manifest_path)
         revision = manifest.get("revision", 1)
         if not isinstance(revision, int) or revision < 0:
             raise ValueError("revision deve essere un intero non negativo")
-        if feedback.get("base_revision") != revision:
-            raise ValueError(
-                f"Il batch parte dalla revisione {feedback.get('base_revision')}, ma il manifest è alla revisione {revision}"
-            )
         if feedback.get("feedback_id") != state.get("last_feedback_id"):
             raise ValueError("Il batch non coincide con l'ultimo feedback della sessione")
         if feedback.get("feedback_id") == state.get("applied_feedback_id"):
@@ -324,6 +427,37 @@ def main() -> int:
                 )
             )
             return 0
+        existing_review = (
+            manifest.get("review")
+            if isinstance(manifest.get("review"), dict)
+            else {}
+        )
+        if existing_review.get("last_feedback_id") == feedback.get("feedback_id"):
+            state.update(
+                {
+                    "applied_feedback_id": feedback["feedback_id"],
+                    "applied_at": now_iso(),
+                    "manifest_revision": revision,
+                }
+            )
+            atomic_write_json(state_path, state)
+            print(
+                json.dumps(
+                    {
+                        "status": "recovered",
+                        "feedback_id": feedback["feedback_id"],
+                        "manifest_revision": revision,
+                        "state_repaired": True,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+        if feedback.get("base_revision") != revision:
+            raise ValueError(
+                f"Il batch parte dalla revisione {feedback.get('base_revision')}, ma il manifest è alla revisione {revision}"
+            )
         if feedback.get("action") not in {"feedback", "approve"}:
             raise ValueError("Azione del batch non valida")
         selected_visual_style = None
@@ -572,7 +706,6 @@ def main() -> int:
         if feedback["action"] == "feedback":
             warnings.extend(approval_issues)
 
-        existing_review = manifest.get("review") if isinstance(manifest.get("review"), dict) else {}
         review = dict(existing_review)
         review.update(
             {
@@ -592,9 +725,8 @@ def main() -> int:
             # identica in più a ogni batch di soli commenti.
             if changed:
                 backups_dir = session_dir / "backups"
-                backups_dir.mkdir(parents=True, exist_ok=True)
                 backup_name = f"manifest-r{revision}-{feedback['feedback_id']}.json"
-                shutil.copy2(manifest_path, backups_dir / backup_name)
+                atomic_copy(manifest_path, backups_dir / backup_name)
                 manifest["cover_title"] = new_cover
                 manifest["cover_subtitle"] = new_cover_subtitle
                 manifest["items"] = new_items
@@ -642,9 +774,12 @@ def main() -> int:
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, LockUnavailableError, OSError, TypeError, ValueError) as exc:
         print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2
+    finally:
+        for lock in reversed(locks):
+            lock.release()
 
 
 if __name__ == "__main__":

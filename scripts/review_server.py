@@ -16,6 +16,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
 
 MAX_BODY_BYTES = 1_000_000
 MAX_SLIDES = 50
@@ -98,6 +103,57 @@ SENTENCE_BREAK_ABBREVIATIONS = {
 SENTENCE_BREAK_RE = re.compile(r'\.(?!\d)([”’"\')\]]*)[ \t]+(?=[A-ZÀÈÉÌÒÙ])')
 
 
+class LockUnavailableError(RuntimeError):
+    """Raised when another process owns a non-blocking review lock."""
+
+
+class InterprocessLock:
+    """Cross-platform, non-blocking advisory lock backed by a persistent file."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._stream = None
+
+    def acquire(self) -> "InterprocessLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        stream = self.path.open("a+b")
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() == 0:
+            stream.write(b"\0")
+            stream.flush()
+        stream.seek(0)
+        try:
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            stream.close()
+            raise LockUnavailableError(f"Risorsa già in uso: {self.path}") from exc
+        self._stream = stream
+        return self
+
+    def release(self) -> None:
+        stream = self._stream
+        if stream is None:
+            return
+        try:
+            stream.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            stream.close()
+            self._stream = None
+
+    def __enter__(self) -> "InterprocessLock":
+        return self.acquire()
+
+    def __exit__(self, *_args: object) -> None:
+        self.release()
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -117,10 +173,127 @@ def read_json(path: Path) -> dict:
 def atomic_write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    os.replace(temporary, path)
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def canonical_path(path: Path | str) -> str:
+    return os.path.normcase(os.path.realpath(os.fspath(path)))
+
+
+def same_path(left: Path | str, right: Path | str) -> bool:
+    return canonical_path(left) == canonical_path(right)
+
+
+def validate_state_manifest(state: dict, manifest_path: Path) -> None:
+    bound_manifest = state.get("manifest")
+    if not isinstance(bound_manifest, str) or not bound_manifest:
+        raise ValueError("La sessione non contiene un percorso manifest valido")
+    if not same_path(bound_manifest, manifest_path):
+        raise ValueError("La cartella di sessione è già associata a un manifest diverso")
+
+
+def feedback_event(feedback_path: Path, feedback: dict) -> dict:
+    return {
+        "event": "feedback",
+        "feedback_id": feedback["feedback_id"],
+        "action": feedback["action"],
+        "path": str(feedback_path),
+    }
+
+
+def commit_feedback(
+    *,
+    journal_path: Path,
+    feedback_path: Path,
+    state_path: Path,
+    manifest_path: Path,
+    current_state: dict,
+    feedback: dict,
+    manifest_revision: int,
+) -> dict:
+    state_before = {
+        key: current_state.get(key)
+        for key in ("last_feedback_id", "applied_feedback_id", "manifest_revision")
+    }
+    state_patch = {
+        "last_feedback_id": feedback["feedback_id"],
+        "feedback_submitted_at": feedback["submitted_at"],
+        "manifest_revision": manifest_revision,
+    }
+    journal = {
+        "version": 1,
+        "manifest": str(manifest_path),
+        "feedback": feedback,
+        "state_before": state_before,
+        "state_patch": state_patch,
+    }
+    atomic_write_json(journal_path, journal)
+    atomic_write_json(feedback_path, feedback)
+    next_state = dict(current_state)
+    next_state.update(state_patch)
+    atomic_write_json(state_path, next_state)
+    return feedback_event(feedback_path, feedback)
+
+
+def recover_feedback_commit(
+    *,
+    journal_path: Path,
+    feedback_path: Path,
+    state_path: Path,
+    manifest_path: Path,
+) -> dict | None:
+    if not journal_path.exists():
+        return None
+    journal = read_json(journal_path)
+    if journal.get("version") != 1 or not isinstance(journal.get("manifest"), str):
+        raise ValueError("Journal feedback non valido")
+    if not same_path(journal["manifest"], manifest_path):
+        raise ValueError("Il journal feedback appartiene a un manifest diverso")
+    feedback = journal.get("feedback")
+    state_before = journal.get("state_before")
+    state_patch = journal.get("state_patch")
+    if not all(isinstance(value, dict) for value in (feedback, state_before, state_patch)):
+        raise ValueError("Journal feedback incompleto")
+    feedback_id = feedback.get("feedback_id")
+    if (
+        not isinstance(feedback_id, str)
+        or not feedback_id
+        or feedback.get("action") not in {"feedback", "approve"}
+        or not isinstance(feedback.get("submitted_at"), str)
+        or state_patch.get("last_feedback_id") != feedback_id
+        or state_patch.get("feedback_submitted_at") != feedback.get("submitted_at")
+        or not isinstance(state_patch.get("manifest_revision"), int)
+    ):
+        raise ValueError("Journal feedback incoerente")
+
+    current_state = read_json(state_path)
+    validate_state_manifest(current_state, manifest_path)
+    if current_state.get("applied_feedback_id") == feedback_id:
+        try:
+            journal_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+    for key, before_value in state_before.items():
+        after_value = state_patch.get(key, before_value)
+        if current_state.get(key) not in (before_value, after_value):
+            raise ValueError("Lo stato è cambiato dopo l'inizio del commit feedback")
+
+    atomic_write_json(feedback_path, feedback)
+    next_state = dict(current_state)
+    next_state.update(state_patch)
+    atomic_write_json(state_path, next_state)
+    return feedback_event(feedback_path, feedback)
 
 
 def text(value: object, *, field: str, limit: int = MAX_TEXT) -> str:
@@ -979,37 +1152,86 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=0)
     args = parser.parse_args()
 
-    manifest_path = args.manifest.expanduser().resolve()
-    session_dir = args.session_dir.expanduser().resolve()
-    session_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        manifest_path = args.manifest.expanduser().resolve()
+        session_dir = args.session_dir.expanduser().resolve()
+        session_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(
+            json.dumps({"error": f"Impossibile preparare la sessione: {exc}"}),
+            file=sys.stderr,
+        )
+        return 2
     assets_dir = Path(__file__).resolve().parent.parent / "assets" / "review-editor"
     index_path = assets_dir / "index.html"
     if not index_path.is_file():
         print(json.dumps({"error": f"Asset editor mancante: {index_path}"}), file=sys.stderr)
         return 2
+    server_lock = InterprocessLock(session_dir / ".review-server.lock")
     try:
-        initial_model = manifest_model(manifest_path)
-    except ValueError as exc:
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        server_lock.acquire()
+    except (LockUnavailableError, OSError) as exc:
+        print(
+            json.dumps(
+                {"error": f"La cartella di sessione è già in uso: {exc}"},
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
         return 2
 
     state_path = session_dir / "session-state.json"
     feedback_path = session_dir / "feedback.json"
-    if state_path.exists():
-        state = read_json(state_path)
-        token = state.get("token") if isinstance(state.get("token"), str) else secrets.token_urlsafe(24)
-    else:
-        token = secrets.token_urlsafe(24)
-        state = {}
-    state.update(
-        {
-            "token": token,
-            "manifest": str(manifest_path),
-            "manifest_revision": initial_model["revision"],
-            "server_started_at": now_iso(),
-        }
-    )
-    atomic_write_json(state_path, state)
+    journal_path = session_dir / "feedback-commit.json"
+    transaction_lock_path = session_dir / ".review-transaction.lock"
+    recovered_event = None
+    try:
+        initial_model = manifest_model(manifest_path)
+        if state_path.exists():
+            state = read_json(state_path)
+            validate_state_manifest(state, manifest_path)
+            token = (
+                state.get("token")
+                if isinstance(state.get("token"), str)
+                else secrets.token_urlsafe(24)
+            )
+        else:
+            token = secrets.token_urlsafe(24)
+            state = {"manifest": str(manifest_path)}
+        state.update(
+            {
+                "token": token,
+                "manifest": str(manifest_path),
+                "manifest_revision": initial_model["revision"],
+                "server_started_at": now_iso(),
+            }
+        )
+        atomic_write_json(state_path, state)
+        with InterprocessLock(transaction_lock_path):
+            recovered_event = recover_feedback_commit(
+                journal_path=journal_path,
+                feedback_path=feedback_path,
+                state_path=state_path,
+                manifest_path=manifest_path,
+            )
+            if recovered_event is None:
+                current_state = read_json(state_path)
+                last_feedback_id = current_state.get("last_feedback_id")
+                applied_feedback_id = current_state.get("applied_feedback_id")
+                if last_feedback_id and last_feedback_id != applied_feedback_id:
+                    pending_feedback = read_json(feedback_path)
+                    if (
+                        pending_feedback.get("feedback_id") != last_feedback_id
+                        or pending_feedback.get("action") not in {"feedback", "approve"}
+                    ):
+                        raise ValueError(
+                            "Il feedback pendente non coincide con lo stato della sessione"
+                        )
+                    recovered_event = feedback_event(feedback_path, pending_feedback)
+    except (KeyError, LockUnavailableError, OSError, TypeError, ValueError) as exc:
+        server_lock.release()
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        return 2
     submit_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -1211,6 +1433,7 @@ def main() -> int:
                     return
                 try:
                     current_state = read_json(state_path)
+                    validate_state_manifest(current_state, manifest_path)
                 except ValueError as exc:
                     self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
                     return
@@ -1263,51 +1486,91 @@ def main() -> int:
             # superare entrambi il controllo sul batch in attesa e sovrascrivere
             # feedback.json a vicenda.
             with submit_lock:
+                pending_event = None
+                event = None
+                pending_feedback_id = None
                 try:
-                    current_state = read_json(state_path)
-                except ValueError as exc:
-                    self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
+                    with InterprocessLock(transaction_lock_path):
+                        pending_event = recover_feedback_commit(
+                            journal_path=journal_path,
+                            feedback_path=feedback_path,
+                            state_path=state_path,
+                            manifest_path=manifest_path,
+                        )
+                        current_state = read_json(state_path)
+                        validate_state_manifest(current_state, manifest_path)
+                        last_feedback_id = current_state.get("last_feedback_id")
+                        applied_feedback_id = current_state.get("applied_feedback_id")
+                        if last_feedback_id and last_feedback_id != applied_feedback_id:
+                            pending_feedback_id = last_feedback_id
+                        else:
+                            payload = json.loads(body.decode("utf-8"))
+                            current_model = manifest_model(manifest_path)
+                            feedback = validate_feedback(payload, current_model)
+                            event = commit_feedback(
+                                journal_path=journal_path,
+                                feedback_path=feedback_path,
+                                state_path=state_path,
+                                manifest_path=manifest_path,
+                                current_state=current_state,
+                                feedback=feedback,
+                                manifest_revision=current_model["revision"],
+                            )
+                except LockUnavailableError as exc:
+                    self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
                     return
-                last_feedback_id = current_state.get("last_feedback_id")
-                applied_feedback_id = current_state.get("applied_feedback_id")
-                if last_feedback_id and last_feedback_id != applied_feedback_id:
-                    self.send_json(
-                        HTTPStatus.CONFLICT,
-                        {
-                            "error": "Il feedback precedente attende ancora di essere applicato",
-                            "feedback_id": last_feedback_id,
-                        },
-                    )
-                    return
-                try:
-                    payload = json.loads(body.decode("utf-8"))
-                    current_model = manifest_model(manifest_path)
-                    feedback = validate_feedback(payload, current_model)
                 except RuntimeError as exc:
                     self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
                     return
                 except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
                     self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
                     return
-                atomic_write_json(feedback_path, feedback)
-                current_state.update(
-                    {
-                        "last_feedback_id": feedback["feedback_id"],
-                        "feedback_submitted_at": feedback["submitted_at"],
-                        "manifest_revision": current_model["revision"],
-                    }
-                )
-                atomic_write_json(state_path, current_state)
-                event = {
-                    "event": "feedback",
-                    "feedback_id": feedback["feedback_id"],
-                    "action": feedback["action"],
-                    "path": str(feedback_path),
-                }
+                except OSError as exc:
+                    self.send_json(
+                        HTTPStatus.INTERNAL_SERVER_ERROR,
+                        {"error": f"Impossibile salvare il feedback: {exc}"},
+                    )
+                    return
+                if pending_event is not None:
+                    print(json.dumps(pending_event, ensure_ascii=False), flush=True)
+                    try:
+                        journal_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                if pending_feedback_id is not None:
+                    self.send_json(
+                        HTTPStatus.CONFLICT,
+                        {
+                            "error": "Il feedback precedente attende ancora di essere applicato",
+                            "feedback_id": pending_feedback_id,
+                        },
+                    )
+                    return
+                if event is None:
+                    self.send_json(
+                        HTTPStatus.INTERNAL_SERVER_ERROR,
+                        {"error": "Il feedback non è stato registrato"},
+                    )
+                    return
                 print(json.dumps(event, ensure_ascii=False), flush=True)
+                try:
+                    journal_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             self.send_json(HTTPStatus.OK, event)
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    except OSError as exc:
+        server_lock.release()
+        print(
+            json.dumps(
+                {"error": f"Impossibile avviare il server: {exc}"},
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        return 2
     port = server.server_address[1]
     url = f"http://127.0.0.1:{port}/?token={token}"
     print(
@@ -1322,12 +1585,19 @@ def main() -> int:
         ),
         flush=True,
     )
+    if recovered_event is not None:
+        print(json.dumps(recovered_event, ensure_ascii=False), flush=True)
+        try:
+            journal_path.unlink(missing_ok=True)
+        except OSError:
+            pass
     try:
         server.serve_forever(poll_interval=0.25)
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
+        server_lock.release()
     return 0
 
 

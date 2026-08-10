@@ -344,6 +344,55 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.assertEqual(results.count(200), 1, results)
         self.assertEqual(results.count(409), 5, results)
 
+    def test_refuses_a_second_server_for_the_same_session(self) -> None:
+        duplicate = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "review_server.py"),
+                str(self.manifest_path),
+                "--session-dir",
+                str(self.session_dir),
+                "--port",
+                "0",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(duplicate.returncode, 2, duplicate.stdout)
+        self.assertIn("già in uso", json.loads(duplicate.stderr)["error"])
+
+    def test_reemits_a_pending_batch_after_restart(self) -> None:
+        status, submitted = json_request(
+            self.api("/api/submit"),
+            method="POST",
+            body=self.batch(),
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, submitted)
+        self.stop()
+
+        self.process = subprocess.Popen(
+            [
+                sys.executable,
+                str(SCRIPTS / "review_server.py"),
+                str(self.manifest_path),
+                "--session-dir",
+                str(self.session_dir),
+                "--port",
+                "0",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        ready = json.loads(self.process.stdout.readline())
+        replayed = json.loads(self.process.stdout.readline())
+        self.assertEqual(ready["status"], "ready")
+        self.assertEqual(replayed["event"], "feedback")
+        self.assertEqual(replayed["feedback_id"], submitted["feedback_id"])
+
 
 if __name__ == "__main__":
     unittest.main()
