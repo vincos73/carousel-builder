@@ -49,13 +49,26 @@ In un ambiente agentivo compatibile, come ChatGPT Desktop e Claude Code, può ap
 
 ## Flusso
 
-1. **Fonte**: URL, testo, note o file.
-2. **Brand**: configurazione, profilo salvato oppure tema neutro.
-3. **Anteprima editoriale**: profilo e testi completi da revisionare e approvare.
-4. **Prova visuale**: copertina, slide più densa e chiusura.
-5. **Produzione**: sequenza completa soltanto dopo la seconda approvazione.
-6. **Controllo finale**: verifica di tutti gli artefatti prodotti.
+1. **Fonte**: tu gli dai un URL, un testo o un file e gli chiedi di creare un carosello
+2. **Brand**: la skill ti chiederà quali sono le caratteristiche del tuo brand (puoi anche caricare file di brand identity)
+3. **Anteprima editoriale**: si aprirà un editor che ti farà vedere e modificare il carosello. 
+5. **Produzione**: dopo le tue modifiche il sistema genererà il carosello in formato .png e .pdf  
 
+## Modalità editoriali
+
+Due le modalità di sviluppo del carosello:
+
+- **Narrativa**: il testo viene sviluppato in una sequenza chiara (ideale per un argomento)
+- **Sezionale**: il testo viene composto in slide autonome (ideale per raccolte di contenuti)
+
+## Sistemi editoriali
+
+Tre i modelli di carosello disponibili: 
+
+- **Editoriale**: minimal, caratterizzato da una cornice continua 
+- **Geometrico**: estroso, caratterizzato da forme circolari colorate
+- **Istituzionale**: essenziale, caratterizzato da linee di delimitazione e quadratini colorati
+  
 ## Sistema visivo
 
 - master 4:5: **1080×1350 px**;
@@ -92,19 +105,6 @@ I due script del percorso `local-editor` sono coperti da test con la sola librer
 ```bash
 python3 -m unittest discover -s tests -t tests -v
 ```
-
-## Modalità editoriali
-
-- **Narrativa**: per una tesi sviluppata in passaggi dipendenti.
-- **Sezionale**: per raccolte e contenuti composti da sezioni autonome.
-
-## Sistemi editoriali
-
-- **3 template di carosello disponibili**: Editoriale, Geometrico e Istituzionale
-
-## Evoluzione dalla Agent Edition
-
-Le funzioni sperimentate nella precedente Agent Edition sono ora incluse nella versione pubblica 2.0. Il vecchio repository separato non è più necessario per l'installazione e resta soltanto come backup storico privato.
 
 ## Feedback
 
