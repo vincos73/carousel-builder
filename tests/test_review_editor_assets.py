@@ -7,16 +7,17 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-EDITOR = ROOT / "assets" / "review-editor" / "app.js"
-PLUGIN_EDITOR = (
+EDITOR_DIR = ROOT / "assets" / "review-editor"
+PLUGIN_EDITOR_DIR = (
     ROOT
     / "agent-plugin"
     / "skills"
     / "carousel-builder"
     / "assets"
     / "review-editor"
-    / "app.js"
 )
+EDITOR = EDITOR_DIR / "app.js"
+PLUGIN_EDITOR = PLUGIN_EDITOR_DIR / "app.js"
 
 
 class ReviewEditorAssetTest(unittest.TestCase):
@@ -24,10 +25,65 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.source = EDITOR.read_text(encoding="utf-8")
 
     def test_root_and_agent_plugin_editors_match(self) -> None:
-        self.assertEqual(
-            self.source,
-            PLUGIN_EDITOR.read_text(encoding="utf-8"),
-        )
+        for name in ("app.js", "index.html", "styles.css", "vincos-lockup-white.svg"):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    (EDITOR_DIR / name).read_bytes(),
+                    (PLUGIN_EDITOR_DIR / name).read_bytes(),
+                )
+
+    def test_review_copy_is_actionable_and_product_is_branded(self) -> None:
+        html = (EDITOR_DIR / "index.html").read_text(encoding="utf-8")
+        self.assertIn('class="product-byline"', html)
+        self.assertIn('/assets/vincos-lockup-white.svg', html)
+        self.assertIn('class="workflow-status"', html)
+        self.assertIn("Commenta lo stile", html)
+        self.assertIn('id="brand-typography"', html)
+        self.assertIn("Correggi i testi nell’editor accanto all’anteprima", html)
+        self.assertIn("Indicazione per l’intero carosello", html)
+        self.assertNotIn("Commento sul profilo", html)
+        self.assertNotIn("Un'osservazione sull'intera sequenza", html)
+        self.assertNotIn('id="brand-details"', html)
+
+    def test_applied_formats_are_compact_visible_and_directly_removable(self) -> None:
+        stylesheet = (EDITOR_DIR / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('active ? "true" : mixed ? "mixed" : "false"', self.source)
+        self.assertIn('"Formato nel testo"', self.source)
+        self.assertNotIn('"Stili applicati"', self.source)
+        self.assertIn('class="workflow-status"', (EDITOR_DIR / "index.html").read_text(encoding="utf-8"))
+        self.assertIn(".applied-style-chip", stylesheet)
+        self.assertIn("border-radius: 999px", stylesheet)
+        self.assertIn("renderAppliedStyles();", self.source)
+        self.assertIn("value !== segment", self.source)
+
+    def test_existing_format_is_recognized_and_overlap_is_prevented(self) -> None:
+        self.assertIn("const selectionState = (kind, start, end) =>", self.source)
+        self.assertIn("start >= range.start && end <= range.end", self.source)
+        self.assertIn("const conflict = firstStyleOverlap(start, end);", self.source)
+        self.assertIn("Rimuovi prima il formato dalla riga sotto il testo.", self.source)
+        self.assertIn('button.setAttribute("aria-pressed", active ? "true" : mixed ? "mixed" : "false");', self.source)
+
+    def test_preview_grids_do_not_split_words_arbitrarily(self) -> None:
+        stylesheet = (EDITOR_DIR / "styles.css").read_text(encoding="utf-8")
+        self.assertNotIn("overflow-wrap: anywhere", stylesheet)
+        self.assertIn(".slide-preview.visual-system-editorial-frame .preview-copy", stylesheet)
+        self.assertIn('visual-system-editorial-halftone[data-kind="cover"] .preview-copy', stylesheet)
+        self.assertGreaterEqual(stylesheet.count("width: 88%;"), 3)
+        self.assertIn("hyphens: none", stylesheet)
+
+    def test_local_editor_requires_clean_initial_fit(self) -> None:
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        workflow = (ROOT / "references" / "editorial-workflow.md").read_text(encoding="utf-8")
+        visual_review = (ROOT / "references" / "visual-review.md").read_text(encoding="utf-8")
+        self.assertIn("nessuna slide iniziale deve mostrare avvisi di densità o overflow", skill)
+        self.assertIn("una prima proposta già impaginabile", workflow)
+        self.assertIn("ciascuno dei tre sistemi visivi", visual_review)
+
+    def test_vincos_logo_is_the_approved_outlined_lockup(self) -> None:
+        logo = (EDITOR_DIR / "vincos-lockup-white.svg").read_text(encoding="utf-8")
+        self.assertIn('viewBox="0 0 2659.620 250.000"', logo)
+        self.assertIn("Tamrin wordmark", logo)
+        self.assertNotIn("<script", logo.casefold())
 
     def test_cover_fields_are_multiline_for_visible_text_selection(self) -> None:
         self.assertIn(
@@ -45,7 +101,7 @@ class ReviewEditorAssetTest(unittest.TestCase):
             self.source,
         )
         self.assertIn(
-            'if (kind === "italic" && !hasRealItalicFont() && existingIndex < 0) return;',
+            'if (kind === "italic" && !hasRealItalicFont() && !removableSegment) return;',
             self.source,
         )
         self.assertIn(
