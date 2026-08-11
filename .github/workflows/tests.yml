@@ -13,8 +13,6 @@ jobs:
   unittest:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      PYTHONPYCACHEPREFIX: ${{ runner.temp }}/carousel-builder-pycache
     strategy:
       fail-fast: false
       matrix:
@@ -32,8 +30,6 @@ jobs:
   windows-unittest:
     runs-on: windows-latest
     timeout-minutes: 10
-    env:
-      PYTHONPYCACHEPREFIX: ${{ runner.temp }}\carousel-builder-pycache
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

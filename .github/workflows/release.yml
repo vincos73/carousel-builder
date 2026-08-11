@@ -16,8 +16,6 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      PYTHONPYCACHEPREFIX: ${{ runner.temp }}/carousel-builder-pycache
     steps:
       - uses: actions/checkout@v5
         with:

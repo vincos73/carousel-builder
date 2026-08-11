@@ -7,6 +7,13 @@ RELEASE = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="u
 TESTS = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
 
 
+class WorkflowSyntaxGuardTests(unittest.TestCase):
+    def test_runner_context_is_not_used_before_steps_exist(self):
+        for name, workflow in (("tests", TESTS), ("release", RELEASE)):
+            with self.subTest(workflow=name):
+                self.assertNotIn("${{ runner.temp }}", workflow)
+
+
 class ReleaseWorkflowTests(unittest.TestCase):
     def test_release_is_bound_to_the_checked_out_tag_commit(self):
         self.assertIn("persist-credentials: false", RELEASE)
