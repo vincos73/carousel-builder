@@ -39,9 +39,9 @@ Quando l'utente seleziona una locuzione, offrire i comandi `Grassetto`, `Corsivo
 - Nelle card narrative interne proporre di default una `summary_bold` con una locuzione breve e completa. Il peso deve evidenziare il concetto decisivo, non la parola più lunga o frequente.
 - Nelle card sezionali che contengono un corpo applicare la stessa proposta iniziale. Se la card contiene soltanto un titolo, la gerarchia del titolo è sufficiente.
 - Consentire all'utente di rimuovere ogni `*_bold`: l'assenza di grassetti è uno stato valido e non genera avvisi.
-- Usare al massimo un trattamento complessivo per card tra `*_italic`, `*_underline` e `*_accent`. Il corsivo richiede sempre una vera variante risolta dal profilo.
+- Consentire più trattamenti nella stessa card quando riguardano parole o locuzioni distinte. Il corsivo richiede sempre una vera variante risolta dal profilo.
 - Copertina e chiusura possono usare una gerarchia più espressiva conforme al profilo.
-- Non sovrapporre `*_bold`, `*_italic`, `*_underline` e `*_accent` sulla stessa unità.
+- Non applicare più di uno tra `*_bold`, `*_italic`, `*_underline` e `*_accent` alla stessa parola o locuzione e non sovrapporre le selezioni.
 - Non affidare informazioni essenziali al solo cambio di peso, stile, font o colore.
 - Non scegliere parole in base a lunghezza, maiuscole o frequenza.
 - Non spezzare nomi propri, denominazioni, modelli o locuzioni.

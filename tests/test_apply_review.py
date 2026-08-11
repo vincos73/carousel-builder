@@ -361,7 +361,7 @@ class ApplyReviewTest(unittest.TestCase):
         warnings = json.loads(result.stdout)["warnings"]
         self.assertFalse(any("summary_bold" in warning for warning in warnings))
 
-    def test_approve_allows_no_bold_and_limits_secondary_emphasis_per_item(self) -> None:
+    def test_approve_allows_no_bold_and_multiple_non_overlapping_styles(self) -> None:
         batch = self.full_batch()
         batch[1]["summary_serif"] = []
         batch[2]["summary_accent"] = []
@@ -373,8 +373,7 @@ class ApplyReviewTest(unittest.TestCase):
         batch[1]["summary_italic"] = ["due"]
         batch[1]["summary_serif"] = ["tre."]
         result = self.apply(base_manifest(), base_feedback(batch, action="approve"))
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("un solo trattamento", json.loads(result.stderr)["error"])
+        self.assertEqual(result.returncode, 0, result.stderr)
 
         batch = self.full_batch(**{"item-1": "Uno due tre."})
         batch[1]["summary_bold"] = ["Uno"]
@@ -383,8 +382,7 @@ class ApplyReviewTest(unittest.TestCase):
         batch[2]["summary_bold"] = ["Seconda"]
         batch[2]["summary_accent"] = []
         result = self.apply(base_manifest(), base_feedback(batch, action="approve"))
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("un solo trattamento", json.loads(result.stderr)["error"])
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_persists_logo_mode_and_rejects_invalid_values(self) -> None:
         result = self.apply(

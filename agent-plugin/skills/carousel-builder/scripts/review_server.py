@@ -26,7 +26,7 @@ MAX_BODY_BYTES = 1_000_000
 MAX_SLIDES = 50
 MAX_COMMENTS = 200
 MAX_TEXT = 20_000
-EDITOR_VERSION = "2.8.7"
+EDITOR_VERSION = "2.8.8"
 TYPOGRAPHY_DEFAULTS = {
     "cover_px": 112,
     "cover_subtitle_px": 56,
@@ -224,10 +224,11 @@ def commit_feedback(
 ) -> dict:
     state_before = {
         key: current_state.get(key)
-        for key in ("last_feedback_id", "applied_feedback_id", "manifest_revision")
+        for key in ("last_feedback_id", "last_action", "applied_feedback_id", "manifest_revision")
     }
     state_patch = {
         "last_feedback_id": feedback["feedback_id"],
+        "last_action": feedback["action"],
         "feedback_submitted_at": feedback["submitted_at"],
         "manifest_revision": manifest_revision,
     }
@@ -272,10 +273,12 @@ def recover_feedback_commit(
         or feedback.get("action") not in {"feedback", "approve"}
         or not isinstance(feedback.get("submitted_at"), str)
         or state_patch.get("last_feedback_id") != feedback_id
+        or state_patch.get("last_action", feedback.get("action")) != feedback.get("action")
         or state_patch.get("feedback_submitted_at") != feedback.get("submitted_at")
         or not isinstance(state_patch.get("manifest_revision"), int)
     ):
         raise ValueError("Journal feedback incoerente")
+    state_patch.setdefault("last_action", feedback["action"])
 
     current_state = read_json(state_path)
     validate_state_manifest(current_state, manifest_path)
@@ -1127,23 +1130,6 @@ def validate_feedback(payload: object, model: dict) -> dict:
                 warnings.append(message)
             emphasis.update({f"{field}_{role}": phrases for role, phrases in values.items()})
 
-        if source["kind"] == "item" and summary:
-            italic_count = len(emphasis["summary_italic"]) + len(emphasis["summary_serif"])
-            secondary_count = (
-                italic_count
-                + len(emphasis["summary_accent"])
-                + len(emphasis["summary_underline"])
-            )
-            if action == "approve":
-                if secondary_count > 1:
-                    raise ValueError(
-                        f"{slide_id} può usare un solo trattamento tra corsivo, sottolineatura ed evidenziatore prima dell'approvazione"
-                    )
-            else:
-                if secondary_count > 1:
-                    warnings.append(
-                        f"{slide_id}: in approvazione sarà ammesso un solo trattamento tra corsivo, sottolineatura ed evidenziatore"
-                    )
         normalized_slides.append(
             {
                 "id": slide_id,
@@ -1552,6 +1538,7 @@ def main() -> int:
                     {
                         "manifest_revision": revision,
                         "last_feedback_id": last_id,
+                        "last_action": current_state.get("last_action"),
                         "applied_feedback_id": applied_id,
                         "feedback_pending": bool(last_id and last_id != applied_id),
                     },

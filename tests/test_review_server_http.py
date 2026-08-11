@@ -295,6 +295,11 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.assertEqual(feedback["feedback_id"], payload["feedback_id"])
         state = json.loads((self.session_dir / "session-state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["last_feedback_id"], payload["feedback_id"])
+        self.assertEqual(state["last_action"], "feedback")
+        status, durable = json_request(self.api("/api/status"))
+        self.assertEqual(status, 200, durable)
+        self.assertTrue(durable["feedback_pending"])
+        self.assertEqual(durable["last_action"], "feedback")
 
     def test_accepts_logo_mode_and_emphasis_in_a_batch(self) -> None:
         payload = json.loads(self.batch().decode("utf-8"))
@@ -386,6 +391,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["manifest_revision"], 1)
         self.assertFalse(payload["feedback_pending"])
+        self.assertIsNone(payload["last_action"])
 
     def test_session_exposes_the_three_visual_proof_options(self) -> None:
         status, payload = json_request(self.api("/api/session"))

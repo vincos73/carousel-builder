@@ -771,7 +771,6 @@
     const warnings = [];
     const ranges = [];
     const specialKinds = new Set(["italic", "accent", "underline"]);
-    let hasSpecialOverlap = false;
     for (const kind of ["bold", "italic", "accent", "underline"]) {
       for (const segment of emphasisSegments(slide, field, kind)) {
         const occurrences = textRanges(text, segment);
@@ -789,7 +788,6 @@
       const current = ranges[index];
       if (current.start < previous.end) {
         const bothSpecial = specialKinds.has(previous.kind) && specialKinds.has(current.kind);
-        if (bothSpecial) hasSpecialOverlap = true;
         if (previous.start === current.start && previous.end === current.end) {
           warnings.push({
             kind: bothSpecial ? "secondary" : "overlap",
@@ -810,16 +808,6 @@
       kind: "italic",
       message: "Il corsivo selezionato non ha un font reale disponibile.",
     });
-    if (slide.kind === "item" && field === "summary" && text.trim()) {
-      const italicCount = fieldItalicCount;
-      const secondaryCount = italicCount
-        + emphasisSegments(slide, field, "accent").length
-        + emphasisSegments(slide, field, "underline").length;
-      if (secondaryCount > 1 && !hasSpecialOverlap) warnings.push({
-        kind: "secondary",
-        message: "La card interna può usare un solo trattamento tra corsivo, sottolineatura ed evidenziatore.",
-      });
-    }
     return warnings;
   }
 
@@ -1664,7 +1652,9 @@
       note.id = noteId;
       note.className = "slide-note";
       note.rows = 2;
-      note.placeholder = "Per esempio: questa slide ripete la precedente";
+      note.placeholder = slide.kind === "cover"
+        ? "Per esempio: aggiungi un disegno coerente col titolo"
+        : "Per esempio: questa slide ripete la precedente";
       note.value = slideNotes[slide.id] || "";
       note.addEventListener("input", () => {
         slideNotes[slide.id] = note.value;

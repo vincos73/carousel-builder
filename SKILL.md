@@ -5,7 +5,7 @@ description: Trasforma URL, articoli, newsletter, note e testi in caroselli edit
 
 # Carousel Builder
 
-Versione: **2.8.7**
+Versione: **2.8.8**
 
 Creare caroselli editoriali separando fonte, profilo visivo, revisione editoriale, approvazione dei testi e produzione grafica. Adattare la superficie di revisione alle capacità effettive della sessione, mantenendo invariati metodo editoriale e checkpoint.
 
@@ -54,7 +54,7 @@ Se l'ambiente espone esplicitamente le proprie capacità, usarle. Altrimenti ver
    - configurare un nuovo profilo con il percorso rapido o guidato di [references/brand-onboarding.md](references/brand-onboarding.md);
    - usare il profilo neutro di [references/brand-profile.md](references/brand-profile.md) solo dopo una scelta esplicita.
 5. Leggere [references/editorial-workflow.md](references/editorial-workflow.md) e costruire copertina e sequenza secondo `sequence_mode`.
-6. Leggere [references/semantic-emphasis.md](references/semantic-emphasis.md). Per impostazione predefinita proporre nelle card interne una breve unità `*_bold` con il carattere principale, ma trattarla come scelta editoriale liberamente rimovibile dall'utente e mai come requisito di approvazione. Consentire al massimo un trattamento complessivo tra `*_italic`, `*_underline` e `*_accent`. Usare `*_italic` soltanto quando il profilo risolve una vera variante corsiva del carattere principale oppure un carattere corsivo secondario approvato. Accettare `*_serif` come alias legacy. Rendere `*_accent` come evidenziatore adattivo del colore di brand, non come semplice testo colorato. Non sintetizzare il corsivo inclinando un font privo della variante reale.
+6. Leggere [references/semantic-emphasis.md](references/semantic-emphasis.md). Per impostazione predefinita proporre nelle card interne una breve unità `*_bold` con il carattere principale, ma trattarla come scelta editoriale liberamente rimovibile dall'utente e mai come requisito di approvazione. Consentire più trattamenti nello stesso testo quando riguardano parole o locuzioni distinte; impedire soltanto che la stessa unità testuale riceva più stili o che due selezioni si sovrappongano. Usare `*_italic` soltanto quando il profilo risolve una vera variante corsiva del carattere principale oppure un carattere corsivo secondario approvato. Accettare `*_serif` come alias legacy. Rendere `*_accent` come evidenziatore adattivo del colore di brand, non come semplice testo colorato. Non sintetizzare il corsivo inclinando un font privo della variante reale.
 7. Nel percorso rapido, preparare nella stessa revisione prima `Anteprima profilo brand` e poi `Anteprima testi`. Usare un solo checkpoint editoriale che richiede l'approvazione di entrambi; accettare correzioni o approvazioni separate senza creare due passaggi obbligatori.
 8. Nel percorso guidato, ottenere prima l'approvazione del profilo e poi mostrare `Anteprima testi`.
 9. Nell'anteprima testuale indicare:
@@ -81,7 +81,7 @@ Se l'ambiente espone esplicitamente le proprie capacità, usarle. Altrimenti ver
 4. Preparare una scheda di produzione conforme a [references/carousel-schema.md](references/carousel-schema.md), includendo profilo risolto, CTA e stato del lavoro.
 5. Creare una prova composta da copertina, card più densa e chiusura quando prevista. Usare card renderizzate soltanto con controllo tipografico affidabile e con supporto esplicito al `visual_style_system` selezionato; altrimenti mostrare la composizione e i tre layout dettagliati dichiarando il limite. Se la generazione immagini non è disponibile, renderizzare normalmente la copertina `typographic` o con l'immagine fornita quando il renderer lo consente. Verificare che la cover sia priva degli elementi strutturali del sistema e che card interna e chiusura ne mostrino la firma obbligatoria.
 6. Verificare la prova a dimensione feed e a risoluzione leggibile secondo [references/production-qa.md](references/production-qa.md).
-7. Mostrare la prova e invitare l'utente a scegliere `Approva la prova visuale`, `Cambia la direzione grafica` oppure `Torna ai testi`. Fermarsi e attendere.
+7. Mostrare la prova e invitare l'utente a scegliere `Approva la prova visuale`, `Cambia la direzione grafica` oppure `Torna ai testi`. Nel percorso `local-editor`, mantenere il task in attesa attiva dell'evento anche in questo checkpoint e in ogni prova successiva, applicando il controllo durevole descritto in [references/visual-review.md](references/visual-review.md); non concludere il turno né chiedere all'utente di scrivere «fatto».
 8. Dopo qualsiasi modifica grafica, produrre e mostrare una nuova prova. Non riaprire l'approvazione dei testi se il testo approvato è rimasto identico.
 
 ## Fase 3: produzione completa
@@ -119,7 +119,7 @@ Se l'ambiente espone esplicitamente le proprie capacità, usarle. Altrimenti ver
 - Generare la CTA dalla fonte corrente quando `outro.copy_mode` è `generate_from_source`; non salvarne titolo e corpo nel profilo riutilizzabile.
 - Contare la chiusura nel numero totale e mostrarla prima dell'approvazione.
 - Non inserire Markdown o asterischi tipografici nei testi delle slide. Nell'editor usare i comandi diretti; nella revisione conversazionale descrivere separatamente le locuzioni da registrare nei campi `*_bold`, `*_italic`, `*_underline` e `*_accent`.
-- Nelle card narrative interne proporre di default una `summary_bold` con una locuzione semantica breve e completa per dare ritmo al testo. Fare lo stesso nelle card sezionali con corpo, ma consentire sempre all'utente di rimuoverla senza avvisi e senza bloccare l'approvazione. Usare al massimo un trattamento complessivo tra corsivo, sottolineatura ed evidenziatore adattivo e non sovrapporre trattamenti sulla stessa unità.
+- Nelle card narrative interne proporre di default una `summary_bold` con una locuzione semantica breve e completa per dare ritmo al testo. Fare lo stesso nelle card sezionali con corpo, ma consentire sempre all'utente di rimuoverla senza avvisi e senza bloccare l'approvazione. Consentire grassetto, corsivo, sottolineatura ed evidenziatore su parole o locuzioni distinte; non applicare più stili alla stessa unità e non sovrapporre le selezioni.
 - Non inventare logo, sito, firma, tagline, colori o attribuzioni.
 - Non presentare il profilo neutro come identità dell'utente.
 - Usare come master il canvas 1080×1350 in rapporto 4:5. Esportare in alta definizione a 1440×1800 applicando la stessa scala proporzionale, senza cambiare densità o impaginazione.

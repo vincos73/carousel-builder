@@ -359,21 +359,12 @@ def validate_no_overlap(container: dict, field: str, text_value: str) -> None:
 
 
 def approval_warnings(items: list[dict]) -> list[str]:
-    """Return the publish-time emphasis constraints for every body card."""
+    """Return publish-time overlap constraints for every body card."""
     issues: list[str] = []
     for item in items:
         summary = item.get("summary")
         if not isinstance(summary, str) or not summary:
             continue
-        item_id = item.get("id", "slide")
-        italic = item.get("summary_italic") if isinstance(item.get("summary_italic"), list) else []
-        serif = item.get("summary_serif") if isinstance(item.get("summary_serif"), list) else []
-        accent = item.get("summary_accent") if isinstance(item.get("summary_accent"), list) else []
-        underline = item.get("summary_underline") if isinstance(item.get("summary_underline"), list) else []
-        if len(italic) + len(serif) + len(accent) + len(underline) > 1:
-            issues.append(
-                f"{item_id}: è ammesso un solo trattamento tra corsivo, sottolineatura ed evidenziatore"
-            )
         try:
             validate_no_overlap(item, "summary", summary)
         except ValueError as exc:
