@@ -68,9 +68,24 @@
     return `${sharedKey}:tab:${tabId}`;
   }
 
+  const FONT_ROLE_WEIGHT_RANGES = Object.freeze({
+    display: "700 900",
+    body: "100 699",
+    serif: "100 900",
+    italic: "100 900",
+  });
+
+  function fontAssetDescriptors(role, style = "normal") {
+    return {
+      style: style === "italic" ? "italic" : "normal",
+      weight: FONT_ROLE_WEIGHT_RANGES[role] || "100 900",
+    };
+  }
+
   if (typeof module === "object" && module.exports) {
     module.exports = {
       collectPaletteDeclarationIssues,
+      fontAssetDescriptors,
       geometryPartIsHidden,
       mergePreviewBrand,
       tabDraftStorageKey,
@@ -1213,23 +1228,23 @@
     return italicFontAsset()?.family || "corsivo reale disponibile";
   }
 
-  function fontAssetKey(asset, style = "normal") {
-    return `${asset?.family || ""}|${asset?.endpoint || ""}|${style}`;
+  function fontAssetKey(asset, descriptors = {}) {
+    return `${asset?.family || ""}|${asset?.endpoint || ""}|${descriptors.style || "normal"}|${descriptors.weight || "100 900"}`;
   }
 
   function hasRealItalicFont() {
     const asset = italicFontAsset();
-    return Boolean(asset && loadedFontKeys.has(fontAssetKey(asset, "italic")));
+    return Boolean(asset && loadedFontKeys.has(fontAssetKey(asset, fontAssetDescriptors("italic", "italic"))));
   }
 
-  function loadFontAsset(asset, style) {
-    const key = fontAssetKey(asset, style);
+  function loadFontAsset(asset, descriptors) {
+    const key = fontAssetKey(asset, descriptors);
     if (!fontLoadCache.has(key)) {
       fontLoadCache.set(key, (async () => {
         const face = new FontFace(
           asset.family,
           `url("${api(asset.endpoint).replace(/"/g, "%22")}")`,
-          style === "italic" ? { style: "italic" } : {},
+          descriptors,
         );
         await face.load();
         document.fonts.add(face);
@@ -1268,7 +1283,7 @@
       }
       try {
         const style = kind === "serif" || kind === "italic" ? "italic" : "normal";
-        loaded[kind] = await loadFontAsset(asset, style);
+        loaded[kind] = await loadFontAsset(asset, fontAssetDescriptors(kind, style));
         outcomes.push(`${labels[kind]}: ${asset.family}`);
       } catch (_error) {
         outcomes.push(`${labels[kind]}: fallback dichiarato (caricamento non riuscito)`);
