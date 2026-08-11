@@ -1991,7 +1991,7 @@ input:focus {
   padding-block: 12px;
   border-bottom: 0;
   color: #ffffff;
-  background: var(--editor-gold);
+  background: var(--editor-navy);
 }
 
 .topbar::after {
@@ -2018,7 +2018,7 @@ input:focus {
   display: inline-flex;
   align-items: baseline;
   gap: 0.42em;
-  color: #ffffff;
+  color: var(--editor-plum-on-dark);
   font-family: "Orbitron", "Onest", ui-sans-serif, sans-serif;
   font-size: clamp(16px, 1.4vw, 21px);
   letter-spacing: 0.045em;
@@ -2032,11 +2032,12 @@ input:focus {
 }
 
 .product-title-primary {
+  color: #e4bfd5;
   font-weight: 750;
 }
 
 .product-title-secondary {
-  color: rgba(255, 255, 255, 0.72);
+  color: var(--editor-plum-on-dark);
   font-weight: 400;
   letter-spacing: 0.085em;
 }
