@@ -91,7 +91,9 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertIn(".style-transfer", stylesheet)
         self.assertIn(".builder-version", stylesheet)
         self.assertIn(".actionbar {\n  justify-content: flex-end;", stylesheet)
-        self.assertIn("background: var(--editor-gold);", stylesheet)
+        self.assertIn("background: var(--editor-navy);", stylesheet)
+        self.assertIn("color: #e4bfd5;", stylesheet)
+        self.assertIn("color: var(--editor-plum-on-dark);", stylesheet)
         self.assertNotIn("background: var(--vincos-navy);", stylesheet)
         self.assertNotIn('id="change-label"', html)
 
@@ -126,8 +128,13 @@ class ReviewEditorAssetTest(unittest.TestCase):
         workflow = (ROOT / "references" / "editorial-workflow.md").read_text(encoding="utf-8")
         visual_review = (ROOT / "references" / "visual-review.md").read_text(encoding="utf-8")
         self.assertIn("nessuna slide iniziale deve mostrare avvisi di densità o overflow", skill)
+        self.assertIn("`local-editor` è obbligatorio", skill)
+        self.assertIn("al massimo 180 caratteri", skill)
+        self.assertIn("al massimo 320 caratteri", skill)
         self.assertIn("una prima proposta già impaginabile", workflow)
+        self.assertIn("trattare le soglie come limiti rigidi", workflow)
         self.assertIn("ciascuno dei tre sistemi visivi", visual_review)
+        self.assertIn("l'apertura dell'editor è obbligatoria", visual_review)
 
     def test_vincos_logo_is_the_approved_outlined_lockup(self) -> None:
         logo = (EDITOR_DIR / "vincos-lockup-white.svg").read_text(encoding="utf-8")
