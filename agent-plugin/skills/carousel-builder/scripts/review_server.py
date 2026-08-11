@@ -26,6 +26,7 @@ MAX_BODY_BYTES = 1_000_000
 MAX_SLIDES = 50
 MAX_COMMENTS = 200
 MAX_TEXT = 20_000
+EDITOR_VERSION = "2.8.6"
 TYPOGRAPHY_DEFAULTS = {
     "cover_px": 112,
     "cover_subtitle_px": 56,
@@ -820,6 +821,83 @@ def brand_summary(manifest: dict, manifest_path: Path | None = None) -> dict:
     }
 
 
+def reusable_brand_profile(manifest: dict) -> dict:
+    """Build a portable brand profile without exposing local asset paths.
+
+    The editor can save this JSON for the next carousel.  Fonts and logos stay
+    referenced rather than embedded, exactly like the documented profile
+    format; a future brand pack can carry the corresponding files when needed.
+    """
+    brand = manifest.get("brand") if isinstance(manifest.get("brand"), dict) else {}
+    fonts = brand.get("fonts") if isinstance(brand.get("fonts"), dict) else {}
+    palette = brand.get("palette") if isinstance(brand.get("palette"), dict) else {}
+    direction = brand.get("visual_direction") if isinstance(brand.get("visual_direction"), dict) else {}
+    outro = brand.get("outro") if isinstance(brand.get("outro"), dict) else {}
+
+    profile_fonts: dict[str, dict[str, str]] = {}
+    for role in ("display", "body", "body_italic", "emphasis_italic"):
+        value = fonts.get(role)
+        if isinstance(value, dict):
+            family = _short_string(value.get("family"))
+            source = _short_string(value.get("source"))
+        else:
+            family = _short_string(value)
+            source = "fallback"
+        if family:
+            profile_fonts[role] = {
+                "family": family,
+                "source": source if source in FONT_SOURCES else "fallback",
+            }
+
+    def strings(value: object, *, limit: int = 12, item_limit: int = 500) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, str) and len(item) <= item_limit][:limit]
+
+    mode = _short_string(direction.get("mode"))
+    if mode not in {"editorial-geometric", "photographic", "illustrated-collage", "hand-drawn", "3d", "custom"}:
+        mode = "editorial-geometric"
+    internal_slides = _short_string(direction.get("internal_slides"))
+    if not internal_slides:
+        internal_slides = "clean_typographic"
+    surface_mode = _short_string(palette.get("surface_mode"))
+    if surface_mode not in {"light", "dark", "alternating"}:
+        surface_mode = "alternating"
+    copy_mode = _short_string(outro.get("copy_mode"))
+    if copy_mode not in {"generate_from_source", "fixed"}:
+        copy_mode = "generate_from_source"
+    summary = brand_summary(manifest)
+    return {
+        "profile_type": "carousel-brand",
+        "schema_version": "1.1",
+        "name": summary["name"],
+        "website": summary["website"],
+        "signature": summary["signature"],
+        "tagline": _short_string(brand.get("tagline"), limit=300),
+        "logos": {},
+        "fonts": profile_fonts,
+        "typography": normalize_typography(manifest),
+        "palette": {"surface_mode": surface_mode, **summary["palette"]},
+        "visual_direction": {
+            "mode": mode,
+            "description": _short_string(direction.get("description"), limit=1_200),
+            "references": strings(direction.get("references")),
+            "avoid": strings(direction.get("avoid")),
+            "internal_slides": internal_slides,
+        },
+        "visual_signature": {"style_system": resolved_visual_style_system(manifest)},
+        "outro": {
+            "enabled": outro.get("enabled") is not False,
+            "goal": _short_string(outro.get("goal"), limit=80) or "comment",
+            "copy_mode": copy_mode,
+            "eyebrow": _short_string(outro.get("eyebrow"), limit=300),
+            "fixed_title": _short_string(outro.get("fixed_title"), limit=1_000),
+            "fixed_body": _short_string(outro.get("fixed_body"), limit=2_000),
+        },
+        "asset_notice": "Logo e font non sono incorporati: allega gli asset o un brand pack per una portabilità completa.",
+    }
+
+
 def manifest_model(manifest_path: Path) -> dict:
     manifest = read_json(manifest_path)
     revision = manifest.get("revision", 1)
@@ -966,6 +1044,7 @@ def manifest_model(manifest_path: Path) -> dict:
     typography = normalize_typography(manifest)
     brand = brand_summary(manifest, manifest_path)
     return {
+        "editor_version": EDITOR_VERSION,
         "revision": revision,
         "workflow_state": manifest.get("workflow_state", "bozza"),
         "sequence_mode": sequence_mode,
@@ -977,6 +1056,7 @@ def manifest_model(manifest_path: Path) -> dict:
         },
         "typography": typography,
         "brand": brand,
+        "brand_profile": reusable_brand_profile(manifest),
         "cover_visual": cover_visual,
         "cover_mode": cover_visual["mode"],
         "logo_mode": normalized_logo_mode(manifest.get("logo_mode")) or "auto",

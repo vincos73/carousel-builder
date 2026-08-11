@@ -47,6 +47,8 @@ Qualunque modalità diversa da `layout` deve:
 5. produrre prima la prova visuale e soltanto dopo il batch completo, usando strutture HTML/CSS/SVG deterministiche e trattando l'immagine come asset opzionale di copertina;
 6. restituire errori e output verificabili, senza sostituire asset, font o firma strutturale in modo invisibile.
 
+Nel percorso `local-editor`, anteprima approvata e produzione devono usare lo stesso albero `.slide-preview`, gli stessi asset e lo stesso foglio di stile. La modalità di produzione può nascondere soltanto i controlli dell'editor e riposizionare la sequenza per la cattura; non può ridefinire copy, tipografia, safe area o geometria del sistema visivo. Prima di creare il PDF, confrontare automaticamente ordine, rapporto 4:5 e geometria normalizzata degli elementi dell'anteprima e della produzione. Qualsiasi differenza è bloccante.
+
 Se un renderer o adapter non soddisfa questi requisiti, usare `layout` come fallback dichiarato.
 
 ## Master, esportazione e scala tipografica
@@ -156,6 +158,7 @@ Prima della consegna verificare:
 - corrispondenza tra font richiesto, font approvato e famiglia effettivamente renderizzata;
 - corrispondenza tra testi approvati, manifest e artefatti;
 - in modalità `renderer` o `adapter`, presenza di `production.supported_style_systems` con il sistema selezionato e di `proof.style_system_verified: true`;
+- nel percorso `local-editor`, esito positivo del contratto `approved-preview-dom-v1` e parità esatta tra geometria dell'anteprima e geometria catturata per la produzione;
 - assenza di file incompleti o duplicati presentati come finali.
 
 Se un controllo fallisce, conservare gli output validi, mantenere lo stato precedente e offrire ripetizione o fallback. Non avanzare a `consegnato`.

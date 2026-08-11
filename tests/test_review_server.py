@@ -189,6 +189,28 @@ class ManifestModelTest(unittest.TestCase):
         self.assertFalse(brand["logos"]["on_light"]["available"])
         self.assertNotIn("assets/logo.svg", json.dumps(brand))
 
+    def test_exposes_a_portable_brand_profile_without_local_asset_paths(self) -> None:
+        manifest = base_manifest()
+        manifest.update({"visual_style_system": "editorial-halftone"})
+        manifest["brand"] = {
+            "name": "Studio",
+            "website": "https://studio.example",
+            "logos": {"on_light": "assets/logo-dark.svg", "on_dark": "assets/logo-light.svg"},
+            "fonts": {
+                "display": {"family": "Studio Display", "file": "assets/display.ttf", "source": "uploaded"},
+                "body": {"family": "Studio Text", "file": "assets/body.ttf", "source": "uploaded"},
+            },
+            "visual_direction": {"mode": "custom", "description": "Pulito", "internal_slides": "clean_typographic"},
+        }
+        model = self.model(manifest)
+        profile = model["brand_profile"]
+        self.assertEqual(model["editor_version"], "2.8.6")
+        self.assertEqual(profile["profile_type"], "carousel-brand")
+        self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
+        self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
+        self.assertEqual(profile["logos"], {})
+        self.assertNotIn("assets/", json.dumps(profile))
+
     def test_exposes_safe_logo_metadata_without_local_paths(self) -> None:
         logo_path = self.workdir / "logo.png"
         logo_path.write_bytes(b"logo")

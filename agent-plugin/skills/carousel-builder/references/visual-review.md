@@ -21,6 +21,8 @@ python3 <skill>/scripts/review_server.py <manifest.json> --session-dir <session-
 
 Il server deve restare vincolato a `127.0.0.1`, usare un token casuale e servire soltanto gli asset inclusi e il modello editoriale ricavato dal manifest.
 
+La modalità `?render=production` è riservata all'export dopo l'approvazione visuale. Ignora le bozze del browser, carica l'ultimo manifest approvato, nasconde soltanto l'interfaccia di revisione e pubblica il contratto `approved-preview-dom-v1`. L'esportatore deve acquisire direttamente ogni `.slide-preview` e rifiutare il PDF se la geometria normalizzata non coincide con quella della normale anteprima aperta in una sessione pulita.
+
 ## Interazioni dell'editor
 
 L'editor consente di:
