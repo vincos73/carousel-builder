@@ -2,7 +2,7 @@
 
 Il modello `/api/session` espone `visual_proofs` come oggetto calcolato dal server con `selected_style_system`, identità condivisa e tre opzioni. Non persistere questo oggetto nel manifest: inviare la scelta come `visual_style_system` e applicarla con `scripts/apply_review.py`.
 
-Usare questa modalità soltanto quando Python 3 e un browser locale sono già disponibili. Non installare dipendenze. Il browser non deve scrivere direttamente nel manifest: deve inviare un batch strutturato che l'agente applica e controlla.
+Usare questa modalità soltanto quando Python 3.10 o successivo e un browser locale sono già disponibili. Non installare dipendenze. Il browser non deve scrivere direttamente nel manifest: deve inviare un batch strutturato che l'agente applica e controlla.
 
 ## Preparazione
 
@@ -16,10 +16,12 @@ python3 <skill>/scripts/review_server.py <manifest.json> --session-dir <session-
 
 4. Leggere dalla prima riga JSON l'indirizzo locale e aprirlo immediatamente nel browser disponibile: quando le capacità locali esistono, l'apertura dell'editor è obbligatoria e non va sostituita da una domanda o da un'anteprima conversazionale. Prima di consegnarlo all'utente, controllare copertina e tutte le card in ciascuno dei tre sistemi visivi, anche alla larghezza di 480 px. Se la bozza iniziale mostra un avviso di soglia o overflow, correggere il copy nel manifest, aggiornare la revisione se necessario e ripetere il controllo finché tutte le prove sono pulite.
 5. Mantenere attivo il processo mentre l'utente revisiona e restare in ascolto del suo output in ogni checkpoint dell'editor: correzione o approvazione di profilo e testi, prova visuale e nuova prova dopo una modifica. Non concludere il turno subito dopo aver aperto l'editor e non chiedere all'utente di tornare in chat per scrivere «fatto».
-6. Attendere l'evento del server con il meccanismo di ripresa del processo disponibile nella sessione. Usare attese non superiori a 50 secondi per volta, così da poter inviare un aggiornamento conciso almeno ogni 60 secondi. Dopo ogni attesa senza output, leggere `<session-dir>/session-state.json`: se `last_feedback_id` è valorizzato e diverso da `applied_feedback_id`, usare `last_action` e `<session-dir>/feedback.json` come segnale durevole del batch anche quando la notifica sul canale del processo non è stata propagata. Ripetere l'attesa e il controllo finché arriva un batch, l'utente interrompe il lavoro o il task non può più restare attivo.
+6. Attendere l'evento del server con il meccanismo di ripresa del processo disponibile nella sessione. Usare attese non superiori a 50 secondi per volta, così da poter inviare un aggiornamento conciso almeno ogni 60 secondi. Dopo ogni attesa senza output, leggere `<session-dir>/session-state.json`: se `last_feedback_id` è valorizzato e diverso da `applied_feedback_id`, usare `last_action` e `last_feedback_path` come segnale durevole del batch anche quando la notifica sul canale del processo non è stata propagata. Per uno stato legacy privo del percorso usare `<session-dir>/feedback.json`. Ripetere l'attesa e il controllo finché arriva un batch, l'utente interrompe il lavoro o il task non può più restare attivo.
 7. Considerare l'output del processo una notifica immediata e `session-state.json` la fonte durevole per il recupero. Se la sessione non consente un'attesa attiva sufficientemente lunga né la lettura dello stato, dichiarare il limite prima di consegnare l'editor e usare come fallback la ripresa manuale in chat.
 
 Il server deve restare vincolato a `127.0.0.1`, usare un token casuale e servire soltanto gli asset inclusi e il modello editoriale ricavato dal manifest.
+
+`/api/session` espone anche `render_fingerprint`, calcolato sullo snapshot visuale, sul checkpoint grossolano di approvazione e sui byte effettivi di cover, loghi e font. Per un'azione `approve` il browser invia questo valore e `base_workflow_state` come eco della base mostrata; il server deriva `approval_stage` dallo stato corrente, calcola il fingerprint candidato dopo le modifiche e lo salva nel batch. Il client non decide autonomamente lo stage. Il passaggio da `bozza` a `testi_approvati` cambia il checkpoint e invalida un click rimasto aperto, mentre gli stati successivi alla prova visuale condividono lo stesso checkpoint. `/api/status` espone stato e checkpoint anche quando la revisione numerica non cambia, così l'editor può ricaricare una base pulita o preservare una bozza locale prima di bloccarla.
 
 La modalità `?render=production` è riservata all'export dopo l'approvazione visuale. Ignora le bozze del browser, carica l'ultimo manifest approvato, nasconde soltanto l'interfaccia di revisione e pubblica il contratto `approved-preview-dom-v1`. L'esportatore deve acquisire direttamente ogni `.slide-preview` e rifiutare il PDF se la geometria normalizzata non coincide con quella della normale anteprima aperta in una sessione pulita.
 
@@ -54,7 +56,7 @@ Mostrare un solo messaggio per conflitto. Se la stessa locuzione ha più trattam
 
 ## Ricezione e applicazione
 
-Quando il server segnala un batch, riprendere automaticamente il lavoro e leggere `<session-dir>/feedback.json`. Prima di applicarlo controllare che:
+Quando il server segnala un batch, riprendere automaticamente il lavoro e leggere `archive_path`, oppure `last_feedback_path` dallo stato quando la notifica non è arrivata. Usare `<session-dir>/feedback.json` soltanto come alias compatibile con le sessioni precedenti. Prima di applicarlo controllare che:
 
 - `session-state.json` associ la cartella di sessione allo stesso manifest richiesto;
 - `base_revision` corrisponda alla revisione corrente del manifest;
@@ -65,10 +67,10 @@ Quando il server segnala un batch, riprendere automaticamente il lavoro e legger
 Applicare le modifiche dirette con:
 
 ```text
-python3 <skill>/scripts/apply_review.py <manifest.json> <session-dir>/feedback.json --session-dir <session-dir>
+python3 <skill>/scripts/apply_review.py <manifest.json> <feedback-path> --session-dir <session-dir>
 ```
 
-Lo script deve accettare soltanto il `feedback.json` appartenente alla cartella di sessione e al manifest associato, aggiornare soltanto i campi editoriali consentiti, preservare un backup atomico nella cartella di sessione, incrementare `revision` quando cambia il testo o l'ordine e non modificare automaticamente `workflow_state`.
+Lo script deve accettare soltanto l'alias `feedback.json` o un batch archiviato in `feedback-batches/` appartenente alla cartella di sessione e al manifest associato. Quando esiste il batch append-only, l'alias deve coincidere esattamente. Lo script aggiorna soltanto i campi editoriali consentiti, preserva un backup atomico nella cartella di sessione, incrementa `revision` quando cambia il testo o l'ordine e non modifica automaticamente `workflow_state`. Per `approval_stage: visual_proof` ricontrolla il fingerprint dopo l'applicazione e lega atomicamente `proof.approved` al render finale; per `profile_text` lascia la proof non approvata.
 
 Lo script riallinea inoltre i riferimenti derivati dai testi:
 
@@ -76,7 +78,7 @@ Lo script riallinea inoltre i riferimenti derivati dai testi:
 - ricostruisce `accessibility.reading_order` secondo la sequenza risultante;
 - elimina da `proof.slide_ids` gli ID delle slide non più presenti e li elenca in `proof_slide_ids_pruned`.
 
-Leggere sempre `warnings`, `stale_alt_text` e `stale_transcript` nell'output. Lo script non riscrive i testi descrittivi: gli `alt_text` delle slide modificate e la trascrizione di accessibilità restano invariati e vanno rigenerati dall'agente prima della produzione. Se il batch invalida una prova già approvata, lo script lo segnala senza modificare `proof.approved`.
+Leggere sempre `warnings`, `stale_alt_text` e `stale_transcript` nell'output. Lo script non riscrive i testi descrittivi: gli `alt_text` delle slide modificate e la trascrizione di accessibilità restano invariati e vanno rigenerati dall'agente prima della produzione. Se il batch cambia contenuto, ordine, sistema visivo o modalità del logo, lo script invalida atomicamente `proof.approved` e segnala che serve una nuova prova.
 
 L'editor carica separatamente `display` per copertina e titoli e `body` per testi e metadati. Nei profili legacy usa `sans` per entrambi. Risolve `emphasis_italic` secondo [brand-profile.md](brand-profile.md), ne mostra il nome nell'interfaccia e non sintetizza un corsivo mancante. Espone inoltre `cover_subtitle` come campo opzionale e lo rende nello stesso ruolo corsivo.
 
@@ -88,7 +90,7 @@ Se `action` è `approve`, trattarla come richiesta esplicita di approvazione. Im
 
 ## Ripresa e chiusura
 
-Il browser conserva una bozza locale finché il batch non viene inviato. Il server conserva l'ultimo batch nella cartella di sessione, riemette all'avvio un batch ancora pendente e rifiuta un secondo processo sulla stessa sessione. Se il processo si interrompe, riavviarlo con gli stessi manifest e cartella di sessione: un journal completa l'eventuale commit interrotto di feedback e stato prima di accettare nuovi invii.
+Il browser conserva la bozza e l'ID idempotente prima di inviare il batch. Ogni scheda usa una chiave primaria distinta e mantiene le recovery append-only condivise; al primo avvio la 2.8.9 migra senza perdita la chiave unica usata dalla 2.8.8. Prima della POST crea inoltre una copia durevole del pending, rimossa soltanto quando lo stesso `feedback_id` risulta applicato. Il server conserva ogni batch in `feedback-batches/`, mantiene `feedback.json` come alias verificato dell'ultimo, riemette all'avvio un batch ancora pendente e rifiuta un secondo processo sulla stessa sessione. Se la risposta HTTP si perde, il browser riconcilia il proprio ID con lo stato senza duplicare l'invio. Un pending appartenente a un'altra scheda non deve cancellare le modifiche locali: l'editor le conserva come recovery esportabile prima di ricaricare. Se il processo si interrompe, riavviarlo con gli stessi manifest e cartella di sessione: un journal completa l'eventuale commit interrotto di feedback e stato prima di accettare nuovi invii.
 
 Dopo aver applicato il batch, lo script registra l'esito in `session-state.json`; l'editor rileva il nuovo stato e ricarica il manifest aggiornato. L'editor confronta anche la revisione del manifest con quella che sta mostrando: quando l'agente incrementa `revision` risolvendo i commenti, la pagina si aggiorna da sola se non ci sono modifiche locali in sospeso, altrimenti blocca l'invio e propone il ricarico. Non chiedere all'utente di aggiornare la pagina a mano. Chiudere il processo del server quando la revisione è terminata o l'utente interrompe il lavoro.
 

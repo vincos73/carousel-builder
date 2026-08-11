@@ -1,6 +1,83 @@
 (() => {
   "use strict";
 
+  const REQUIRED_PALETTE_COLORS = [
+    ["background_light", "sfondo chiaro"],
+    ["background_dark", "sfondo scuro"],
+    ["text_on_light", "testo su fondo chiaro"],
+    ["text_on_dark", "testo su fondo scuro"],
+    ["accent", "accento"],
+  ];
+
+  function isHexColor(value) {
+    return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
+  }
+
+  function mergePreviewBrand(profileValue, proofValue) {
+    const profile = profileValue && typeof profileValue === "object" ? profileValue : {};
+    const proof = proofValue && typeof proofValue === "object" ? proofValue : {};
+    const profilePalette = profile.palette && typeof profile.palette === "object" ? profile.palette : {};
+    const proofPalette = proof.palette && typeof proof.palette === "object" ? proof.palette : {};
+    const profileDeclared = profile.palette_declared && typeof profile.palette_declared === "object" ? profile.palette_declared : {};
+    const proofDeclared = proof.palette_declared && typeof proof.palette_declared === "object" ? proof.palette_declared : {};
+    const paletteDeclared = { ...profileDeclared };
+    for (const [field, declared] of Object.entries(proofDeclared)) paletteDeclared[field] = declared === true;
+    for (const field of Object.keys(proofPalette)) {
+      if (!Object.prototype.hasOwnProperty.call(proofDeclared, field)) paletteDeclared[field] = false;
+    }
+    return {
+      ...profile,
+      ...proof,
+      palette: { ...profilePalette, ...proofPalette },
+      palette_declared: paletteDeclared,
+      font_assets: { ...(profile.font_assets || {}), ...(proof.font_assets || {}) },
+      logos: { ...(profile.logos || {}), ...(proof.logos || {}) },
+    };
+  }
+
+  function collectPaletteDeclarationIssues(brandValue) {
+    const brand = brandValue && typeof brandValue === "object" ? brandValue : {};
+    const palette = brand.palette && typeof brand.palette === "object" ? brand.palette : {};
+    const declared = brand.palette_declared && typeof brand.palette_declared === "object" ? brand.palette_declared : {};
+    const issues = [];
+    for (const [field, label] of REQUIRED_PALETTE_COLORS) {
+      if (declared[field] === true && isHexColor(palette[field])) continue;
+      const reason = declared[field] === true
+        ? `${label} deve usare il formato #RRGGBB`
+        : `${label} deve essere dichiarato esplicitamente nel brand kit`;
+      issues.push({
+        key: `palette-${field}`,
+        message: `Palette non valida: ${reason}. Il fallback dell’anteprima non può essere approvato.`,
+        targetId: "visual-system-picker",
+      });
+    }
+    return issues;
+  }
+
+  function geometryPartIsHidden(node, style) {
+    return Boolean(
+      node?.hidden
+      || style?.display === "none"
+      || style?.visibility === "hidden"
+      || style?.visibility === "collapse"
+      || (typeof node?.getClientRects === "function" && node.getClientRects().length === 0)
+    );
+  }
+
+  function tabDraftStorageKey(sharedKey, tabId) {
+    return `${sharedKey}:tab:${tabId}`;
+  }
+
+  if (typeof module === "object" && module.exports) {
+    module.exports = {
+      collectPaletteDeclarationIssues,
+      geometryPartIsHidden,
+      mergePreviewBrand,
+      tabDraftStorageKey,
+    };
+    return;
+  }
+
   if (window.location.protocol === "file:") {
     const loading = document.querySelector("#loading");
     const badge = document.querySelector("#workflow-badge");
@@ -25,13 +102,20 @@
   const queryParams = new URLSearchParams(window.location.search);
   const token = queryParams.get("token") || "";
   const productionRender = queryParams.get("render") === "production";
+  const parityCapture = queryParams.get("capture") === "parity";
   if (productionRender) document.documentElement.classList.add("production-render");
+  if (parityCapture) document.documentElement.dataset.captureTarget = "true";
   const api = (path) => {
     const url = new URL(path, window.location.origin);
     if (token) url.searchParams.set("token", token);
     return url.toString();
   };
-  const storageKey = `carousel-builder:${token}`;
+  const sharedStorageKey = `carousel-builder:${token}`;
+  const tabSessionKey = `${sharedStorageKey}:tab-id`;
+  const tabId = productionRender ? "production" : getOrCreateTabId(tabSessionKey);
+  const storageKey = tabDraftStorageKey(sharedStorageKey, tabId);
+  const legacyClaimKey = `${sharedStorageKey}:legacy-claim`;
+  const legacyVisualSystemStorageKey = `${sharedStorageKey}:visual-system`;
 
   const elements = {
     loading: document.querySelector("#loading"),
@@ -54,8 +138,6 @@
     overallNote: document.querySelector("#overall-note"),
     commentsList: document.querySelector("#comments-list"),
     commentCount: document.querySelector("#comment-count"),
-    dirtyDot: document.querySelector("#dirty-dot"),
-    changeLabel: document.querySelector("#change-label"),
     undoButton: document.querySelector("#undo-button"),
     resetButton: document.querySelector("#reset-button"),
     sendButton: document.querySelector("#send-button"),
@@ -83,6 +165,11 @@
     approvalDialogCopy: document.querySelector("#approval-dialog-copy"),
     visualSystemPicker: document.querySelector("#visual-system-picker"),
     visualSystemDescription: document.querySelector("#visual-system-description"),
+    validationSummary: document.querySelector("#validation-summary"),
+    validationSummaryCopy: document.querySelector("#validation-summary-copy"),
+    validationList: document.querySelector("#validation-list"),
+    retrySubmitButton: document.querySelector("#retry-submit-button"),
+    exportRecoveryButton: document.querySelector("#export-recovery-button"),
   };
 
   let model = null;
@@ -94,10 +181,24 @@
   let overallNote = "";
   let pendingSelection = null;
   let awaitingFeedbackId = null;
+  let pendingSubmission = null;
+  let recoverySubmissions = [];
+  let recoveryDrafts = [];
+  let foreignFeedbackId = null;
+  let submissionError = "";
   let staleRevision = null;
+  let staleWorkflowState = null;
+  let staleApprovalCheckpoint = null;
   let toastTimer = null;
   let observer = null;
   let resizeTimer = null;
+  let storageTimer = null;
+  let previewMeasureFrame = null;
+  let measureAllPreviews = false;
+  let pollTimer = null;
+  let pollInFlight = false;
+  let pollFailures = 0;
+  let pollAbortController = null;
   let currentSlideId = null;
   let viewedSlideIds = new Set();
   let pointerDrag = null;
@@ -105,7 +206,16 @@
   let logoMode = "auto";
   let undoState = null;
   let previewContractRun = 0;
+  let validationMode = false;
+  let activeValidationIssues = [];
   const fitWarnings = new Map();
+  const pendingPreviewIds = new Set();
+  const fontLoadCache = new Map();
+  const loadedFontKeys = new Set();
+
+  const POLL_BASE_DELAY = 2000;
+  const POLL_MAX_DELAY = 30000;
+  const REQUEST_TIMEOUT = 8000;
 
   const visualSystems = [
     {
@@ -142,6 +252,7 @@
     pubblicato: "Pubblicato",
     published: "Pubblicato",
   };
+
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
   }
@@ -200,8 +311,10 @@
   function safeStorageSet(key, value) {
     try {
       localStorage.setItem(key, value);
+      return true;
     } catch (_error) {
       // Editing remains usable when browser storage is unavailable.
+      return false;
     }
   }
 
@@ -211,6 +324,378 @@
     } catch (_error) {
       // A stale local draft is less harmful than interrupting a review.
     }
+  }
+
+  function getOrCreateTabId(key) {
+    try {
+      const saved = sessionStorage.getItem(key);
+      if (isFeedbackId(saved)) return saved;
+      const created = createFeedbackId();
+      sessionStorage.setItem(key, created);
+      return created;
+    } catch (_error) {
+      // The in-memory id still isolates this page even when sessionStorage is disabled.
+      return createFeedbackId();
+    }
+  }
+
+  function createFeedbackId() {
+    if (typeof crypto?.randomUUID === "function") return crypto.randomUUID();
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = [...bytes].map((value) => value.toString(16).padStart(2, "0"));
+    return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
+  }
+
+  function isFeedbackId(value) {
+    return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  }
+
+  function isPendingSubmission(value) {
+    return Boolean(
+      value
+      && isFeedbackId(value.feedback_id)
+      && value.payload?.feedback_id === value.feedback_id
+      && value.payload?.action === value.action
+      && ["feedback", "approve"].includes(value.action),
+    );
+  }
+
+  function isRecoverySubmission(value) {
+    return Boolean(
+      value
+      && value.schema === "carousel-builder-feedback-recovery-v1"
+      && isFeedbackId(value.feedback_id)
+      && value.payload?.feedback_id === value.feedback_id
+      && ["feedback", "approve"].includes(value.action)
+      && value.payload?.action === value.action,
+    );
+  }
+
+  function isRecoveryDraft(value) {
+    return Boolean(
+      value
+      && value.schema === "carousel-builder-draft-recovery-v1"
+      && typeof value.recovery_id === "string"
+      && value.recovery_id
+      && Number.isInteger(value.base_revision)
+      && Array.isArray(value.draft?.slides),
+    );
+  }
+
+  function isAppliedRecovery(value) {
+    return Boolean(
+      value
+      && value.schema === "carousel-builder-feedback-applied-v1"
+      && isFeedbackId(value.feedback_id),
+    );
+  }
+
+  function recoveryStorageKey(kind, identifier) {
+    return `${sharedStorageKey}:recovery:${kind}:${identifier}`;
+  }
+
+  function persistDedicatedRecovery(kind, identifier, recovery) {
+    const key = recoveryStorageKey(kind, identifier);
+    if (safeStorageGet(key) !== null) return true;
+    return safeStorageSet(key, JSON.stringify(recovery));
+  }
+
+  function recoveryWasApplied(feedbackId) {
+    if (!isFeedbackId(feedbackId)) return false;
+    try {
+      return isAppliedRecovery(JSON.parse(safeStorageGet(recoveryStorageKey("applied", feedbackId)) || "null"));
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function markRecoveryApplied(feedbackId) {
+    if (!isFeedbackId(feedbackId)) return;
+    persistDedicatedRecovery("applied", feedbackId, {
+      schema: "carousel-builder-feedback-applied-v1",
+      feedback_id: feedbackId,
+      applied_at: new Date().toISOString(),
+    });
+    recoverySubmissions = recoverySubmissions.filter((item) => item.feedback_id !== feedbackId);
+    safeStorageRemove(recoveryStorageKey("submission", feedbackId));
+  }
+
+  function loadDedicatedRecoveries() {
+    const prefix = `${sharedStorageKey}:recovery:`;
+    try {
+      const records = [];
+      const appliedIds = new Set();
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (!key?.startsWith(prefix)) continue;
+        const recovery = JSON.parse(localStorage.getItem(key) || "null");
+        if (isAppliedRecovery(recovery)) appliedIds.add(recovery.feedback_id);
+        else records.push(recovery);
+      }
+      recoverySubmissions = recoverySubmissions.filter((item) => !appliedIds.has(item.feedback_id));
+      for (const recovery of records) {
+        if (isRecoverySubmission(recovery) && !appliedIds.has(recovery.feedback_id)) addRecoverySubmission(recovery, { persist: false });
+        else if (isRecoveryDraft(recovery)) addRecoveryDraft(recovery, { persist: false });
+      }
+    } catch (_error) {
+      // The shared draft still retains recovery records when storage enumeration is unavailable.
+    }
+  }
+
+  function recoveryFromPending(pending, reason, savedDraft = null, serverError = "") {
+    const source = savedDraft && typeof savedDraft === "object" ? savedDraft : {};
+    return {
+      schema: "carousel-builder-feedback-recovery-v1",
+      reason,
+      feedback_id: pending.feedback_id,
+      action: pending.action,
+      base_revision: pending.payload.base_revision,
+      base_workflow_state: pending.payload.base_workflow_state || source.base_workflow_state || "",
+      base_approval_checkpoint: source.base_approval_checkpoint || "",
+      detected_revision: model?.revision ?? null,
+      preserved_at: new Date().toISOString(),
+      server_error: serverError,
+      payload: clone(pending.payload),
+      draft: {
+        base_revision: source.base_revision ?? pending.payload.base_revision,
+        slides: clone(source.slides || pending.payload.slides || []),
+        comments: clone(source.comments || []),
+        slide_notes: clone(source.slide_notes || {}),
+        brand_note: typeof source.brand_note === "string" ? source.brand_note : "",
+        overall_note: typeof source.overall_note === "string" ? source.overall_note : pending.payload.overall_note || "",
+        logo_mode: source.logo_mode || pending.payload.logo_mode || "auto",
+        visual_style_system: source.visual_style_system || pending.payload.visual_style_system || "",
+        saved_at: source.saved_at || "",
+      },
+    };
+  }
+
+  function addRecoverySubmission(recovery, { persist = true } = {}) {
+    if (!isRecoverySubmission(recovery)) return;
+    if (recoveryWasApplied(recovery.feedback_id)) return;
+    if (recoverySubmissions.some((item) => item.feedback_id === recovery.feedback_id)) return;
+    recoverySubmissions.push(recovery);
+    if (persist) persistDedicatedRecovery("submission", recovery.feedback_id, recovery);
+  }
+
+  function addRecoveryDraft(recovery, { persist = true } = {}) {
+    if (!isRecoveryDraft(recovery)) return;
+    const duplicate = recoveryDrafts.some((item) => (
+      item.base_revision === recovery.base_revision
+      && item.related_feedback_id === recovery.related_feedback_id
+      && JSON.stringify(item.draft) === JSON.stringify(recovery.draft)
+    ));
+    if (duplicate) return;
+    recoveryDrafts.push(recovery);
+    if (persist) persistDedicatedRecovery("draft", recovery.recovery_id, recovery);
+  }
+
+  function preserveCurrentDraft(reason, relatedFeedbackId = "") {
+    if (!model || computeChangeCount() === 0) return;
+    addRecoveryDraft({
+      schema: "carousel-builder-draft-recovery-v1",
+      recovery_id: createFeedbackId(),
+      reason,
+      related_feedback_id: relatedFeedbackId,
+      base_revision: model.revision,
+      base_workflow_state: model.workflow_state || "",
+      base_approval_checkpoint: model.approval_checkpoint || "",
+      detected_revision: model.revision,
+      preserved_at: new Date().toISOString(),
+      draft: {
+        slides: normalizedSlides(draftSlides),
+        comments: clone(selectionComments),
+        slide_notes: clone(slideNotes),
+        brand_note: brandNote,
+        overall_note: overallNote,
+        logo_mode: logoMode,
+        visual_style_system: selectedVisualSystem,
+      },
+    });
+  }
+
+  function recoveryDraftFromSaved(saved, reason) {
+    return {
+      schema: "carousel-builder-draft-recovery-v1",
+      recovery_id: createFeedbackId(),
+      reason,
+      related_feedback_id: "",
+      base_revision: saved.base_revision,
+      base_workflow_state: saved.base_workflow_state || "",
+      base_approval_checkpoint: saved.base_approval_checkpoint || "",
+      detected_revision: model?.revision ?? null,
+      preserved_at: new Date().toISOString(),
+      draft: {
+        slides: clone(Array.isArray(saved.slides) ? saved.slides : []),
+        comments: clone(Array.isArray(saved.comments) ? saved.comments : []),
+        slide_notes: clone(saved.slide_notes && typeof saved.slide_notes === "object" ? saved.slide_notes : {}),
+        brand_note: typeof saved.brand_note === "string" ? saved.brand_note : "",
+        overall_note: typeof saved.overall_note === "string" ? saved.overall_note : "",
+        logo_mode: saved.logo_mode || saved.logo_preference || "auto",
+        visual_style_system: saved.visual_style_system || supportedVisualSystem(safeStorageGet(visualSystemStorageKey())) || "",
+      },
+    };
+  }
+
+  function preservePendingSubmission(reason, serverError = "", savedDraft = null) {
+    if (!isPendingSubmission(pendingSubmission)) return;
+    addRecoverySubmission(recoveryFromPending(pendingSubmission, reason, savedDraft, serverError));
+  }
+
+  function currentDraftRecoverySource() {
+    return {
+      base_revision: model?.revision ?? null,
+      base_workflow_state: model?.workflow_state || "",
+      base_approval_checkpoint: model?.approval_checkpoint || "",
+      slides: normalizedSlides(draftSlides),
+      comments: clone(selectionComments),
+      slide_notes: clone(slideNotes),
+      brand_note: brandNote,
+      overall_note: overallNote,
+      logo_mode: logoMode,
+      visual_style_system: selectedVisualSystem,
+      saved_at: new Date().toISOString(),
+    };
+  }
+
+  function migrateLegacyStorageLocked() {
+    const raw = safeStorageGet(sharedStorageKey);
+    if (raw === null) return;
+    let saved;
+    try {
+      saved = JSON.parse(raw);
+    } catch (_error) {
+      // Keep an unreadable legacy value in place rather than deleting the only copy.
+      return;
+    }
+    if (!saved || typeof saved !== "object") return;
+
+    const legacyVisualSystem = supportedVisualSystem(safeStorageGet(legacyVisualSystemStorageKey));
+    if (legacyVisualSystem && !saved.visual_style_system) saved.visual_style_system = legacyVisualSystem;
+    let recoveriesReady = true;
+    const legacyPending = isPendingSubmission(saved.pending_submission) ? saved.pending_submission : null;
+    if (legacyPending && !recoveryWasApplied(legacyPending.feedback_id)) {
+      const recovery = recoveryFromPending(legacyPending, "legacy-primary-migration", saved);
+      recoveriesReady = persistDedicatedRecovery("submission", legacyPending.feedback_id, recovery) && recoveriesReady;
+    }
+    if (saved.editable_draft !== false && Number.isInteger(saved.base_revision) && Array.isArray(saved.slides)) {
+      const recovery = recoveryDraftFromSaved(saved, "legacy-primary-migration");
+      recoveriesReady = persistDedicatedRecovery("draft", recovery.recovery_id, recovery) && recoveriesReady;
+    }
+
+    let claim = null;
+    try {
+      claim = JSON.parse(safeStorageGet(legacyClaimKey) || "null");
+    } catch (_error) {
+      claim = null;
+    }
+    const claimedPrimaryExists = typeof claim?.primary_storage_key === "string" && safeStorageGet(claim.primary_storage_key) !== null;
+    if (!isFeedbackId(claim?.tab_id) || !claimedPrimaryExists) {
+      claim = {
+        schema: "carousel-builder-legacy-claim-v1",
+        tab_id: tabId,
+        primary_storage_key: storageKey,
+        claimed_at: new Date().toISOString(),
+      };
+      if (!safeStorageSet(legacyClaimKey, JSON.stringify(claim))) return;
+    }
+    const ownsLegacyDraft = claim.tab_id === tabId && claim.primary_storage_key === storageKey;
+    const primaryReady = !ownsLegacyDraft || safeStorageGet(storageKey) !== null || safeStorageSet(storageKey, raw);
+    const claimedVisualSystemKey = `${claim.primary_storage_key}:visual-system`;
+    const visualSystemReady = !legacyVisualSystem
+      || safeStorageGet(claimedVisualSystemKey) !== null
+      || safeStorageSet(claimedVisualSystemKey, legacyVisualSystem);
+    if (recoveriesReady && primaryReady && visualSystemReady) {
+      safeStorageRemove(sharedStorageKey);
+      safeStorageRemove(legacyVisualSystemStorageKey);
+    }
+  }
+
+  async function migrateLegacyStorage() {
+    const lockName = `${sharedStorageKey}:legacy-migration`;
+    if (navigator.locks?.request) {
+      await navigator.locks.request(lockName, () => migrateLegacyStorageLocked());
+      return;
+    }
+    migrateLegacyStorageLocked();
+  }
+
+  async function fetchJson(path, options = {}, timeout = REQUEST_TIMEOUT) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeout);
+    const externalSignal = options.signal;
+    const abortFromExternal = () => controller.abort();
+    externalSignal?.addEventListener("abort", abortFromExternal, { once: true });
+    try {
+      const response = await fetch(api(path), { ...options, signal: controller.signal });
+      let data = {};
+      try {
+        data = await response.json();
+      } catch (_error) {
+        data = {};
+      }
+      return { response, data };
+    } finally {
+      window.clearTimeout(timeoutId);
+      externalSignal?.removeEventListener("abort", abortFromExternal);
+    }
+  }
+
+  function captureFocus(container) {
+    const node = document.activeElement;
+    if (!node || !container?.contains(node)) return null;
+    return {
+      id: node.id || "",
+      slideId: node.closest?.(".slide-row")?.dataset.slideId || "",
+      action: node.dataset?.action || "",
+      sequenceSlide: node.dataset?.sequenceSlide || "",
+      visualSystem: node.dataset?.visualSystem || "",
+      selectionStart: typeof node.selectionStart === "number" ? node.selectionStart : null,
+      selectionEnd: typeof node.selectionEnd === "number" ? node.selectionEnd : null,
+    };
+  }
+
+  function restoreFocus(snapshot, container = document) {
+    if (!snapshot) return;
+    let target = snapshot.id ? document.getElementById(snapshot.id) : null;
+    if (!target && snapshot.slideId && snapshot.action) {
+      target = container.querySelector?.(`[data-slide-id="${selectorValue(snapshot.slideId)}"] [data-action="${selectorValue(snapshot.action)}"]`);
+    }
+    if (!target && snapshot.sequenceSlide) {
+      target = container.querySelector?.(`[data-sequence-slide="${selectorValue(snapshot.sequenceSlide)}"]`);
+    }
+    if (!target && snapshot.visualSystem) {
+      target = container.querySelector?.(`[data-visual-system="${selectorValue(snapshot.visualSystem)}"]`);
+    }
+    if (!target || target.disabled) return;
+    target.focus({ preventScroll: true });
+    if (snapshot.selectionStart !== null && typeof target.setSelectionRange === "function") {
+      target.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
+    }
+  }
+
+  function schedulePreviewMeasure(slideId = null) {
+    if (slideId) pendingPreviewIds.add(slideId);
+    else measureAllPreviews = true;
+    if (previewMeasureFrame !== null) return;
+    previewMeasureFrame = window.requestAnimationFrame(() => {
+      previewMeasureFrame = null;
+      const targets = measureAllPreviews ? null : new Set(pendingPreviewIds);
+      measureAllPreviews = false;
+      pendingPreviewIds.clear();
+      measurePreviews(targets);
+    });
+  }
+
+  function flushPreviewMeasurements() {
+    if (previewMeasureFrame !== null) window.cancelAnimationFrame(previewMeasureFrame);
+    previewMeasureFrame = null;
+    measureAllPreviews = false;
+    pendingPreviewIds.clear();
+    measurePreviews();
   }
 
   function showToast(message, error = false) {
@@ -225,7 +710,7 @@
   }
 
   function safeColor(value, fallback) {
-    return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+    return isHexColor(value) ? value : fallback;
   }
 
   function relativeLuminance(hex) {
@@ -370,14 +855,7 @@
   function previewBrand() {
     const profile = model?.brand && typeof model.brand === "object" ? model.brand : {};
     const proofBrand = selectedVisualProof()?.brand;
-    if (!proofBrand || typeof proofBrand !== "object") return profile;
-    return {
-      ...profile,
-      ...proofBrand,
-      palette: { ...(profile.palette || {}), ...(proofBrand.palette || {}) },
-      font_assets: { ...(profile.font_assets || {}), ...(proofBrand.font_assets || {}) },
-      logos: { ...(profile.logos || {}), ...(proofBrand.logos || {}) },
-    };
+    return mergePreviewBrand(profile, proofBrand);
   }
 
   function resolveVisualSystem() {
@@ -390,8 +868,9 @@
     return supportedVisualSystem(modelValue) || "editorial-frame";
   }
 
-  function renderVisualSystemPicker() {
+  function renderVisualSystemPicker({ focusSystem = "" } = {}) {
     if (!elements.visualSystemPicker) return;
+    const focusSnapshot = captureFocus(elements.visualSystemPicker);
     const active = visualSystemDefinition(visualSystems.find((system) => system.id === selectedVisualSystem) || visualSystems[0]);
     elements.visualSystemPicker.replaceChildren();
     elements.visualSystemPicker.dataset.activeSystem = active.id;
@@ -404,27 +883,46 @@
       button.dataset.visualSystem = definition.id;
       button.setAttribute("role", "radio");
       button.setAttribute("aria-checked", String(selected));
+      button.tabIndex = selected ? 0 : -1;
       button.setAttribute("aria-label", `${definition.label}. ${definition.description}`);
       button.addEventListener("click", () => setVisualSystem(definition.id));
+      button.addEventListener("keydown", (event) => {
+        const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"];
+        if (!keys.includes(event.key)) return;
+        event.preventDefault();
+        const currentIndex = visualSystems.findIndex((candidate) => candidate.id === definition.id);
+        const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+        const nextIndex = event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? visualSystems.length - 1
+            : (currentIndex + delta + visualSystems.length) % visualSystems.length;
+        setVisualSystem(visualSystems[nextIndex].id, { focus: true });
+      });
       elements.visualSystemPicker.append(button);
+    }
+    const requestedFocus = focusSystem || focusSnapshot?.visualSystem;
+    if (requestedFocus) {
+      elements.visualSystemPicker.querySelector(`[data-visual-system="${selectorValue(requestedFocus)}"]`)?.focus({ preventScroll: true });
     }
   }
 
-  function setVisualSystem(systemId) {
+  function setVisualSystem(systemId, { focus = false } = {}) {
     const next = supportedVisualSystem(systemId);
-    if (!next || next === selectedVisualSystem) return;
+    if (!next) return;
+    if (next === selectedVisualSystem) {
+      if (focus) elements.visualSystemPicker?.querySelector(`[data-visual-system="${selectorValue(next)}"]`)?.focus();
+      return;
+    }
     recordUndo("sistema visivo");
     selectedVisualSystem = next;
     safeStorageSet(visualSystemStorageKey(), next);
-    renderVisualSystemPicker();
-    if (elements.slides) elements.slides.dataset.visualSystem = next;
-    for (const preview of elements.slides?.querySelectorAll(".slide-preview") || []) {
-      for (const system of visualSystems) preview.classList.toggle(`visual-system-${system.id}`, system.id === next);
-    }
+    renderVisualSystemPicker({ focusSystem: focus ? next : "" });
     renderBrand();
+    renderSlides();
     publishPreviewContract(configurePreviewTypography());
     persistDraft();
-    window.requestAnimationFrame(measurePreviews);
+    schedulePreviewMeasure();
   }
 
   function loadViewState() {
@@ -439,6 +937,7 @@
   }
 
   function persistViewState() {
+    if (productionRender) return;
     safeStorageSet(viewedStorageKey(), JSON.stringify([...viewedSlideIds]));
   }
 
@@ -459,6 +958,14 @@
     return count;
   }
 
+  function hasPendingLock() {
+    return Boolean(awaitingFeedbackId || foreignFeedbackId);
+  }
+
+  function hasStaleBase() {
+    return staleRevision !== null || staleWorkflowState !== null || staleApprovalCheckpoint !== null;
+  }
+
   function syncMobileActions() {
     const pairs = [
       [elements.mobileUndoButton, elements.undoButton],
@@ -476,24 +983,14 @@
   function updateChangeSummary() {
     if (!model) return;
     const count = computeChangeCount();
-    const waiting = Boolean(awaitingFeedbackId);
-    if (staleRevision !== null) {
-      elements.dirtyDot?.classList.add("active");
-      if (elements.changeLabel) elements.changeLabel.textContent = `L'agente ha pubblicato la revisione ${staleRevision}. Ricarica per continuare.`;
+    const waiting = hasPendingLock();
+    if (hasStaleBase()) {
       if (elements.resetButton) elements.resetButton.disabled = false;
       if (elements.undoButton) elements.undoButton.disabled = true;
       if (elements.sendButton) elements.sendButton.disabled = true;
       if (elements.approveButton) elements.approveButton.disabled = true;
       syncMobileActions();
       return;
-    }
-    elements.dirtyDot?.classList.toggle("active", count > 0 || waiting);
-    if (elements.changeLabel) {
-      elements.changeLabel.textContent = waiting
-        ? `Inviato · ${count} ${count === 1 ? "intervento" : "interventi"} in elaborazione · bozza salvata nel browser`
-        : count === 0
-          ? "Nessuna modifica · bozza salvata nel browser"
-          : `${count} ${count === 1 ? "intervento" : "interventi"} · bozza salvata nel browser`;
     }
     if (elements.resetButton) elements.resetButton.disabled = count === 0 || waiting;
     if (elements.undoButton) elements.undoButton.disabled = !undoState || waiting;
@@ -515,7 +1012,9 @@
     if (!elements.editor) return;
     elements.editor.classList.add("locked");
     elements.editor.setAttribute("aria-busy", "true");
-    for (const node of elements.editor.querySelectorAll("input, textarea, button")) node.disabled = true;
+    for (const node of elements.editor.querySelectorAll("input, textarea, button")) {
+      if (!node.matches("[data-pending-control]")) node.disabled = true;
+    }
     syncMobileActions();
   }
 
@@ -523,25 +1022,101 @@
     // Slide controls are rebuilt on every revision, while these textareas are
     // persistent DOM nodes. Re-enable them after an applied batch; otherwise
     // the disabled state set by lockEditing survives loadSession().
-    for (const node of [elements.brandNote, elements.overallNote]) {
+    for (const node of [
+      elements.brandNote,
+      elements.overallNote,
+      ...elements.logoPreference?.querySelectorAll("button") || [],
+      ...elements.visualSystemPicker?.querySelectorAll("button") || [],
+    ]) {
       if (node) node.disabled = false;
     }
+    if (elements.styleExportButton) elements.styleExportButton.disabled = model?.brand_profile?.profile_type !== "carousel-brand";
   }
 
-  function persistDraft() {
-    if (!model || productionRender) return;
-    safeStorageSet(storageKey, JSON.stringify({
+  function draftStorageValue() {
+    return JSON.stringify({
       base_revision: model.revision,
+      base_workflow_state: model.workflow_state || "",
+      base_approval_checkpoint: model.approval_checkpoint || "",
       slides: normalizedSlides(draftSlides),
       comments: selectionComments,
       slide_notes: slideNotes,
       brand_note: brandNote,
       overall_note: overallNote,
       logo_mode: logoMode,
+      visual_style_system: selectedVisualSystem,
       awaiting_feedback_id: awaitingFeedbackId,
+      pending_submission: pendingSubmission,
+      recovery_submissions: recoverySubmissions,
+      recovery_drafts: recoveryDrafts,
+      foreign_feedback_id: foreignFeedbackId,
+      editable_draft: true,
+      saved_at: new Date().toISOString(),
+    });
+  }
+
+  function flushDraft() {
+    if (!model || productionRender) return;
+    window.clearTimeout(storageTimer);
+    storageTimer = null;
+    safeStorageSet(storageKey, draftStorageValue());
+  }
+
+  function persistDraft({ immediate = false } = {}) {
+    if (!model || productionRender) return;
+    updateChangeSummary();
+    window.clearTimeout(storageTimer);
+    if (immediate) flushDraft();
+    else storageTimer = window.setTimeout(flushDraft, 220);
+  }
+
+  function exportRecoverySubmissions() {
+    loadDedicatedRecoveries();
+    if (!recoverySubmissions.length && !recoveryDrafts.length) return;
+    const artifact = {
+      schema: "carousel-builder-feedback-recovery-export-v1",
+      exported_at: new Date().toISOString(),
+      current_revision: model?.revision ?? null,
+      submissions: clone(recoverySubmissions),
+      drafts: clone(recoveryDrafts),
+    };
+    const blob = new Blob([`${JSON.stringify(artifact, null, 2)}\n`], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const revision = recoverySubmissions[0]?.base_revision ?? recoveryDrafts[0]?.base_revision ?? "precedente";
+    link.href = url;
+    link.download = `carousel-feedback-recovery-rev-${revision}.json`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    showToast("Feedback recuperabile salvato. Conservalo finché la revisione non è stata riconciliata.");
+  }
+
+  function removeDraftPreservingRecovery() {
+    window.clearTimeout(storageTimer);
+    storageTimer = null;
+    if ((!recoverySubmissions.length && !recoveryDrafts.length) || !model) {
+      safeStorageRemove(storageKey);
+      return;
+    }
+    safeStorageSet(storageKey, JSON.stringify({
+      base_revision: model.revision,
+      base_workflow_state: model.workflow_state || "",
+      base_approval_checkpoint: model.approval_checkpoint || "",
+      slides: normalizedSlides(model.slides),
+      comments: [],
+      slide_notes: {},
+      brand_note: "",
+      overall_note: "",
+      logo_mode: initialLogoMode(),
+      visual_style_system: modelVisualSystem(),
+      awaiting_feedback_id: null,
+      pending_submission: null,
+      recovery_submissions: recoverySubmissions,
+      recovery_drafts: recoveryDrafts,
+      foreign_feedback_id: null,
+      editable_draft: false,
       saved_at: new Date().toISOString(),
     }));
-    updateChangeSummary();
   }
 
   function hydrateDraft() {
@@ -554,10 +1129,58 @@
     logoMode = initialLogoMode();
     undoState = null;
     awaitingFeedbackId = null;
+    pendingSubmission = null;
+    recoverySubmissions = [];
+    recoveryDrafts = [];
+    foreignFeedbackId = null;
+    submissionError = "";
+    staleWorkflowState = null;
+    staleApprovalCheckpoint = null;
+    validationMode = false;
+    activeValidationIssues = [];
     if (productionRender) return;
     try {
+      loadDedicatedRecoveries();
       const saved = JSON.parse(safeStorageGet(storageKey) || "null");
-      if (!saved || saved.base_revision !== model.revision || !Array.isArray(saved.slides)) return;
+      for (const recovery of Array.isArray(saved?.recovery_submissions) ? saved.recovery_submissions : []) addRecoverySubmission(recovery);
+      for (const recovery of Array.isArray(saved?.recovery_drafts) ? saved.recovery_drafts : []) addRecoveryDraft(recovery);
+      if (isRecoverySubmission(saved?.recovery_submission)) addRecoverySubmission(saved.recovery_submission);
+      const sameRevision = Boolean(saved && saved.base_revision === model.revision);
+      const sameWorkflow = Boolean(saved && (
+        !saved.base_workflow_state
+        || saved.base_workflow_state === model.workflow_state
+      ));
+      const sameCheckpoint = Boolean(saved && (
+        !saved.base_approval_checkpoint
+        || saved.base_approval_checkpoint === (model.approval_checkpoint || "")
+      ));
+      const sameBase = sameRevision && sameWorkflow && sameCheckpoint;
+      if (saved && !sameBase && saved.editable_draft !== false && Array.isArray(saved.slides)) {
+        const reason = !sameRevision ? "base-revision-mismatch" : "base-workflow-mismatch";
+        addRecoveryDraft(recoveryDraftFromSaved(saved, reason));
+      }
+      const savedPending = isPendingSubmission(saved?.pending_submission) ? saved.pending_submission : null;
+      const sameFingerprint = Boolean(savedPending && (
+        savedPending.action !== "approve"
+        || savedPending.payload.render_fingerprint === (model.render_fingerprint || "")
+      ));
+      if (savedPending && sameBase && sameFingerprint) {
+        pendingSubmission = savedPending;
+        awaitingFeedbackId = savedPending.feedback_id;
+      } else if (savedPending) {
+        const reason = !sameRevision
+          ? "base-revision-mismatch"
+          : !sameWorkflow || !sameCheckpoint
+            ? "base-workflow-mismatch"
+            : "render-fingerprint-mismatch";
+        addRecoverySubmission(recoveryFromPending(savedPending, reason, saved));
+        submissionError = `Un invio basato sulla revisione ${saved.base_revision} non corrisponde più alla base corrente. Non verrà ritentato: salvalo come feedback recuperabile.`;
+      } else if (sameBase && isFeedbackId(saved?.awaiting_feedback_id)) {
+        awaitingFeedbackId = saved.awaiting_feedback_id;
+      }
+      if (sameBase && typeof saved?.foreign_feedback_id === "string" && saved.foreign_feedback_id) foreignFeedbackId = saved.foreign_feedback_id;
+      if ((recoverySubmissions.length || recoveryDrafts.length) && !submissionError) submissionError = "È disponibile una copia recuperabile di feedback o modifiche locali. Salvala prima di rimuovere la bozza.";
+      if (!saved || !sameBase || !Array.isArray(saved.slides)) return;
       const knownIds = new Set(model.slides.map((slide) => slide.id));
       const validSlides = saved.slides.every((slide) => slide && knownIds.has(slide.id) && typeof slide.title === "string" && typeof slide.summary === "string");
       if (!validSlides) return;
@@ -570,7 +1193,6 @@
       overallNote = typeof saved.overall_note === "string" ? saved.overall_note : "";
       const savedLogoMode = saved.logo_mode || saved.logo_preference;
       logoMode = savedLogoMode === "hidden" ? "hidden" : initialLogoMode();
-      awaitingFeedbackId = typeof saved.awaiting_feedback_id === "string" && saved.awaiting_feedback_id ? saved.awaiting_feedback_id : null;
     } catch (_error) {
       safeStorageRemove(storageKey);
     }
@@ -591,8 +1213,31 @@
     return italicFontAsset()?.family || "corsivo reale disponibile";
   }
 
+  function fontAssetKey(asset, style = "normal") {
+    return `${asset?.family || ""}|${asset?.endpoint || ""}|${style}`;
+  }
+
   function hasRealItalicFont() {
-    return Boolean(italicFontAsset());
+    const asset = italicFontAsset();
+    return Boolean(asset && loadedFontKeys.has(fontAssetKey(asset, "italic")));
+  }
+
+  function loadFontAsset(asset, style) {
+    const key = fontAssetKey(asset, style);
+    if (!fontLoadCache.has(key)) {
+      fontLoadCache.set(key, (async () => {
+        const face = new FontFace(
+          asset.family,
+          `url("${api(asset.endpoint).replace(/"/g, "%22")}")`,
+          style === "italic" ? { style: "italic" } : {},
+        );
+        await face.load();
+        document.fonts.add(face);
+        loadedFontKeys.add(key);
+        return asset.family;
+      })());
+    }
+    return fontLoadCache.get(key);
   }
 
   function setFontStatus(_message, error = false) {
@@ -614,6 +1259,7 @@
     const loaded = {};
     const outcomes = [];
     const resolvedItalic = italicFontAsset();
+    const italicAvailableBefore = hasRealItalicFont();
     for (const kind of ["display", "body", "serif", "italic"]) {
       const asset = kind === "italic" ? resolvedItalic : assets[kind] || (kind === "body" ? assets.sans : null);
       if (!asset || asset.available !== true || !asset.family || !asset.endpoint || typeof FontFace === "undefined") {
@@ -621,14 +1267,8 @@
         continue;
       }
       try {
-        const face = new FontFace(
-          asset.family,
-          `url("${api(asset.endpoint).replace(/"/g, "%22")}")`,
-          kind === "serif" || kind === "italic" ? { style: "italic" } : {},
-        );
-        await face.load();
-        document.fonts.add(face);
-        loaded[kind] = asset.family;
+        const style = kind === "serif" || kind === "italic" ? "italic" : "normal";
+        loaded[kind] = await loadFontAsset(asset, style);
         outcomes.push(`${labels[kind]}: ${asset.family}`);
       } catch (_error) {
         outcomes.push(`${labels[kind]}: fallback dichiarato (caricamento non riuscito)`);
@@ -643,7 +1283,8 @@
       `Tipografia anteprima — ${outcomes.join(" · ")} · Non verifica immagini o crop finali.`,
       outcomes.some((outcome) => outcome.includes("non riuscito")),
     );
-    window.requestAnimationFrame(measurePreviews);
+    if (italicAvailableBefore !== hasRealItalicFont() && elements.slides?.childElementCount) renderSlides();
+    schedulePreviewMeasure();
   }
 
   function typography() {
@@ -690,8 +1331,10 @@
       summary.style.letterSpacing = slide.kind === "cover"
         ? "0em"
         : `${numberValue(Math.abs(type.body_tracking_em), 0.025) * -1}em`;
-      summary.style.fontFamily = slide.kind === "cover" ? "var(--preview-serif)" : "var(--preview-body)";
-      summary.style.fontStyle = slide.kind === "cover" ? "italic" : "normal";
+      const realItalic = slide.kind === "cover" && hasRealItalicFont();
+      summary.style.fontFamily = realItalic ? "var(--preview-italic)" : "var(--preview-body)";
+      summary.style.fontStyle = realItalic ? "italic" : "normal";
+      preview.classList.toggle("has-real-italic", hasRealItalicFont());
     }
   }
 
@@ -809,13 +1452,6 @@
       message: "Il corsivo selezionato non ha un font reale disponibile.",
     });
     return warnings;
-  }
-
-  function allEmphasisWarnings() {
-    return draftSlides.flatMap((slide) => ["title", "summary"].flatMap((field) => {
-      if (typeof slide[field] !== "string") return [];
-      return emphasisWarningsFor(slide, field).map((warning) => ({ slide, field, ...warning }));
-    }));
   }
 
   function renderEmphasizedText(node, text, emphasis) {
@@ -947,6 +1583,7 @@
     for (const button of elements.logoPreference.querySelectorAll("[data-logo-mode]")) {
       const selected = button.dataset.logoMode === logoMode;
       button.setAttribute("aria-checked", String(selected));
+      button.tabIndex = selected ? 0 : -1;
       button.classList.toggle("is-selected", selected);
     }
     const automatic = logoMode === "auto";
@@ -979,14 +1616,18 @@
     }
   }
 
-  function setLogoMode(value) {
+  function setLogoMode(value, { focus = false } = {}) {
     if (value !== "auto" && value !== "hidden") return;
-    if (logoMode === value) return;
+    if (logoMode === value) {
+      if (focus) elements.logoPreference?.querySelector(`[data-logo-mode="${value}"]`)?.focus();
+      return;
+    }
     recordUndo("modalità logo");
     logoMode = value;
     renderLogoControls();
     renderSlides();
     persistDraft();
+    if (focus) elements.logoPreference?.querySelector(`[data-logo-mode="${value}"]`)?.focus({ preventScroll: true });
   }
 
   function renderFieldWarning(node, slide, field) {
@@ -1086,7 +1727,7 @@
       for (const { kind, segment } of entries) {
         const remove = create("button", `applied-style-chip applied-style-${kind}`);
         remove.type = "button";
-        remove.disabled = Boolean(awaitingFeedbackId);
+        remove.disabled = hasPendingLock();
         remove.setAttribute("aria-label", `Rimuovi ${styleLabels[kind].toLowerCase()} da “${segment}”`);
         remove.title = `Rimuovi ${styleLabels[kind].toLowerCase()} da “${segment}”`;
         remove.append(
@@ -1108,7 +1749,7 @@
           renderFieldWarning(warning, slide, field);
           persistDraft();
           input.focus();
-          window.requestAnimationFrame(measurePreviews);
+          schedulePreviewMeasure(slide.id);
         });
         appliedStylesList.append(remove);
       }
@@ -1117,7 +1758,7 @@
       const start = input.selectionStart ?? 0;
       const end = input.selectionEnd ?? 0;
       const quote = end > start ? input.value.slice(start, end) : "";
-      const hasSelection = Boolean(quote) && !awaitingFeedbackId;
+      const hasSelection = Boolean(quote) && !hasPendingLock();
       const setButton = (button, kind, available = true) => {
         const state = hasSelection ? selectionState(kind, start, end) : { containing: "", overlapping: "" };
         const active = Boolean(state.containing);
@@ -1159,7 +1800,7 @@
       renderAppliedStyles();
       renderFieldWarning(warning, slide, field);
       persistDraft();
-      window.requestAnimationFrame(measurePreviews);
+      schedulePreviewMeasure(slide.id);
     });
     const toggleSelectionEmphasis = (kind) => {
       const start = input.selectionStart ?? 0;
@@ -1194,7 +1835,7 @@
       persistDraft();
       input.focus();
       input.setSelectionRange(start, end);
-      window.requestAnimationFrame(measurePreviews);
+      schedulePreviewMeasure(slide.id);
     };
     boldButton.addEventListener("mousedown", (event) => event.preventDefault());
     italicButton.addEventListener("mousedown", (event) => event.preventDefault());
@@ -1411,6 +2052,7 @@
 
   function renderSequenceNav() {
     if (!elements.sequenceNav) return;
+    const focusSnapshot = captureFocus(elements.sequenceNav);
     elements.sequenceNav.replaceChildren();
     elements.sequenceNav.setAttribute("aria-label", "Percorso delle slide");
     const total = draftSlides.length;
@@ -1422,6 +2064,7 @@
       const label = displayLabel(slide, index);
       const button = create("button", "sequence-nav-item", label);
       button.type = "button";
+      button.dataset.sequenceSlide = slide.id;
       if (currentSlideId === slide.id) button.setAttribute("aria-current", "step");
       const warning = fitWarnings.get(slide.id);
       const seen = viewedSlideIds.has(slide.id);
@@ -1434,6 +2077,7 @@
       list.append(button);
     });
     elements.sequenceNav.append(list);
+    restoreFocus(focusSnapshot, elements.sequenceNav);
   }
 
   function setupObserver() {
@@ -1451,10 +2095,11 @@
     for (const row of elements.slides.querySelectorAll(".slide-row")) observer.observe(row);
   }
 
-  function measurePreviews() {
+  function measurePreviews(slideIds = null) {
     if (!elements.slides) return;
     const minScale = Math.max(0.92, Math.min(1, numberValue(typography().min_auto_scale, 0.92)));
     for (const row of elements.slides.querySelectorAll(".slide-row")) {
+      if (slideIds && !slideIds.has(row.dataset.slideId)) continue;
       const slide = draftSlides.find((candidate) => candidate.id === row.dataset.slideId);
       const preview = row.querySelector(".slide-preview");
       const copy = row.querySelector(".preview-copy");
@@ -1483,17 +2128,19 @@
       const notice = {
         schema: schemaWarning(slide),
         overflow: overflow ? "Testo ancora troppo denso nell’anteprima dopo la riduzione massima dell’8%. Riduci o dividi il testo." : "",
-        emphasis: ["title", "summary"].flatMap((field) => emphasisWarningsFor(slide, field)),
+        emphasis: ["title", "summary"].flatMap((field) => emphasisWarningsFor(slide, field).map((warning) => ({ field, ...warning }))),
       };
       fitWarnings.set(slide.id, notice);
       updateFitNotice(slide.id, notice);
       preview.toggleAttribute("data-fit-warning", Boolean(notice.schema || notice.overflow || notice.emphasis.length));
     }
     renderSequenceNav();
+    if (validationMode) refreshApprovalValidation();
   }
 
   function renderSlides() {
     if (!elements.slides) return;
+    const focusSnapshot = captureFocus(elements.slides);
     fitWarnings.clear();
     elements.slides.replaceChildren();
     elements.slides.dataset.visualSystem = selectedVisualSystem;
@@ -1521,6 +2168,7 @@
       preview.dataset.constellationPosition = index % 2 === 0 ? "high" : "low";
       preview.dataset.productionSource = "approved-preview";
       preview.classList.add(`visual-system-${selectedVisualSystem}`);
+      preview.classList.toggle("has-real-italic", hasRealItalicFont());
       const coverVisual = selectedVisualProof()?.cover_visual || model.cover_visual;
       if (slide.kind === "cover" && coverVisual?.available && coverVisual.endpoint) {
         preview.classList.add("has-cover-image");
@@ -1577,20 +2225,24 @@
       if (slide.kind === "item") {
         const position = items.findIndex(({ slide: item }) => item.id === slide.id);
         const drag = createIconButton("icon-button drag-handle", "grip", "Trascina per riordinare", `Trascina ${visibleLabel} per riordinarla`);
+        drag.dataset.action = "drag";
         drag.addEventListener("pointerdown", (event) => {
-          if (event.button !== 0 || awaitingFeedbackId) return;
+          if (event.button !== 0 || hasPendingLock()) return;
           event.preventDefault();
           pointerDrag = { slideId: slide.id, pointerId: event.pointerId, targetId: null, placeAfter: false };
           row.classList.add("is-dragging");
         });
         const up = createIconButton("icon-button", "up", "Sposta in alto", `Sposta ${visibleLabel} in alto`);
-        up.disabled = position === 0 || Boolean(awaitingFeedbackId);
+        up.dataset.action = "move-up";
+        up.disabled = position === 0 || hasPendingLock();
         up.addEventListener("click", () => moveItem(slide.id, -1));
         const down = createIconButton("icon-button", "down", "Sposta in basso", `Sposta ${visibleLabel} in basso`);
-        down.disabled = position === items.length - 1 || Boolean(awaitingFeedbackId);
+        down.dataset.action = "move-down";
+        down.disabled = position === items.length - 1 || hasPendingLock();
         down.addEventListener("click", () => moveItem(slide.id, 1));
         const remove = createIconButton("icon-button danger", "close", "Elimina slide", `Elimina ${visibleLabel}`);
-        remove.disabled = items.length <= 1 || Boolean(awaitingFeedbackId);
+        remove.dataset.action = "delete";
+        remove.disabled = items.length <= 1 || hasPendingLock();
         remove.addEventListener("click", () => deleteItem(slide.id));
         toolbarActions.append(drag, up, down, remove);
       }
@@ -1668,7 +2320,8 @@
     });
     applyViewedClasses();
     setupObserver();
-    window.requestAnimationFrame(measurePreviews);
+    restoreFocus(focusSnapshot, elements.slides);
+    schedulePreviewMeasure();
   }
 
   function roundedMetric(value) {
@@ -1693,7 +2346,7 @@
   function geometryPart(node, previewBounds) {
     if (!node) return null;
     const style = window.getComputedStyle(node);
-    if (style.display === "none" || node.hidden) return { hidden: true };
+    if (geometryPartIsHidden(node, style)) return { hidden: true };
     const bounds = node.getBoundingClientRect();
     const width = previewBounds.width || 1;
     const height = previewBounds.height || 1;
@@ -1738,6 +2391,36 @@
     });
   }
 
+  function canonicalContentSnapshot() {
+    return {
+      revision: model?.revision ?? null,
+      render_fingerprint: model?.render_fingerprint || "",
+      workflow_state: model?.workflow_state || "",
+      approval_checkpoint: model?.approval_checkpoint || "",
+      visual_style_system: selectedVisualSystem,
+      logo_mode: logoMode,
+      slides: normalizedSlides(draftSlides),
+      format: clone(model?.format || {}),
+      typography: clone(typography()),
+      brand: clone(previewBrand()),
+      cover_visual: clone(selectedVisualProof()?.cover_visual || model?.cover_visual || {}),
+    };
+  }
+
+  function getRenderContract() {
+    return {
+      contract: "approved-preview-dom-v1",
+      production: productionRender,
+      revision: model?.revision ?? null,
+      workflowState: model?.workflow_state || "",
+      proofApproved: model?.proof_approved === true,
+      styleSystem: selectedVisualSystem,
+      contentSnapshot: canonicalContentSnapshot(),
+      frames: productionSlideFrames(),
+      geometry: previewGeometrySnapshot(),
+    };
+  }
+
   function nextPaint() {
     return new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
   }
@@ -1753,6 +2436,30 @@
     }));
     const broken = images.find((image) => !image.complete || image.naturalWidth < 1);
     if (broken) throw new Error("Un asset dell’anteprima approvata non si è caricato.");
+    const backgroundUrls = new Set();
+    for (const preview of elements.slides?.querySelectorAll(".slide-preview") || []) {
+      const backgroundImage = window.getComputedStyle(preview).backgroundImage || "";
+      const pattern = /url\((?:"([^"]*)"|'([^']*)'|([^)]*))\)/g;
+      let match = pattern.exec(backgroundImage);
+      while (match) {
+        const url = (match[1] || match[2] || match[3] || "").trim();
+        if (url) backgroundUrls.add(url);
+        match = pattern.exec(backgroundImage);
+      }
+    }
+    await Promise.all([...backgroundUrls].map((url) => new Promise((resolve, reject) => {
+      const probe = new Image();
+      probe.addEventListener("load", async () => {
+        try {
+          if (typeof probe.decode === "function") await probe.decode();
+          resolve();
+        } catch (_error) {
+          reject(new Error(`L’immagine di sfondo approvata non è decodificabile: ${url}`));
+        }
+      }, { once: true });
+      probe.addEventListener("error", () => reject(new Error(`L’immagine di sfondo approvata non si è caricata: ${url}`)), { once: true });
+      probe.src = url;
+    })));
   }
 
   async function publishPreviewContract(typographyReady) {
@@ -1765,15 +2472,16 @@
       if (document.fonts?.ready) await document.fonts.ready;
       await waitForPreviewImages();
       await nextPaint();
-      measurePreviews();
+      flushPreviewMeasurements();
       await nextPaint();
       if (run !== previewContractRun) return;
-      const blocking = [...fitWarnings.entries()].filter(([, warning]) => warning.schema || warning.overflow || warning.emphasis?.length);
-      if (blocking.length) throw new Error(`Produzione bloccata: ${blocking.map(([id]) => id).join(", ")}.`);
+      const blocking = collectApprovalIssues();
+      if (blocking.length) throw new Error(`Produzione bloccata: ${blocking.map((issue) => issue.slideId || issue.key).join(", ")}.`);
       window.carouselBuilderPreview = Object.freeze({
         contract: "approved-preview-dom-v1",
         production: productionRender,
         styleSystem: selectedVisualSystem,
+        getRenderContract,
         getSlideFrames: productionSlideFrames,
         getSlideGeometry: previewGeometrySnapshot,
       });
@@ -1844,52 +2552,232 @@
     renderBrand();
     renderSlides();
     renderComments();
-    if (!awaitingFeedbackId) unlockPersistentEditing();
+    if (!hasPendingLock()) unlockPersistentEditing();
     elements.overallNote.value = overallNote;
-    elements.editor.classList.toggle("locked", Boolean(awaitingFeedbackId));
+    elements.editor.classList.toggle("locked", hasPendingLock());
     elements.loading.classList.add("hidden");
     elements.editor.classList.remove("hidden");
     elements.actionbar.classList.remove("hidden");
-    if (awaitingFeedbackId) lockEditing();
+    if (hasPendingLock()) lockEditing();
     updateChangeSummary();
+    renderValidationState();
     publishPreviewContract(configurePreviewTypography());
   }
 
   async function loadSession() {
-    const response = await fetch(api("/api/session"), { cache: "no-store" });
-    const data = await response.json();
+    const { response, data } = await fetchJson("/api/session", { cache: "no-store" });
     if (!response.ok) throw new Error(data.error || "Impossibile caricare la sessione");
     model = data;
     staleRevision = null;
+    staleWorkflowState = null;
+    staleApprovalCheckpoint = null;
     hydrateDraft();
     renderAll();
   }
 
-  function validateDraft(action = "feedback") {
+  function collectStructureIssues() {
+    const issues = [];
     const cover = draftSlides.find((slide) => slide.kind === "cover");
-    if (!cover || !cover.title.trim()) return "Il titolo della copertina non può essere vuoto.";
+    if (!cover || !cover.title.trim()) issues.push({
+      key: "cover-title",
+      message: "Il titolo della copertina non può essere vuoto.",
+      slideId: cover?.id || "",
+      targetId: cover ? `field-${cover.id}-title` : "slides",
+    });
     const items = draftSlides.filter((slide) => slide.kind === "item");
-    if (!items.length) return "Deve restare almeno una slide interna.";
+    if (!items.length) issues.push({ key: "missing-item", message: "Deve restare almeno una slide interna.", targetId: "slides" });
     for (const slide of items) {
       const index = draftSlides.findIndex((candidate) => candidate.id === slide.id);
-      if (!slide.title.trim() && !slide.summary.trim()) return `${displayLabel(slide, index)} non può essere vuota.`;
+      if (!slide.title.trim() && !slide.summary.trim()) issues.push({
+        key: `empty-${slide.id}`,
+        message: `${displayLabel(slide, index)} non può essere vuota.`,
+        slideId: slide.id,
+        targetId: `field-${slide.id}-summary`,
+      });
     }
     const outro = draftSlides.find((slide) => slide.kind === "outro");
-    if (outro && !outro.title.trim() && !outro.summary.trim()) return "La chiusura non può essere vuota.";
-    if (action === "approve") {
-      const emphasisWarning = allEmphasisWarnings()[0];
-      if (emphasisWarning) return `${displayLabel(emphasisWarning.slide, draftSlides.indexOf(emphasisWarning.slide))}: ${emphasisWarning.message}`;
+    if (outro && !outro.title.trim() && !outro.summary.trim()) issues.push({
+      key: "empty-outro",
+      message: "La chiusura non può essere vuota.",
+      slideId: outro.id,
+      targetId: `field-${outro.id}-summary`,
+    });
+    return issues;
+  }
+
+  function collectPaletteContrastIssues() {
+    const brand = previewBrand();
+    const issues = collectPaletteDeclarationIssues(brand);
+    const palette = brand.palette || {};
+    const checked = new Set();
+    draftSlides.forEach((slide, index) => {
+      const colors = previewColors(index, slide.kind);
+      const pairs = [
+        { key: `surface-${colors.surface}`, foreground: colors.text, background: colors.bg, label: `testo su fondo ${colors.surface === "dark" ? "scuro" : "chiaro"}` },
+        { key: "accent", foreground: colors.accentText, background: colors.accent, label: "testo su accento" },
+      ];
+      for (const pair of pairs) {
+        if (checked.has(pair.key)) continue;
+        checked.add(pair.key);
+        const ratio = contrastRatio(pair.foreground, pair.background);
+        if (ratio >= 4.5) continue;
+        issues.push({
+          key: `contrast-${pair.key}`,
+          message: `Contrasto palette insufficiente per ${pair.label}: ${ratio.toFixed(2)}:1, minimo 4.5:1.`,
+          targetId: "visual-system-picker",
+        });
+      }
+    });
+    return issues;
+  }
+
+  function collectApprovalIssues() {
+    const issues = collectStructureIssues();
+    for (const slide of draftSlides) {
+      const warning = fitWarnings.get(slide.id) || {
+        schema: schemaWarning(slide),
+        overflow: "",
+        emphasis: ["title", "summary"].flatMap((field) => emphasisWarningsFor(slide, field).map((entry) => ({ field, ...entry }))),
+      };
+      const index = draftSlides.indexOf(slide);
+      const label = displayLabel(slide, index);
+      if (warning.schema) issues.push({ key: `schema-${slide.id}`, message: `${label}: ${warning.schema}`, slideId: slide.id, targetId: `field-${slide.id}-summary` });
+      if (warning.overflow) issues.push({ key: `overflow-${slide.id}`, message: `${label}: ${warning.overflow}`, slideId: slide.id, targetId: `field-${slide.id}-summary` });
+      for (const [warningIndex, emphasis] of (warning.emphasis || []).entries()) {
+        issues.push({ key: `emphasis-${slide.id}-${warningIndex}`, message: `${label}: ${emphasis.message}`, slideId: slide.id, targetId: `field-${slide.id}-${emphasis.field || "summary"}` });
+      }
     }
-    return "";
+    const cover = draftSlides.find((slide) => slide.kind === "cover");
+    if (cover?.summary.trim() && !hasRealItalicFont()) issues.push({
+      key: "cover-real-italic",
+      message: "Copertina: il sottotitolo richiede una vera variante corsiva. L’anteprima non simula il corsivo.",
+      slideId: cover.id,
+      targetId: `field-${cover.id}-summary`,
+    });
+    issues.push(...collectPaletteContrastIssues());
+    const unique = new Map();
+    for (const issue of issues) if (!unique.has(issue.key)) unique.set(issue.key, issue);
+    return [...unique.values()];
+  }
+
+  function validationTarget(issue) {
+    const target = issue?.targetId ? document.getElementById(issue.targetId) : null;
+    if (target?.matches?.("[role='radiogroup']")) return target.querySelector("[tabindex='0']") || target;
+    return target;
+  }
+
+  function clearInlineValidation() {
+    for (const node of document.querySelectorAll(".approval-field-error")) node.remove();
+    for (const node of document.querySelectorAll("[data-approval-invalid]")) {
+      node.removeAttribute("data-approval-invalid");
+      node.removeAttribute("aria-invalid");
+      const describedBy = (node.getAttribute("aria-describedby") || "")
+        .split(/\s+/)
+        .filter((id) => id && !id.startsWith("approval-error-"));
+      if (describedBy.length) node.setAttribute("aria-describedby", describedBy.join(" "));
+      else node.removeAttribute("aria-describedby");
+    }
+  }
+
+  function focusValidationIssue(issue) {
+    const target = validationTarget(issue);
+    if (issue?.slideId) {
+      const row = elements.slides?.querySelector(`[data-slide-id="${selectorValue(issue.slideId)}"]`);
+      row?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    }
+    if (target && typeof target.focus === "function") target.focus({ preventScroll: true });
+    else elements.validationSummary?.focus({ preventScroll: true });
+  }
+
+  function renderValidationState({ focus = false } = {}) {
+    if (!elements.validationSummary || !elements.validationList) return;
+    clearInlineValidation();
+    const issues = activeValidationIssues;
+    const recoveryCount = recoverySubmissions.length + recoveryDrafts.length;
+    const visible = Boolean(issues.length || submissionError || recoveryCount);
+    elements.validationSummary.hidden = !visible;
+    if (visible) elements.validationSummary.setAttribute("role", "alert");
+    else elements.validationSummary.removeAttribute("role");
+    elements.validationSummary.setAttribute("aria-live", visible ? "assertive" : "off");
+    if (elements.validationSummaryCopy) {
+      elements.validationSummaryCopy.textContent = submissionError
+        ? submissionError
+        : recoveryCount
+          ? "È disponibile una copia recuperabile di feedback o modifiche locali. Salvala prima di rimuovere la bozza."
+        : "Risolvi i problemi indicati per approvare la revisione.";
+    }
+    elements.validationList.replaceChildren();
+    const groupedByTarget = new Map();
+    for (const issue of issues) {
+      const item = create("li", "validation-item");
+      const button = create("button", "validation-link", issue.message);
+      button.type = "button";
+      button.addEventListener("click", () => focusValidationIssue(issue));
+      item.append(button);
+      elements.validationList.append(item);
+      if (issue.targetId) {
+        if (!groupedByTarget.has(issue.targetId)) groupedByTarget.set(issue.targetId, []);
+        groupedByTarget.get(issue.targetId).push(issue.message);
+      }
+    }
+    for (const [targetId, messages] of groupedByTarget) {
+      const target = document.getElementById(targetId);
+      const group = target?.closest?.(".field-group");
+      if (!target || !group) continue;
+      const error = create("p", "approval-field-error", messages.join(" "));
+      error.id = `approval-error-${targetId}`;
+      group.append(error);
+      target.dataset.approvalInvalid = "true";
+      target.setAttribute("aria-invalid", "true");
+      const describedBy = new Set((target.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
+      describedBy.add(error.id);
+      target.setAttribute("aria-describedby", [...describedBy].join(" "));
+    }
+    if (elements.retrySubmitButton) {
+      const retryable = Boolean(submissionError && pendingSubmission);
+      elements.retrySubmitButton.hidden = !retryable;
+      elements.retrySubmitButton.disabled = false;
+      elements.retrySubmitButton.dataset.pendingControl = "true";
+    }
+    if (elements.exportRecoveryButton) {
+      elements.exportRecoveryButton.hidden = recoveryCount === 0;
+      elements.exportRecoveryButton.disabled = false;
+      elements.exportRecoveryButton.dataset.pendingControl = "true";
+    }
+    if (focus && visible) window.requestAnimationFrame(() => focusValidationIssue(issues[0]));
+  }
+
+  function refreshApprovalValidation() {
+    if (!validationMode) return;
+    activeValidationIssues = validationMode === "approve" ? collectApprovalIssues() : collectStructureIssues();
+    if (!activeValidationIssues.length) validationMode = false;
+    renderValidationState();
+  }
+
+  function runApprovalGate({ focus = true } = {}) {
+    flushPreviewMeasurements();
+    validationMode = "approve";
+    activeValidationIssues = collectApprovalIssues();
+    if (!activeValidationIssues.length) validationMode = false;
+    renderValidationState({ focus: focus && activeValidationIssues.length > 0 });
+    return activeValidationIssues.length === 0;
+  }
+
+  function runStructureGate({ focus = true } = {}) {
+    validationMode = "structure";
+    activeValidationIssues = collectStructureIssues();
+    if (!activeValidationIssues.length) validationMode = false;
+    renderValidationState({ focus: focus && activeValidationIssues.length > 0 });
+    return activeValidationIssues.length === 0;
   }
 
   function collectedComments() {
     const comments = clone(selectionComments);
     for (const [slideId, feedback] of Object.entries(slideNotes)) {
       if (!feedback.trim()) continue;
-      comments.push({ id: `slide-${crypto.randomUUID()}`, kind: "slide", slide_id: slideId, field: "", quote: "", start: null, end: null, feedback: feedback.trim() });
+      comments.push({ id: `slide-${createFeedbackId()}`, kind: "slide", slide_id: slideId, field: "", quote: "", start: null, end: null, feedback: feedback.trim() });
     }
-    if (brandNote.trim()) comments.push({ id: `brand-${crypto.randomUUID()}`, kind: "brand", slide_id: "", field: "brand", quote: "", start: null, end: null, feedback: brandNote.trim() });
+    if (brandNote.trim()) comments.push({ id: `brand-${createFeedbackId()}`, kind: "brand", slide_id: "", field: "brand", quote: "", start: null, end: null, feedback: brandNote.trim() });
     return comments;
   }
 
@@ -1911,54 +2799,291 @@
       ? 0
       : draftSlides.filter((slide, index) => logoMetadata(logoRoleForSlide(slide, index)).available === true).length;
     const logoTotal = logoMode === "hidden" ? 0 : draftSlides.length;
-    return { bold, italic, underline, accent, logoSlides, logoTotal, warningCount: allEmphasisWarnings().length };
+    return { bold, italic, underline, accent, logoSlides, logoTotal };
   }
 
-  async function submit(action) {
-    const validationError = validateDraft(action);
-    if (validationError) return showToast(validationError, true);
-    if (elements.sendButton) elements.sendButton.disabled = true;
-    if (elements.approveButton) elements.approveButton.disabled = true;
-    const payload = { action, base_revision: model.revision, slides: normalizedSlides(draftSlides), comments: collectedComments(), overall_note: overallNote.trim(), visual_style_system: selectedVisualSystem, logo_mode: logoMode };
-    try {
-      const response = await fetch(api("/api/submit"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Invio non riuscito");
-      awaitingFeedbackId = data.feedback_id;
-      persistDraft();
+  function releaseEditingLock() {
+    if (hasPendingLock()) {
       lockEditing();
-      showToast(action === "approve"
+      updateChangeSummary();
+      return;
+    }
+    elements.editor?.classList.remove("locked");
+    elements.editor?.setAttribute("aria-busy", "false");
+    unlockPersistentEditing();
+    renderSlides();
+    renderComments();
+    updateChangeSummary();
+  }
+
+  function clearPendingSubmission({ keepError = true } = {}) {
+    awaitingFeedbackId = null;
+    pendingSubmission = null;
+    if (!keepError) submissionError = "";
+    persistDraft({ immediate: true });
+    releaseEditingLock();
+    renderValidationState();
+  }
+
+  async function sendPendingSubmission() {
+    if (!isPendingSubmission(pendingSubmission)) return;
+    const baseMatches = pendingSubmission.payload.base_revision === model?.revision;
+    const fingerprintMatches = pendingSubmission.action !== "approve"
+      || pendingSubmission.payload.render_fingerprint === (model?.render_fingerprint || "");
+    const workflowMatches = pendingSubmission.action !== "approve"
+      || pendingSubmission.payload.base_workflow_state === (model?.workflow_state || "");
+    if (!baseMatches || !fingerprintMatches || !workflowMatches) {
+      const reason = !baseMatches
+        ? "base-revision-mismatch-before-retry"
+        : !workflowMatches
+          ? "base-workflow-mismatch-before-retry"
+          : "render-fingerprint-mismatch-before-retry";
+      preservePendingSubmission(reason);
+      submissionError = `Il feedback basato sulla revisione ${pendingSubmission.payload.base_revision} non corrisponde più alla base corrente. Salvalo come feedback recuperabile.`;
+      clearPendingSubmission();
+      renderValidationState({ focus: true });
+      return;
+    }
+    preservePendingSubmission("pre-post-backup", "", currentDraftRecoverySource());
+    awaitingFeedbackId = pendingSubmission.feedback_id;
+    submissionError = "";
+    persistDraft({ immediate: true });
+    lockEditing();
+    renderValidationState();
+    try {
+      const { response, data } = await fetchJson("/api/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pendingSubmission.payload),
+      });
+      if (!response.ok) {
+        const message = data.error || "Invio non riuscito";
+        if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+          const rejectedAction = pendingSubmission.action;
+          preservePendingSubmission(`http-${response.status}`, message);
+          submissionError = `${message}. Il batch originale è stato conservato come feedback recuperabile e non verrà ritentato automaticamente.`;
+          clearPendingSubmission();
+          if (response.status === 422 && rejectedAction === "approve") await loadSession();
+          showToast(message, true);
+          return;
+        }
+        throw new Error(message);
+      }
+      if (data.feedback_id !== pendingSubmission.feedback_id) throw new Error("Il server ha restituito un identificativo di feedback inatteso.");
+      awaitingFeedbackId = pendingSubmission.feedback_id;
+      submissionError = "";
+      persistDraft({ immediate: true });
+      lockEditing();
+      renderValidationState();
+      showToast(pendingSubmission.action === "approve"
         ? "Richiesta di approvazione inviata. Ti aggiorno qui appena viene elaborata."
         : "Correzioni inviate. Ti aggiorno qui appena vengono elaborate.");
       updateChangeSummary();
+      schedulePoll(0);
     } catch (error) {
-      showToast(error.message || "Invio non riuscito", true);
+      submissionError = error?.name === "AbortError"
+        ? "L’invio non ha ricevuto conferma entro il tempo previsto. La richiesta è salvata e può essere ritentata senza duplicarla."
+        : `${error.message || "Invio non riuscito"}. La richiesta è salvata e può essere ritentata senza duplicarla.`;
+      persistDraft({ immediate: true });
+      lockEditing();
+      renderValidationState({ focus: true });
+      showToast("Stato dell’invio non confermato. La bozza è al sicuro.", true);
       updateChangeSummary();
+      schedulePoll(0);
     }
   }
 
+  async function submit(action) {
+    if (foreignFeedbackId) {
+      submissionError = "Un altro feedback è in elaborazione. Le modifiche locali restano salvate e non verranno inviate finché il batch esterno non è stato riconciliato.";
+      renderValidationState({ focus: true });
+      return;
+    }
+    const valid = action === "approve" ? runApprovalGate() : runStructureGate();
+    if (!valid) {
+      showToast(action === "approve"
+        ? "L’approvazione è bloccata finché i problemi indicati non sono risolti. Puoi comunque inviare una correzione."
+        : activeValidationIssues[0]?.message || "Controlla la bozza prima dell’invio.", true);
+      return;
+    }
+    if (pendingSubmission) return sendPendingSubmission();
+    const feedbackId = createFeedbackId();
+    const payload = {
+      feedback_id: feedbackId,
+      action,
+      base_revision: model.revision,
+      slides: normalizedSlides(draftSlides),
+      comments: collectedComments(),
+      overall_note: overallNote.trim(),
+      visual_style_system: selectedVisualSystem,
+      logo_mode: logoMode,
+    };
+    if (action === "approve") {
+      payload.render_fingerprint = model.render_fingerprint || "";
+      payload.base_workflow_state = model.workflow_state || "";
+    }
+    pendingSubmission = { feedback_id: feedbackId, action, payload };
+    awaitingFeedbackId = feedbackId;
+    submissionError = "";
+    persistDraft({ immediate: true });
+    await sendPendingSubmission();
+  }
+
+  function schedulePoll(delay = null) {
+    if (productionRender || document.hidden) return;
+    window.clearTimeout(pollTimer);
+    const backoff = Math.min(POLL_MAX_DELAY, POLL_BASE_DELAY * (2 ** Math.min(pollFailures, 4)));
+    pollTimer = window.setTimeout(pollStatus, delay ?? backoff);
+  }
+
+  function statusBaseChange(status) {
+    const workflowChanged = typeof status?.workflow_state === "string"
+      && status.workflow_state
+      && status.workflow_state !== (model?.workflow_state || "");
+    const checkpointChanged = typeof status?.approval_checkpoint === "string"
+      && status.approval_checkpoint
+      && status.approval_checkpoint !== (model?.approval_checkpoint || "");
+    return { workflowChanged: Boolean(workflowChanged), checkpointChanged: Boolean(checkpointChanged) };
+  }
+
   async function pollStatus() {
+    if (pollInFlight || productionRender || document.hidden) return;
+    pollInFlight = true;
+    pollAbortController = new AbortController();
     try {
-      const response = await fetch(api("/api/status"), { cache: "no-store" });
-      if (!response.ok) return;
-      const status = await response.json();
+      const { response, data: status } = await fetchJson("/api/status", { cache: "no-store", signal: pollAbortController.signal });
+      if (!response.ok) throw new Error(status.error || "Stato non disponibile");
+      pollFailures = 0;
+      const baseChange = statusBaseChange(status);
       if (awaitingFeedbackId && status.applied_feedback_id === awaitingFeedbackId) {
-        safeStorageRemove(storageKey);
+        const appliedFeedbackId = awaitingFeedbackId;
         awaitingFeedbackId = null;
+        pendingSubmission = null;
+        markRecoveryApplied(appliedFeedbackId);
+        submissionError = "";
+        validationMode = false;
+        activeValidationIssues = [];
+        removeDraftPreservingRecovery();
         await loadSession();
         showToast("Le modifiche dirette sono state applicate. Controlla la nuova revisione.");
         return;
       }
+      if (foreignFeedbackId && status.applied_feedback_id === foreignFeedbackId) {
+        if (computeChangeCount() > 0) {
+          preserveCurrentDraft("foreign-feedback-applied", foreignFeedbackId);
+          submissionError = "Il feedback di un altro tab è stato applicato. La bozza locale non è stata ricaricata: salvala come copia recuperabile prima di passare alla nuova revisione.";
+          if (Number.isInteger(status.manifest_revision) && status.manifest_revision !== model?.revision) {
+            staleRevision = status.manifest_revision;
+          }
+          if (baseChange.workflowChanged) staleWorkflowState = status.workflow_state;
+          if (baseChange.checkpointChanged) staleApprovalCheckpoint = status.approval_checkpoint;
+          if (staleRevision !== null || baseChange.workflowChanged || baseChange.checkpointChanged) foreignFeedbackId = null;
+          persistDraft({ immediate: true });
+          lockEditing();
+          renderValidationState({ focus: true });
+          showToast("Nuova base rilevata. La bozza di questo tab è stata preservata.", true);
+          return;
+        }
+        if (baseChange.workflowChanged || baseChange.checkpointChanged) {
+          foreignFeedbackId = null;
+          submissionError = "";
+          removeDraftPreservingRecovery();
+          await loadSession();
+          showToast("Il feedback esterno è stato applicato. Controlla il checkpoint aggiornato.");
+          return;
+        }
+        if (!Number.isInteger(status.manifest_revision) || status.manifest_revision === model?.revision) {
+          submissionError = "Il feedback esterno è stato applicato. Attendo la nuova revisione senza ricaricare la pagina.";
+          persistDraft({ immediate: true });
+          lockEditing();
+          renderValidationState();
+          return;
+        }
+        foreignFeedbackId = null;
+        submissionError = "";
+        removeDraftPreservingRecovery();
+        await loadSession();
+        showToast("Il feedback esterno è stato applicato. Controlla la nuova revisione.");
+        return;
+      }
+      if (baseChange.workflowChanged || baseChange.checkpointChanged) {
+        const hasLocalRisk = hasPendingLock() || isPendingSubmission(pendingSubmission) || computeChangeCount() > 0;
+        if (!hasLocalRisk) {
+          removeDraftPreservingRecovery();
+          await loadSession();
+          showToast("Il checkpoint di approvazione è stato aggiornato.");
+          return;
+        }
+        if (isPendingSubmission(pendingSubmission)) {
+          preservePendingSubmission("workflow-checkpoint-changed", "", currentDraftRecoverySource());
+        }
+        preserveCurrentDraft("workflow-checkpoint-changed", awaitingFeedbackId || foreignFeedbackId || "");
+        if (Number.isInteger(status.manifest_revision) && status.manifest_revision !== model?.revision) staleRevision = status.manifest_revision;
+        if (baseChange.workflowChanged) staleWorkflowState = status.workflow_state;
+        if (baseChange.checkpointChanged) staleApprovalCheckpoint = status.approval_checkpoint;
+        submissionError = "Il checkpoint di approvazione è cambiato sul server. La bozza e l’eventuale invio sono stati conservati come copia recuperabile; ricarica prima di proseguire.";
+        persistDraft({ immediate: true });
+        lockEditing();
+        renderValidationState({ focus: true });
+        showToast("Checkpoint aggiornato: la base locale è stata bloccata e preservata.", true);
+        return;
+      }
+      if (status.feedback_pending === true) {
+        const serverFeedbackId = typeof status.last_feedback_id === "string" && status.last_feedback_id ? status.last_feedback_id : awaitingFeedbackId;
+        const ownPending = Boolean(serverFeedbackId && (
+          awaitingFeedbackId === serverFeedbackId
+          || pendingSubmission?.feedback_id === serverFeedbackId
+        ));
+        if (ownPending) {
+          foreignFeedbackId = null;
+          awaitingFeedbackId = serverFeedbackId;
+          submissionError = "";
+        } else {
+          if (isPendingSubmission(pendingSubmission)) preservePendingSubmission("foreign-feedback-pending");
+          preserveCurrentDraft("foreign-feedback-pending", serverFeedbackId || "");
+          pendingSubmission = null;
+          awaitingFeedbackId = null;
+          foreignFeedbackId = serverFeedbackId || "feedback-esterno";
+          submissionError = "Un feedback di un altro tab è in elaborazione. La bozza locale è bloccata ma resta salvata come copia recuperabile.";
+        }
+        persistDraft({ immediate: true });
+        lockEditing();
+        renderValidationState();
+      } else {
+        if (foreignFeedbackId) {
+          foreignFeedbackId = null;
+          submissionError = recoveryDrafts.length || recoverySubmissions.length
+            ? "Il feedback esterno non risulta più in coda. La copia recuperabile della bozza locale resta disponibile."
+            : "";
+          persistDraft({ immediate: true });
+          if (status.manifest_revision === model?.revision) releaseEditingLock();
+          renderValidationState();
+        }
+        if (awaitingFeedbackId) {
+          if (pendingSubmission?.feedback_id === awaitingFeedbackId) {
+            submissionError = "L’invio salvato non risulta ancora in coda. Puoi ritentarlo con lo stesso identificativo senza creare duplicati.";
+            persistDraft({ immediate: true });
+            lockEditing();
+            renderValidationState();
+          } else {
+            submissionError = "L’invio precedente non risulta più in coda. La bozza locale è intatta: inviala di nuovo quando sei pronto.";
+            clearPendingSubmission();
+          }
+        }
+      }
       if (!model || !Number.isInteger(status.manifest_revision)) return;
       if (status.manifest_revision === model.revision) {
-        if (staleRevision !== null) {
+        if (hasStaleBase()) {
           staleRevision = null;
+          staleWorkflowState = null;
+          staleApprovalCheckpoint = null;
+          if (!hasPendingLock()) releaseEditingLock();
           updateChangeSummary();
         }
         return;
       }
-      if (!awaitingFeedbackId && computeChangeCount() === 0) {
-        safeStorageRemove(storageKey);
+      if (!hasPendingLock() && computeChangeCount() === 0) {
+        removeDraftPreservingRecovery();
         await loadSession();
         showToast(`Aggiornato alla revisione ${model.revision}.`);
         return;
@@ -1969,8 +3094,12 @@
         updateChangeSummary();
         showToast("L'agente ha aggiornato i testi. Ricarica per vedere la revisione corrente.", true);
       }
-    } catch (_error) {
-      // The next poll retries without discarding the local browser draft.
+    } catch (error) {
+      if (error?.name !== "AbortError" || !document.hidden) pollFailures += 1;
+    } finally {
+      pollAbortController = null;
+      pollInFlight = false;
+      schedulePoll();
     }
   }
 
@@ -1985,9 +3114,12 @@
   async function resetDraft() {
     clearPendingSelection({ focus: false });
     if (elements.dialog?.open) elements.dialog.close();
-    if (staleRevision !== null) {
-      if (!window.confirm(`Caricare la revisione ${staleRevision}? Le modifiche non inviate andranno perse.`)) return;
-      safeStorageRemove(storageKey);
+    if (hasStaleBase()) {
+      const target = staleRevision !== null && staleRevision !== model?.revision
+        ? `la revisione ${staleRevision}`
+        : "il checkpoint corrente";
+      if (!window.confirm(`Caricare ${target}? Le modifiche locali restano disponibili nella copia recuperabile.`)) return;
+      removeDraftPreservingRecovery();
       try {
         await loadSession();
         showToast(`Aggiornato alla revisione ${model.revision}.`);
@@ -1997,7 +3129,7 @@
       return;
     }
     if (!window.confirm("Ripristinare i testi della revisione corrente e rimuovere i commenti non inviati?")) return;
-    safeStorageRemove(storageKey);
+    removeDraftPreservingRecovery();
     hydrateDraft();
     renderAll();
     elements.resetButton?.focus();
@@ -2018,14 +3150,14 @@
   }
 
   function recordUndo(label) {
-    if (!model || awaitingFeedbackId || staleRevision !== null) return;
+    if (!model || hasPendingLock() || hasStaleBase()) return;
     undoState = currentDraftState(label);
     if (elements.undoButton) elements.undoButton.disabled = false;
     syncMobileActions();
   }
 
   function undoLastChange() {
-    if (!undoState || awaitingFeedbackId || staleRevision !== null) return;
+    if (!undoState || hasPendingLock() || hasStaleBase()) return;
     const previous = undoState;
     undoState = null;
     draftSlides = clone(previous.slides);
@@ -2065,13 +3197,29 @@
     const button = event.target.closest("[data-logo-mode]");
     if (button) setLogoMode(button.dataset.logoMode);
   });
+  elements.logoPreference?.addEventListener("keydown", (event) => {
+    const button = event.target.closest("[data-logo-mode]");
+    const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"];
+    if (!button || !keys.includes(event.key)) return;
+    event.preventDefault();
+    const values = ["auto", "hidden"];
+    const currentIndex = values.indexOf(button.dataset.logoMode);
+    const nextIndex = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? values.length - 1
+        : (currentIndex + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + values.length) % values.length;
+    setLogoMode(values[nextIndex], { focus: true });
+  });
   elements.styleExportButton?.addEventListener("click", exportStyleProfile);
   elements.undoButton?.addEventListener("click", undoLastChange);
   elements.resetButton?.addEventListener("click", resetDraft);
   elements.sendButton?.addEventListener("click", () => submit("feedback"));
   elements.approveButton?.addEventListener("click", () => {
-    const validationError = validateDraft("approve");
-    if (validationError) return showToast(`${validationError} Puoi comunque inviare una correzione.`, true);
+    if (!runApprovalGate()) {
+      showToast("L’approvazione è bloccata finché i problemi indicati non sono risolti. Puoi comunque inviare una correzione.", true);
+      return;
+    }
     if (elements.approvalSummary) {
       const warnings = [...fitWarnings.values()].filter((warning) => warning.schema || warning.overflow).length;
       const metrics = approvalMetrics();
@@ -2082,16 +3230,23 @@
     elements.approvalDialog?.showModal();
   });
   elements.confirmApproval?.addEventListener("click", () => {
+    if (!runApprovalGate()) {
+      elements.approvalDialog?.close();
+      showToast("La bozza è cambiata: risolvi i problemi indicati prima di approvare.", true);
+      return;
+    }
     elements.approvalDialog?.close();
     submit("approve");
   });
+  elements.retrySubmitButton?.addEventListener("click", () => sendPendingSubmission());
+  elements.exportRecoveryButton?.addEventListener("click", exportRecoverySubmissions);
   elements.saveComment?.addEventListener("click", (event) => {
     event.preventDefault();
     const feedback = elements.commentFeedback?.value.trim() || "";
     if (!pendingSelection || !feedback) return showToast("Scrivi il commento prima di aggiungerlo.", true);
     recordUndo("commento su selezione");
     const { focusTarget, ...selection } = pendingSelection;
-    selectionComments.push({ id: `selection-${crypto.randomUUID()}`, kind: "selection", ...selection, feedback });
+    selectionComments.push({ id: `selection-${createFeedbackId()}`, kind: "selection", ...selection, feedback });
     clearPendingSelection({ focus: true });
     elements.dialog?.close();
     renderComments();
@@ -2148,12 +3303,34 @@
   });
   window.addEventListener("resize", () => {
     window.clearTimeout(resizeTimer);
-    resizeTimer = window.setTimeout(measurePreviews, 120);
+    resizeTimer = window.setTimeout(() => schedulePreviewMeasure(), 120);
+  });
+  window.addEventListener("pagehide", flushDraft);
+  window.addEventListener("storage", (event) => {
+    if (!event.key?.startsWith(`${sharedStorageKey}:recovery:`)) return;
+    const before = recoverySubmissions.length + recoveryDrafts.length;
+    loadDedicatedRecoveries();
+    const after = recoverySubmissions.length + recoveryDrafts.length;
+    if (after === before) return;
+    if (model && !productionRender) persistDraft({ immediate: true });
+    if (after > before && !submissionError) submissionError = "È disponibile una nuova copia recuperabile creata da un altro tab.";
+    renderValidationState();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      window.clearTimeout(pollTimer);
+      pollAbortController?.abort();
+      return;
+    }
+    schedulePoll(0);
   });
 
-  loadSession().catch((error) => {
-    elements.loading?.replaceChildren(create("p", "", error.message || "Impossibile aprire l'editor."));
-    showToast(error.message || "Impossibile aprire l'editor", true);
-  });
-  if (!productionRender) window.setInterval(pollStatus, 2000);
+  (productionRender ? Promise.resolve() : migrateLegacyStorage())
+    .catch(() => undefined)
+    .then(() => loadSession())
+    .then(() => schedulePoll(0))
+    .catch((error) => {
+      elements.loading?.replaceChildren(create("p", "", error.message || "Impossibile aprire l'editor."));
+      showToast(error.message || "Impossibile aprire l'editor", true);
+    });
 })();

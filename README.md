@@ -43,7 +43,7 @@ In un ambiente agentivo compatibile, come ChatGPT Desktop e Claude Code, può ap
 
 | Capacità della sessione | Modalità usata |
 | --- | --- |
-| ChatGPT/Codex Desktop e Claude Code con Python 3 e browser use disponibile | Editor HTML locale con invio automatico di correzioni e approvazioni |
+| ChatGPT/Codex Desktop e Claude Code con Python 3.10+ e browser use disponibile | Editor HTML locale con invio automatico di correzioni e approvazioni |
 | Chatbot che non hanno disponibilità di questi strumenti | Revisione attraverso conversazione testuale |
 
 
@@ -51,8 +51,8 @@ In un ambiente agentivo compatibile, come ChatGPT Desktop e Claude Code, può ap
 
 1. **Fonte**: tu gli dai un URL, un testo o un file e gli chiedi di creare un carosello
 2. **Brand**: la skill ti chiederà quali sono le caratteristiche del tuo brand (puoi anche caricare file di brand identity)
-3. **Anteprima editoriale**: si aprirà un editor che ti farà vedere e modificare il carosello. 
-5. **Produzione**: dopo le tue modifiche il sistema genererà il carosello in formato .png e .pdf  
+3. **Anteprima editoriale**: si aprirà un editor che ti farà vedere e modificare il carosello.
+4. **Produzione**: dopo le tue modifiche il sistema genererà il carosello in formato .png e .pdf
 
 ## Modalità editoriali
 
@@ -100,7 +100,7 @@ Il contenuto di `agent-plugin/skills/carousel-builder/` è una copia esatta dell
 
 ## Sviluppo
 
-I due script del percorso `local-editor` sono coperti da test con la sola libreria standard, senza dipendenze da installare:
+I tre script del percorso `local-editor` sono coperti da test automatici. Server ed applicazione del feedback usano la sola libreria standard Python; l'esportatore PDF usa le librerie Node già disponibili nell'ambiente:
 
 ```bash
 python3 -m unittest discover -s tests -t tests -v

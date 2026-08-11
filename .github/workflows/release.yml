@@ -5,58 +5,148 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.ref }}
 
-      - name: Determina il tag da pubblicare
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verifica ref, tag, commit e versione
         id: version
+        shell: bash
         run: |
-          skill_version=$(grep -oP '(?<=^Versione: \*\*)[^*]+' SKILL.md)
-          plugin_version=$(python3 -c "import json;print(json.load(open('agent-plugin/plugin.json'))['version'])")
-          echo "SKILL.md=$skill_version plugin.json=$plugin_version"
-          test "$skill_version" = "$plugin_version"
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            tag="$GITHUB_REF_NAME"
-            test "${tag#v}" = "$skill_version"
-          else
-            tag="v$skill_version"
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "::error::La release può essere eseguita soltanto da un ref tag, anche con workflow_dispatch."
+            exit 1
           fi
-          echo "Pubblico $tag"
+
+          tag="$GITHUB_REF_NAME"
+          tag_ref="refs/tags/$tag"
+          git show-ref --verify --quiet "$tag_ref"
+          tag_commit=$(git rev-parse "$tag_ref^{commit}")
+          event_commit=$(git rev-parse "$GITHUB_SHA^{commit}")
+          checkout_commit=$(git rev-parse HEAD)
+          if [ "$tag_commit" != "$event_commit" ] || [ "$tag_commit" != "$checkout_commit" ]; then
+            echo "::error::Il tag $tag, GITHUB_SHA e il checkout non risolvono allo stesso commit."
+            exit 1
+          fi
+
+          skill_version=$(python -c 'import re; from pathlib import Path; text=Path("SKILL.md").read_text(encoding="utf-8"); match=re.search(r"^Versione: \*\*([^*]+)\*\*$", text, re.MULTILINE); assert match, "Versione skill mancante"; print(match.group(1))')
+          plugin_version=$(python -c 'import json; from pathlib import Path; print(json.loads(Path("agent-plugin/plugin.json").read_text(encoding="utf-8"))["version"])')
+          echo "SKILL.md=$skill_version plugin.json=$plugin_version tag=$tag commit=$tag_commit"
+          test "$skill_version" = "$plugin_version"
+          test "${tag#v}" = "$skill_version"
+
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
 
-      - name: Costruisci il pacchetto della skill
+      - name: Esegui controlli e suite completa
+        shell: bash
         run: |
-          mkdir -p dist/carousel-builder
-          tar --exclude=./agent-plugin --exclude=./tests --exclude=./.github \
-              --exclude=./.git --exclude=./.gitignore --exclude=./dist \
-              -cf - . | tar -xf - -C dist/carousel-builder
-          (cd dist && zip -qr carousel-builder.zip carousel-builder)
-          (cd agent-plugin && zip -qr ../dist/carousel-builder-agent-plugin.zip .)
-          unzip -l dist/carousel-builder.zip | tail -1
+          set -euo pipefail
+          python -m compileall -q scripts tests
+          python -B -m unittest discover -s tests -t tests -v
+          python -B tests/quick_validate.py .
+          python -B tests/quick_validate.py agent-plugin/skills/carousel-builder
+          node --check scripts/export_review_pdf.cjs
+          node --check assets/review-editor/app.js
+          node --check agent-plugin/skills/carousel-builder/scripts/export_review_pdf.cjs
+          node --check agent-plugin/skills/carousel-builder/assets/review-editor/app.js
+          node --test tests/test_export_review_pdf.cjs
 
-      - name: Pubblica la release
+      - name: Verifica il mirror Agent Plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          for shared_path in SKILL.md references scripts assets agents; do
+            diff -r -x __pycache__ "$shared_path" "agent-plugin/skills/carousel-builder/$shared_path"
+          done
+          cmp LICENSE agent-plugin/LICENSE
+
+      - name: Costruisci i pacchetti da allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          root_stage="$RUNNER_TEMP/package-root/carousel-builder"
+          plugin_stage="$RUNNER_TEMP/package-plugin"
+          install -d "$root_stage" "$plugin_stage" dist
+
+          for package_path in SKILL.md README.md LICENSE agents assets references scripts; do
+            cp -R "$package_path" "$root_stage/"
+          done
+          for package_path in plugin.json README.md LICENSE skills; do
+            cp -R "agent-plugin/$package_path" "$plugin_stage/"
+          done
+
+          find "$root_stage" "$plugin_stage" -type f \( -name '*.pyc' -o -name '.DS_Store' \) -delete
+          find "$root_stage" "$plugin_stage" -type d -name '__pycache__' -empty -delete
+          (cd "$(dirname "$root_stage")" && zip -X -qr "$GITHUB_WORKSPACE/dist/carousel-builder.zip" carousel-builder)
+          (cd "$plugin_stage" && zip -X -qr "$GITHUB_WORKSPACE/dist/carousel-builder-agent-plugin.zip" .)
+
+      - name: Verifica integrità e contenuto dei due ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          root_stage="$RUNNER_TEMP/package-root/carousel-builder"
+          plugin_stage="$RUNNER_TEMP/package-plugin"
+          root_extract="$RUNNER_TEMP/extracted-root"
+          plugin_extract="$RUNNER_TEMP/extracted-plugin"
+          install -d "$root_extract" "$plugin_extract"
+
+          unzip -t dist/carousel-builder.zip
+          unzip -t dist/carousel-builder-agent-plugin.zip
+          unzip -q dist/carousel-builder.zip -d "$root_extract"
+          unzip -q dist/carousel-builder-agent-plugin.zip -d "$plugin_extract"
+
+          diff -r "$root_stage" "$root_extract/carousel-builder"
+          diff -r "$plugin_stage" "$plugin_extract"
+          python -B tests/quick_validate.py "$root_extract/carousel-builder"
+          python -B tests/quick_validate.py "$plugin_extract/skills/carousel-builder"
+          for shared_path in SKILL.md references scripts assets agents; do
+            diff -r -x __pycache__ \
+              "$root_extract/carousel-builder/$shared_path" \
+              "$plugin_extract/skills/carousel-builder/$shared_path"
+          done
+
+      - name: Pubblica una nuova release senza sovrascritture
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          TAG_COMMIT: ${{ steps.version.outputs.commit }}
+        shell: bash
         run: |
-          # Idempotente: se la release esiste già, per esempio perché è stata
-          # creata a mano dalla UI, ne aggiorna gli asset invece di fallire.
+          set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/carousel-builder.zip \
-              dist/carousel-builder-agent-plugin.zip --clobber
-          else
-            gh release create "$TAG" \
-              --target "$GITHUB_SHA" \
-              --title "Carousel Builder ${TAG#v}" \
-              --generate-notes \
-              --latest \
-              dist/carousel-builder.zip \
-              dist/carousel-builder-agent-plugin.zip
+            echo "::error::La release $TAG esiste già: gli asset non vengono sovrascritti."
+            exit 1
           fi
+          gh release create "$TAG" \
+            --verify-tag \
+            --target "$TAG_COMMIT" \
+            --title "Carousel Builder ${TAG#v}" \
+            --generate-notes \
+            --latest \
+            dist/carousel-builder.zip \
+            dist/carousel-builder-agent-plugin.zip
           gh release view "$TAG"
