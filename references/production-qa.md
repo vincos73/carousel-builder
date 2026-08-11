@@ -47,9 +47,22 @@ Qualunque modalità diversa da `layout` deve:
 5. produrre prima la prova visuale e soltanto dopo il batch completo, usando strutture HTML/CSS/SVG deterministiche e trattando l'immagine come asset opzionale di copertina;
 6. restituire errori e output verificabili, senza sostituire asset, font o firma strutturale in modo invisibile.
 
-Nel percorso `local-editor`, anteprima approvata e produzione devono usare lo stesso albero `.slide-preview`, gli stessi asset e lo stesso foglio di stile. La modalità di produzione può nascondere soltanto i controlli dell'editor e riposizionare la sequenza per la cattura; non può ridefinire copy, tipografia, safe area o geometria del sistema visivo. Prima di creare il PDF, confrontare automaticamente ordine, rapporto 4:5 e geometria normalizzata degli elementi dell'anteprima e della produzione. Qualsiasi differenza è bloccante.
+Nel percorso `local-editor`, anteprima approvata e produzione devono usare lo stesso albero `.slide-preview`, gli stessi asset e lo stesso foglio di stile. La modalità di produzione può nascondere soltanto i controlli dell'editor e riposizionare la sequenza per la cattura; non può ridefinire copy, tipografia, safe area o geometria del sistema visivo. Prima di creare il PDF, richiedere `proof.approved: true`, un `proof.render_fingerprint` uguale al fingerprint corrente e uno stato compreso fra `prova_visuale_approvata`, `rendering`, `qa` e `consegnato`; confrontare automaticamente revisione, fingerprint, sistema visivo, snapshot canonico del contenuto, ordine, rapporto 4:5, geometria normalizzata e pixel catturati dell'anteprima e della produzione. Ripetere il confronto dopo la cattura e subito prima della sostituzione atomica del file. Qualsiasi differenza è bloccante.
 
 Se un renderer o adapter non soddisfa questi requisiti, usare `layout` come fallback dichiarato.
+
+### Invocazione local-editor
+
+Dalla directory della skill, usare il runtime Node già verificato nel preflight e passare sempre l'URL completo dell'editor con token, un percorso PDF assoluto e la directory `node_modules` esistente che espone Playwright, Sharp e pdf-lib:
+
+```bash
+<node> scripts/export_review_pdf.cjs \
+  --url "<http://127.0.0.1:porta/?token=token-sessione>" \
+  --output "<percorso-assoluto/carousel.pdf>" \
+  --node-modules "<percorso-assoluto/node_modules>"
+```
+
+Se il browser non viene risolto automaticamente ma esiste già un eseguibile verificato, aggiungere `--chrome "<percorso-assoluto-browser>"`. Non installare dipendenze o browser per completare l'export. Considerare riuscita la produzione soltanto quando il comando termina con stato `ok` e dichiara `preview_production_parity: "exact"`, `live_session_verified: true` e `approval_verified: true`.
 
 ## Master, esportazione e scala tipografica
 
@@ -142,7 +155,7 @@ Verificare inoltre:
 - presenza nel manifest di alt text per ogni slide oppure di una trascrizione completa e ordinata del carosello;
 - descrizione del visuale quando aggiunge informazione non presente nei testi.
 
-Se una palette identificativa non supera il contrasto minimo, segnalarlo e chiedere una scelta. Non alterarla silenziosamente.
+Se uno dei cinque colori richiesti (`background_light`, `background_dark`, `text_on_light`, `text_on_dark`, `accent`) non è dichiarato esplicitamente o non usa `#RRGGBB`, non approvare il fallback mostrato dall'anteprima. Se una palette identificativa dichiarata non supera il contrasto minimo, segnalarlo e chiedere una scelta. Non alterarla silenziosamente.
 
 Correggere e renderizzare di nuovo gli artefatti interessati. Ripetere il controllo dopo ogni correzione.
 
@@ -158,7 +171,7 @@ Prima della consegna verificare:
 - corrispondenza tra font richiesto, font approvato e famiglia effettivamente renderizzata;
 - corrispondenza tra testi approvati, manifest e artefatti;
 - in modalità `renderer` o `adapter`, presenza di `production.supported_style_systems` con il sistema selezionato e di `proof.style_system_verified: true`;
-- nel percorso `local-editor`, esito positivo del contratto `approved-preview-dom-v1` e parità esatta tra geometria dell'anteprima e geometria catturata per la produzione;
+- nel percorso `local-editor`, esito positivo del contratto `approved-preview-dom-v1`, prova visuale ancora approvata e legata agli asset correnti, e parità esatta di revisione, contenuto, geometria e pixel tra anteprima e produzione prima e dopo la cattura;
 - assenza di file incompleti o duplicati presentati come finali.
 
 Se un controllo fallisce, conservare gli output validi, mantenere lo stato precedente e offrire ripetizione o fallback. Non avanzare a `consegnato`.

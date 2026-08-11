@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="color-scheme" content="dark light">
+    <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#2D2E2F">
     <title>Carousel Builder Editor</title>
     <link rel="stylesheet" href="./styles.css">
@@ -58,6 +58,17 @@
             </div>
             <div id="visual-system-picker" class="visual-system-picker" role="radiogroup" aria-label="Sistema visivo dell’anteprima"></div>
           </section>
+          <section id="validation-summary" class="validation-summary" aria-labelledby="validation-summary-title" tabindex="-1" hidden>
+            <div>
+              <h3 id="validation-summary-title">Controlla prima di proseguire</h3>
+              <p id="validation-summary-copy">Risolvi i problemi indicati per approvare la revisione.</p>
+            </div>
+            <ul id="validation-list" class="validation-list"></ul>
+            <div class="validation-actions">
+              <button id="retry-submit-button" class="button button-secondary" type="button" hidden>Riprova invio</button>
+              <button id="export-recovery-button" class="button button-secondary" type="button" hidden>Salva feedback recuperabile</button>
+            </div>
+          </section>
           <nav id="sequence-nav" class="sequence-nav" aria-label="Navigazione della sequenza"></nav>
           <div id="slides" class="slides"></div>
 
@@ -76,8 +87,8 @@
                 <span id="logo-preference-status" class="control-status" aria-live="polite"></span>
               </div>
               <div id="logo-preference" class="segmented-control" role="radiogroup" aria-label="Preferenza globale del logo">
-                <button type="button" class="segment-button" data-logo-mode="auto" role="radio" aria-checked="true">Logo automatico</button>
-                <button type="button" class="segment-button" data-logo-mode="hidden" role="radio" aria-checked="false">Logo nascosto</button>
+                <button type="button" class="segment-button" data-logo-mode="auto" role="radio" aria-checked="true" tabindex="0">Logo automatico</button>
+                <button type="button" class="segment-button" data-logo-mode="hidden" role="radio" aria-checked="false" tabindex="-1">Logo nascosto</button>
               </div>
               <div id="logo-variants" class="logo-variants" aria-label="Varianti del logo"></div>
               <p id="logo-warning" class="inline-warning" hidden role="status" aria-live="polite"></p>

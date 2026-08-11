@@ -82,6 +82,7 @@
   background: #f7f7f5;
   font-family: "Inter", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
+  color-scheme: light;
 }
 
 * {
@@ -275,7 +276,7 @@ input:focus {
 }
 
 .editor.locked {
-  opacity: 0.72;
+  cursor: progress;
 }
 
 .content {
@@ -373,7 +374,7 @@ input:focus {
 }
 
 .button-compact {
-  min-height: 34px;
+  min-height: 44px;
   padding: 7px 9px;
   font-size: 12px;
 }
@@ -533,7 +534,7 @@ input:focus {
 }
 
 .visual-system-option {
-  min-height: 38px;
+  min-height: 44px;
   padding: 8px 11px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -720,7 +721,7 @@ input:focus {
   font-weight: 800;
   letter-spacing: 0.07em;
   line-height: 1;
-  opacity: 0.82;
+  opacity: 1;
 }
 
 .preview-brand {
@@ -737,7 +738,7 @@ input:focus {
   font-size: clamp(9px, 2.7cqw, 14px);
   letter-spacing: 0.06em;
   line-height: 1.2;
-  opacity: 0.78;
+  opacity: 1;
 }
 
 .preview-signature {
@@ -819,12 +820,18 @@ input:focus {
 }
 
 .preview-italic {
-  font-family: var(--preview-italic);
-  font-style: italic;
+  font-family: var(--preview-body);
+  font-style: normal;
 }
 
 .preview-cover-subtitle {
-  font-family: var(--preview-serif);
+  font-family: var(--preview-body);
+  font-style: normal;
+}
+
+.slide-preview.has-real-italic .preview-italic,
+.slide-preview.has-real-italic .preview-cover-subtitle {
+  font-family: var(--preview-italic);
   font-style: italic;
 }
 
@@ -1048,7 +1055,7 @@ input:focus {
 .slide-preview.visual-system-corporate-modular:not([data-kind="cover"]) .preview-brand {
   padding-top: clamp(8px, 2.2cqw, 13px);
   border-top: 1px solid color-mix(in srgb, currentColor 24%, transparent);
-  opacity: 0.82;
+  opacity: 1;
 }
 
 .fit-warning {
@@ -1228,28 +1235,6 @@ input:focus {
   border-top: 1px solid rgba(22, 32, 51, 0.12);
   background: rgba(255, 255, 255, 0.97);
   box-shadow: 0 -10px 28px rgba(22, 32, 51, 0.09);
-}
-
-.change-summary {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 9px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.dirty-dot {
-  width: 9px;
-  height: 9px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: #98a2b3;
-}
-
-.dirty-dot.active {
-  background: var(--accent);
-  box-shadow: 0 0 0 4px rgba(254, 189, 8, 0.18);
 }
 
 .actions {
@@ -1496,10 +1481,6 @@ input:focus {
     justify-content: center;
   }
 
-  .change-summary {
-    font-size: 12px;
-  }
-
   .field-heading {
     align-items: flex-start;
   }
@@ -1543,13 +1524,21 @@ input:focus {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  html {
     scroll-behavior: auto !important;
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+  }
+
+  .spinner,
+  .workflow-status[aria-busy="true"]::before,
+  .slide-row {
+    animation: none !important;
+  }
+
+  button,
+  input,
+  textarea,
+  .toast {
+    transition: none !important;
   }
 }
 
@@ -1740,7 +1729,7 @@ input:focus {
 .applied-style-chip {
   display: inline-flex;
   min-width: 44px;
-  min-height: 36px;
+  min-height: 44px;
   align-items: center;
   gap: 6px;
   padding: 5px 7px;
@@ -1869,6 +1858,12 @@ input:focus {
 
 .preview-italic,
 .preview-serif {
+  font-family: var(--preview-body);
+  font-style: normal;
+}
+
+.slide-preview.has-real-italic .preview-italic,
+.slide-preview.has-real-italic .preview-serif {
   font-family: var(--preview-italic, var(--preview-serif));
   font-style: italic;
 }
@@ -1920,7 +1915,7 @@ textarea:focus-visible,
    variables and remain visually independent from the editor chrome. */
 :root {
   --ink: #2d2e2f;
-  --muted: #6c6d6d;
+  --muted: #696a69;
   --line: #c7c5bf;
   --soft: #e5e2dc;
   --paper: #f8f7f4;
@@ -1976,7 +1971,7 @@ input {
 
 textarea::placeholder,
 input::placeholder {
-  color: #737472;
+  color: #6b6c6b;
 }
 
 textarea:focus,
@@ -2195,7 +2190,7 @@ input:focus {
 }
 
 .visual-system-option {
-  min-height: 40px;
+  min-height: 44px;
   border-color: transparent;
   border-radius: 2px;
   color: var(--muted);
@@ -2215,6 +2210,79 @@ input:focus {
   color: var(--editor-ink);
   background: transparent;
   box-shadow: none;
+}
+
+.validation-summary {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+  padding: 16px 22px;
+  border-bottom: 1px solid rgba(180, 35, 24, 0.42);
+  border-left: 4px solid var(--editor-red);
+  color: var(--editor-ink);
+  background: #fff1f0;
+  scroll-margin-top: 96px;
+}
+
+.validation-summary[hidden] {
+  display: none;
+}
+
+.validation-summary h3,
+.validation-summary p {
+  margin: 0;
+}
+
+.validation-summary h3 {
+  font-size: 15px;
+}
+
+.validation-summary p {
+  margin-top: 3px;
+  color: #71201d;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.validation-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.validation-link {
+  min-height: 44px;
+  padding: 7px 4px;
+  border: 0;
+  color: #71201d;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.approval-field-error {
+  margin: 7px 0 0;
+  color: #8f201d;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+[data-approval-invalid="true"] {
+  border-color: var(--editor-red) !important;
+  box-shadow: 0 0 0 3px rgba(180, 35, 24, 0.14) !important;
+}
+
+.validation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-self: start;
 }
 
 .sequence-nav {
@@ -2535,20 +2603,6 @@ input:focus {
   box-shadow: 0 -12px 32px rgba(45, 46, 47, 0.1);
 }
 
-.change-summary {
-  color: var(--muted);
-}
-
-.dirty-dot {
-  border-radius: 1px;
-  background: var(--editor-line-light);
-}
-
-.dirty-dot.active {
-  background: var(--editor-gold);
-  box-shadow: 0 0 0 4px rgba(107, 63, 93, 0.14);
-}
-
 .button {
   border-radius: 2px;
   font-weight: 600;
@@ -2808,11 +2862,37 @@ input:focus {
 
   .slide-toolbar {
     align-items: flex-start;
+    flex-direction: column;
   }
 
   .toolbar-actions {
+    width: 100%;
     flex-wrap: wrap;
-    justify-content: flex-end;
+    justify-content: flex-start;
+  }
+
+  .toolbar-actions .icon-button {
+    flex: 1 1 44px;
+  }
+
+  .field-tools {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .selection-toolbar {
+    display: flex;
+    width: 100%;
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  .format-button {
+    flex: 1 1 44px;
+  }
+
+  .comment-selection {
+    flex: 1 1 76px;
   }
 
   .overall-panel {
@@ -2830,7 +2910,9 @@ input:focus {
  * same .slide-preview DOM/CSS that the reviewer approved.
  */
 html.production-render,
-html.production-render body {
+html.production-render body,
+html[data-capture-target="true"],
+html[data-capture-target="true"] body {
   margin: 0;
   width: 440px;
   min-width: 440px;
@@ -2845,14 +2927,27 @@ html.production-render .sequence-nav,
 html.production-render .overall-panel,
 html.production-render .actionbar,
 html.production-render .slide-form,
-html.production-render .loading {
+html.production-render .loading,
+html[data-capture-target="true"] .topbar,
+html[data-capture-target="true"] .sidebar,
+html[data-capture-target="true"] .content-header,
+html[data-capture-target="true"] .visual-systems,
+html[data-capture-target="true"] .sequence-nav,
+html[data-capture-target="true"] .overall-panel,
+html[data-capture-target="true"] .actionbar,
+html[data-capture-target="true"] .slide-form,
+html[data-capture-target="true"] .loading {
   display: none !important;
 }
 
 html.production-render .shell,
 html.production-render .editor,
 html.production-render .content,
-html.production-render .slides {
+html.production-render .slides,
+html[data-capture-target="true"] .shell,
+html[data-capture-target="true"] .editor,
+html[data-capture-target="true"] .content,
+html[data-capture-target="true"] .slides {
   display: block;
   width: 440px;
   margin: 0;
@@ -2860,7 +2955,8 @@ html.production-render .slides {
   background: transparent;
 }
 
-html.production-render .slide-row {
+html.production-render .slide-row,
+html[data-capture-target="true"] .slide-row {
   display: block;
   width: 440px;
   margin: 0;
@@ -2871,6 +2967,19 @@ html.production-render .slide-row {
 }
 
 html.production-render .slide-preview {
+  position: relative;
+  top: auto;
+  width: 440px;
+  min-height: 0;
+  margin: 0;
+  border: 10px solid var(--preview-bg, #172033);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* The exporter opts both reference and production pages into this mode before
+   layout so font fitting, borders and raster edges share one capture box. */
+html[data-capture-target="true"] .slide-preview {
   position: relative;
   top: auto;
   width: 440px;

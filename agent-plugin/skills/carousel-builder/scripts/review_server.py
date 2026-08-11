@@ -16,6 +16,32 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from review_core import (  # noqa: E402
+    approval_stage_for_workflow,
+    append_only_json,
+    atomic_write_json as core_atomic_write_json,
+    client_feedback_id,
+    copy_limit_issues,
+    ensure_private_directory,
+    feedback_archive_path,
+    feedback_request_fingerprint,
+    new_feedback_id,
+    open_private_lock_file,
+    render_context_fingerprint,
+    render_snapshot_fingerprint,
+    safe_feedback_id,
+    sentence_line_breaks,
+    sha256_file,
+    strict_json_loads,
+    strict_json_text,
+    valid_sha256,
+    validate_emphasis_values,
+)
+
 if os.name == "nt":
     import msvcrt
 else:
@@ -26,7 +52,7 @@ MAX_BODY_BYTES = 1_000_000
 MAX_SLIDES = 50
 MAX_COMMENTS = 200
 MAX_TEXT = 20_000
-EDITOR_VERSION = "2.8.8"
+EDITOR_VERSION = "2.8.9"
 TYPOGRAPHY_DEFAULTS = {
     "cover_px": 112,
     "cover_subtitle_px": 56,
@@ -70,7 +96,13 @@ FONT_ROLE_FALLBACKS = {
     "serif": ("serif_italic", "serif"),
 }
 EMPHASIS_ROLES = ("bold", "italic", "serif", "accent", "underline")
-EMPHASIS_MAX_PER_ROLE = 2
+PALETTE_COLOR_FIELDS = (
+    "background_light",
+    "background_dark",
+    "text_on_light",
+    "text_on_dark",
+    "accent",
+)
 LOGO_MODES = {"auto", "hidden"}
 VISUAL_STYLE_SYSTEMS = {
     "editorial-frame": "Editoriale",
@@ -98,14 +130,21 @@ VISUAL_STYLE_ALIASES = {
     "istituzionale": "corporate-modular",
     "institutional": "corporate-modular",
 }
-SENTENCE_BREAK_ABBREVIATIONS = {
-    "ca", "cfr", "dott", "ecc", "es", "n", "pag", "pp", "prof", "sig", "sigg", "vs"
-}
-SENTENCE_BREAK_RE = re.compile(r'\.(?!\d)([”’"\')\]]*)[ \t]+(?=[A-ZÀÈÉÌÒÙ])')
+
+
+TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
+
+
+def valid_session_token(value: object) -> str | None:
+    return value if isinstance(value, str) and TOKEN_RE.fullmatch(value) else None
 
 
 class LockUnavailableError(RuntimeError):
     """Raised when another process owns a non-blocking review lock."""
+
+
+class IdempotencyConflictError(RuntimeError):
+    """Raised when a client reuses a feedback UUID for different content."""
 
 
 class InterprocessLock:
@@ -116,8 +155,7 @@ class InterprocessLock:
         self._stream = None
 
     def acquire(self) -> "InterprocessLock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        stream = self.path.open("a+b")
+        stream = open_private_lock_file(self.path)
         stream.seek(0, os.SEEK_END)
         if stream.tell() == 0:
             stream.write(b"\0")
@@ -161,7 +199,7 @@ def now_iso() -> str:
 
 def read_json(path: Path) -> dict:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = strict_json_loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ValueError(f"File non trovato: {path}") from exc
     except json.JSONDecodeError as exc:
@@ -171,20 +209,31 @@ def read_json(path: Path) -> dict:
     return value
 
 
+def validated_revision(manifest: dict) -> int:
+    revision = manifest.get("revision", 1)
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+        raise ValueError("revision deve essere un intero non negativo")
+    return revision
+
+
+def manifest_revision(manifest_path: Path) -> int:
+    """Read only the durable revision; status polling must not hash visual assets."""
+    return validated_revision(read_json(manifest_path))
+
+
+def manifest_status(manifest_path: Path) -> dict:
+    """Read the polling contract without constructing or hashing the render model."""
+    manifest = read_json(manifest_path)
+    workflow_state = manifest.get("workflow_state", "bozza")
+    return {
+        "manifest_revision": validated_revision(manifest),
+        "workflow_state": workflow_state,
+        "approval_checkpoint": approval_stage_for_workflow(workflow_state),
+    }
+
+
 def atomic_write_json(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            stream.write(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+    core_atomic_write_json(path, value, mode=0o600, private_parent=True)
 
 
 def canonical_path(path: Path | str) -> str:
@@ -204,11 +253,13 @@ def validate_state_manifest(state: dict, manifest_path: Path) -> None:
 
 
 def feedback_event(feedback_path: Path, feedback: dict) -> dict:
+    archive_path = feedback_archive_path(feedback_path.parent, feedback["feedback_id"])
     return {
         "event": "feedback",
         "feedback_id": feedback["feedback_id"],
         "action": feedback["action"],
         "path": str(feedback_path),
+        "archive_path": str(archive_path),
     }
 
 
@@ -222,24 +273,34 @@ def commit_feedback(
     feedback: dict,
     manifest_revision: int,
 ) -> dict:
+    feedback_id = safe_feedback_id(feedback.get("feedback_id"))
+    archive_path = feedback_archive_path(feedback_path.parent, feedback_id)
     state_before = {
         key: current_state.get(key)
-        for key in ("last_feedback_id", "last_action", "applied_feedback_id", "manifest_revision")
+        for key in (
+            "last_feedback_id",
+            "last_feedback_path",
+            "last_action",
+            "applied_feedback_id",
+            "manifest_revision",
+        )
     }
     state_patch = {
-        "last_feedback_id": feedback["feedback_id"],
+        "last_feedback_id": feedback_id,
+        "last_feedback_path": str(archive_path),
         "last_action": feedback["action"],
         "feedback_submitted_at": feedback["submitted_at"],
         "manifest_revision": manifest_revision,
     }
     journal = {
-        "version": 1,
+        "version": 2,
         "manifest": str(manifest_path),
         "feedback": feedback,
         "state_before": state_before,
         "state_patch": state_patch,
     }
     atomic_write_json(journal_path, journal)
+    append_only_json(archive_path, feedback)
     atomic_write_json(feedback_path, feedback)
     next_state = dict(current_state)
     next_state.update(state_patch)
@@ -257,7 +318,7 @@ def recover_feedback_commit(
     if not journal_path.exists():
         return None
     journal = read_json(journal_path)
-    if journal.get("version") != 1 or not isinstance(journal.get("manifest"), str):
+    if journal.get("version") not in {1, 2} or not isinstance(journal.get("manifest"), str):
         raise ValueError("Journal feedback non valido")
     if not same_path(journal["manifest"], manifest_path):
         raise ValueError("Il journal feedback appartiene a un manifest diverso")
@@ -266,23 +327,42 @@ def recover_feedback_commit(
     state_patch = journal.get("state_patch")
     if not all(isinstance(value, dict) for value in (feedback, state_before, state_patch)):
         raise ValueError("Journal feedback incompleto")
-    feedback_id = feedback.get("feedback_id")
+    feedback_id = safe_feedback_id(feedback.get("feedback_id"))
+    archive_path = feedback_archive_path(feedback_path.parent, feedback_id)
     if (
-        not isinstance(feedback_id, str)
-        or not feedback_id
-        or feedback.get("action") not in {"feedback", "approve"}
+        feedback.get("action") not in {"feedback", "approve"}
         or not isinstance(feedback.get("submitted_at"), str)
         or state_patch.get("last_feedback_id") != feedback_id
         or state_patch.get("last_action", feedback.get("action")) != feedback.get("action")
         or state_patch.get("feedback_submitted_at") != feedback.get("submitted_at")
         or not isinstance(state_patch.get("manifest_revision"), int)
+        or isinstance(state_patch.get("manifest_revision"), bool)
     ):
         raise ValueError("Journal feedback incoerente")
     state_patch.setdefault("last_action", feedback["action"])
+    state_patch.setdefault("last_feedback_path", str(archive_path))
+
+    allowed_patch = {
+        "last_feedback_id",
+        "last_feedback_path",
+        "last_action",
+        "feedback_submitted_at",
+        "manifest_revision",
+    }
+    if set(state_patch) - allowed_patch:
+        raise ValueError("Journal feedback contiene campi di stato non consentiti")
 
     current_state = read_json(state_path)
     validate_state_manifest(current_state, manifest_path)
+    stored_action = current_state.get("last_action")
+    before_action = state_before.get("last_action")
+    after_action = state_patch["last_action"]
+    if stored_action not in (before_action, after_action):
+        raise ValueError("last_action non coincide con l'azione del journal feedback")
     if current_state.get("applied_feedback_id") == feedback_id:
+        if stored_action != after_action:
+            raise ValueError("last_action non coincide con il feedback già applicato")
+        append_only_json(archive_path, feedback)
         try:
             journal_path.unlink(missing_ok=True)
         except OSError:
@@ -293,6 +373,7 @@ def recover_feedback_commit(
         if current_state.get(key) not in (before_value, after_value):
             raise ValueError("Lo stato è cambiato dopo l'inizio del commit feedback")
 
+    append_only_json(archive_path, feedback)
     atomic_write_json(feedback_path, feedback)
     next_state = dict(current_state)
     next_state.update(state_patch)
@@ -308,22 +389,6 @@ def text(value: object, *, field: str, limit: int = MAX_TEXT) -> str:
     if len(value) > limit:
         raise ValueError(f"{field} supera il limite di {limit} caratteri")
     return value
-
-
-def sentence_line_breaks(value: str) -> str:
-    """Put each clearly complete sentence on a new line.
-
-    Decimal/version dots such as ``1.2`` never match. A short allowlist avoids
-    treating common Italian abbreviations as sentence endings.
-    """
-    def replace(match: re.Match[str]) -> str:
-        prefix = value[: match.start()]
-        token = re.search(r"([A-Za-zÀ-ÿ]+)$", prefix)
-        if token and token.group(1).casefold() in SENTENCE_BREAK_ABBREVIATIONS:
-            return match.group(0)
-        return "." + match.group(1) + "\n"
-
-    return SENTENCE_BREAK_RE.sub(replace, value)
 
 
 def stable_items(manifest: dict) -> list[dict]:
@@ -393,7 +458,7 @@ def normalize_typography(manifest: dict) -> dict:
 
 
 def validated_emphasis(value: object, content: str) -> list[str]:
-    """Keep at most two exact, non-empty phrases contained in their text."""
+    """Keep every unique, exact, non-empty phrase contained in its text."""
     if not isinstance(value, list):
         return []
     result: list[str] = []
@@ -405,28 +470,6 @@ def validated_emphasis(value: object, content: str) -> list[str]:
             and phrase not in result
         ):
             result.append(phrase)
-            if len(result) == 2:
-                break
-    return result
-
-
-def validate_emphasis_values(value: object, content: str, *, field: str) -> list[str]:
-    """Validate exact, unambiguous selections made by the review editor."""
-    if not isinstance(value, list):
-        raise ValueError(f"{field} deve essere una lista")
-    if len(value) > EMPHASIS_MAX_PER_ROLE:
-        raise ValueError(f"{field} può contenere al massimo {EMPHASIS_MAX_PER_ROLE} enfasi")
-    result: list[str] = []
-    for index, phrase in enumerate(value):
-        if not isinstance(phrase, str) or not phrase:
-            raise ValueError(f"{field}[{index}] deve essere una frase non vuota")
-        if phrase in result:
-            raise ValueError(f"{field} contiene un valore non univoco: {phrase!r}")
-        if content.count(phrase) != 1:
-            raise ValueError(
-                f"{field}[{index}] deve comparire una sola volta nel testo della card"
-            )
-        result.append(phrase)
     return result
 
 
@@ -782,6 +825,10 @@ def brand_summary(manifest: dict, manifest_path: Path | None = None) -> dict:
     if manifest_path is not None:
         asset_metadata, _ = font_assets(manifest, manifest_path)
         logo_metadata, _ = logo_assets(manifest, manifest_path)
+    palette_declared = {
+        field: isinstance(palette.get(field), str) and bool(palette[field].strip())
+        for field in PALETTE_COLOR_FIELDS
+    }
 
     return {
         "name": text(brand.get("name"), field="brand.name", limit=300),
@@ -794,6 +841,7 @@ def brand_summary(manifest: dict, manifest_path: Path | None = None) -> dict:
         "emphasis_italic": asset_metadata["italic"],
         "font_assets": asset_metadata,
         "logos": logo_metadata,
+        "palette_declared": palette_declared,
         "palette": {
             "background_light": text(
                 palette.get("background_light") or "#F5F1E8",
@@ -881,6 +929,7 @@ def reusable_brand_profile(manifest: dict) -> dict:
         "fonts": profile_fonts,
         "typography": normalize_typography(manifest),
         "palette": {"surface_mode": surface_mode, **summary["palette"]},
+        "palette_declared": summary["palette_declared"],
         "visual_direction": {
             "mode": mode,
             "description": _short_string(direction.get("description"), limit=1_200),
@@ -901,11 +950,78 @@ def reusable_brand_profile(manifest: dict) -> dict:
     }
 
 
-def manifest_model(manifest_path: Path) -> dict:
-    manifest = read_json(manifest_path)
-    revision = manifest.get("revision", 1)
-    if not isinstance(revision, int) or revision < 0:
-        raise ValueError("revision deve essere un intero non negativo")
+RENDER_SLIDE_FIELDS = (
+    "id",
+    "kind",
+    "title",
+    "summary",
+    "title_bold",
+    "title_italic",
+    "title_serif",
+    "title_accent",
+    "title_underline",
+    "summary_bold",
+    "summary_italic",
+    "summary_serif",
+    "summary_accent",
+    "summary_underline",
+)
+
+
+def render_slides(slides: list[dict]) -> list[dict]:
+    return [
+        {field: slide.get(field, [] if "_" in field else "") for field in RENDER_SLIDE_FIELDS}
+        for slide in slides
+    ]
+
+
+def render_asset_digests(manifest: dict, manifest_path: Path) -> dict[str, str]:
+    """Hash the exact local cover, logo and font bytes used by the editor."""
+    _cover, cover_path = cover_image_asset(manifest, manifest_path)
+    _logos, logo_paths = logo_assets(manifest, manifest_path)
+    _fonts, font_paths = font_assets(manifest, manifest_path)
+    paths: dict[str, Path] = {}
+    if cover_path is not None:
+        paths["cover"] = cover_path
+    paths.update({f"logo:{role}": path for role, path in logo_paths.items()})
+    paths.update({f"font:{role}": path for role, path in font_paths.items()})
+    cached: dict[str, str] = {}
+    result: dict[str, str] = {}
+    for role, path in sorted(paths.items()):
+        canonical = str(path.resolve())
+        if canonical not in cached:
+            cached[canonical] = sha256_file(path)
+        result[role] = cached[canonical]
+    return result
+
+
+def fingerprint_for_model(
+    model: dict,
+    *,
+    context_fingerprint: str,
+    slides: list[dict] | None = None,
+    visual_style_system: str | None = None,
+    logo_mode: str | None = None,
+) -> str:
+    selected_style = visual_style_system or model["visual_proofs"][
+        "selected_style_system"
+    ]
+    return render_snapshot_fingerprint(
+        context_fingerprint=context_fingerprint,
+        slides=render_slides(slides or model["slides"]),
+        visual_style_system=selected_style,
+        logo_mode=logo_mode or model["logo_mode"],
+    )
+
+
+def manifest_model(
+    manifest_path: Path,
+    *,
+    manifest: dict | None = None,
+    include_internal: bool = False,
+) -> dict:
+    manifest = read_json(manifest_path) if manifest is None else manifest
+    revision = validated_revision(manifest)
 
     slides: list[dict] = [
         {
@@ -1046,10 +1162,14 @@ def manifest_model(manifest_path: Path) -> dict:
     cover_visual["mode"] = normalized_cover_mode(manifest, cover_visual)
     typography = normalize_typography(manifest)
     brand = brand_summary(manifest, manifest_path)
-    return {
+    proof = manifest.get("proof") if isinstance(manifest.get("proof"), dict) else {}
+    workflow_state = manifest.get("workflow_state", "bozza")
+    approval_checkpoint = approval_stage_for_workflow(workflow_state)
+    model = {
         "editor_version": EDITOR_VERSION,
         "revision": revision,
-        "workflow_state": manifest.get("workflow_state", "bozza"),
+        "workflow_state": workflow_state,
+        "approval_checkpoint": approval_checkpoint,
         "sequence_mode": sequence_mode,
         "source_type": manifest.get("source_type", "notes"),
         "format": {
@@ -1071,6 +1191,32 @@ def manifest_model(manifest_path: Path) -> dict:
         ),
         "slides": slides,
     }
+    context = {
+        "editor_version": EDITOR_VERSION,
+        "format": model["format"],
+        "typography": model["typography"],
+        "brand": model["brand"],
+        "cover_visual": model["cover_visual"],
+        "cover_mode": model["cover_mode"],
+        "sequence_mode": model["sequence_mode"],
+        # Only the coarse approval checkpoint belongs to the render identity:
+        # entering visual proof invalidates a stale profile/text approval, while
+        # later visual workflow states keep the same approved proof valid.
+        "approval_checkpoint": model["approval_checkpoint"],
+    }
+    context_fingerprint = render_context_fingerprint(
+        context, render_asset_digests(manifest, manifest_path)
+    )
+    model["render_fingerprint"] = fingerprint_for_model(
+        model, context_fingerprint=context_fingerprint
+    )
+    model["proof_approved"] = bool(
+        proof.get("approved") is True
+        and proof.get("render_fingerprint") == model["render_fingerprint"]
+    )
+    if include_internal:
+        model["_render_context_fingerprint"] = context_fingerprint
+    return model
 
 
 def validate_feedback(payload: object, model: dict) -> dict:
@@ -1080,6 +1226,8 @@ def validate_feedback(payload: object, model: dict) -> dict:
     if action not in {"feedback", "approve"}:
         raise ValueError("action deve essere feedback oppure approve")
     base_revision = payload.get("base_revision")
+    if not isinstance(base_revision, int) or isinstance(base_revision, bool):
+        raise ValueError("base_revision deve essere un intero")
     if base_revision != model["revision"]:
         raise RuntimeError(
             f"La revisione di base {base_revision} non coincide con la revisione corrente {model['revision']}"
@@ -1147,6 +1295,12 @@ def validate_feedback(payload: object, model: dict) -> dict:
     if item_count < 1:
         raise ValueError("Deve restare almeno una slide interna")
 
+    approval_issues = copy_limit_issues(normalized_slides)
+    if action == "approve" and approval_issues:
+        raise ValueError("Approvazione bloccata: " + "; ".join(approval_issues))
+    if action == "feedback":
+        warnings.extend(approval_issues)
+
     comments = payload.get("comments", [])
     if not isinstance(comments, list) or len(comments) > MAX_COMMENTS:
         raise ValueError(f"comments deve contenere al massimo {MAX_COMMENTS} elementi")
@@ -1193,8 +1347,45 @@ def validate_feedback(payload: object, model: dict) -> dict:
     if logo_mode is None:
         raise ValueError("logo_mode deve essere auto oppure hidden")
 
+    approved_render_fingerprint = None
+    base_render_fingerprint = None
+    approval_stage = None
+    base_workflow_state = None
+    if action == "approve":
+        approval_stage = approval_stage_for_workflow(model.get("workflow_state"))
+        if "approval_stage" in payload:
+            raise ValueError(
+                "approval_stage è derivato dal server e non deve essere inviato dal client"
+            )
+        base_workflow_state = payload.get("base_workflow_state")
+        if (
+            not isinstance(base_workflow_state, str)
+            or base_workflow_state != model.get("workflow_state")
+        ):
+            raise ValueError(
+                "base_workflow_state non coincide con lo stato corrente del workflow; ricarica l'editor"
+            )
+        base_render_fingerprint = valid_sha256(payload.get("render_fingerprint"))
+        if base_render_fingerprint != model.get("render_fingerprint"):
+            raise ValueError(
+                "render_fingerprint non coincide con lo snapshot visuale corrente; ricarica l'editor"
+            )
+        context_fingerprint = valid_sha256(
+            model.get("_render_context_fingerprint")
+        )
+        if context_fingerprint is None:
+            raise ValueError("Contesto del fingerprint visuale non disponibile")
+        approved_render_fingerprint = fingerprint_for_model(
+            model,
+            context_fingerprint=context_fingerprint,
+            slides=normalized_slides,
+            visual_style_system=visual_style_system,
+            logo_mode=logo_mode,
+        )
+
     result = {
-        "feedback_id": f"feedback-{secrets.token_hex(8)}",
+        "feedback_id": client_feedback_id(payload.get("feedback_id")) or new_feedback_id(),
+        "request_fingerprint": feedback_request_fingerprint(payload),
         "submitted_at": now_iso(),
         "action": action,
         "base_revision": base_revision,
@@ -1208,6 +1399,11 @@ def validate_feedback(payload: object, model: dict) -> dict:
     }
     if visual_style_system is not None:
         result["visual_style_system"] = visual_style_system
+    if approved_render_fingerprint is not None:
+        result["approval_stage"] = approval_stage
+        result["base_workflow_state"] = base_workflow_state
+        result["base_render_fingerprint"] = base_render_fingerprint
+        result["render_fingerprint"] = approved_render_fingerprint
     return result
 
 
@@ -1221,7 +1417,7 @@ def main() -> int:
     try:
         manifest_path = args.manifest.expanduser().resolve()
         session_dir = args.session_dir.expanduser().resolve()
-        session_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(session_dir)
     except OSError as exc:
         print(
             json.dumps({"error": f"Impossibile preparare la sessione: {exc}"}),
@@ -1250,30 +1446,33 @@ def main() -> int:
     feedback_path = session_dir / "feedback.json"
     journal_path = session_dir / "feedback-commit.json"
     transaction_lock_path = session_dir / ".review-transaction.lock"
+    manifest_lock_path = manifest_path.with_name(f".{manifest_path.name}.review.lock")
     recovered_event = None
     try:
-        initial_model = manifest_model(manifest_path)
-        if state_path.exists():
-            state = read_json(state_path)
-            validate_state_manifest(state, manifest_path)
-            token = (
-                state.get("token")
-                if isinstance(state.get("token"), str)
-                else secrets.token_urlsafe(24)
+        startup_locks = [
+            InterprocessLock(manifest_lock_path),
+            InterprocessLock(transaction_lock_path),
+        ]
+        try:
+            for lock in startup_locks:
+                lock.acquire()
+            initial_model = manifest_model(manifest_path)
+            if state_path.exists():
+                state = read_json(state_path)
+                validate_state_manifest(state, manifest_path)
+                token = valid_session_token(state.get("token")) or secrets.token_urlsafe(24)
+            else:
+                token = secrets.token_urlsafe(24)
+                state = {"manifest": str(manifest_path)}
+            state.update(
+                {
+                    "token": token,
+                    "manifest": str(manifest_path),
+                    "manifest_revision": initial_model["revision"],
+                    "server_started_at": now_iso(),
+                }
             )
-        else:
-            token = secrets.token_urlsafe(24)
-            state = {"manifest": str(manifest_path)}
-        state.update(
-            {
-                "token": token,
-                "manifest": str(manifest_path),
-                "manifest_revision": initial_model["revision"],
-                "server_started_at": now_iso(),
-            }
-        )
-        atomic_write_json(state_path, state)
-        with InterprocessLock(transaction_lock_path):
+            atomic_write_json(state_path, state)
             recovered_event = recover_feedback_commit(
                 journal_path=journal_path,
                 feedback_path=feedback_path,
@@ -1284,16 +1483,42 @@ def main() -> int:
                 current_state = read_json(state_path)
                 last_feedback_id = current_state.get("last_feedback_id")
                 applied_feedback_id = current_state.get("applied_feedback_id")
-                if last_feedback_id and last_feedback_id != applied_feedback_id:
-                    pending_feedback = read_json(feedback_path)
-                    if (
-                        pending_feedback.get("feedback_id") != last_feedback_id
-                        or pending_feedback.get("action") not in {"feedback", "approve"}
-                    ):
+                if last_feedback_id:
+                    safe_feedback_id(last_feedback_id)
+                    archive_path = feedback_archive_path(session_dir, last_feedback_id)
+                    persisted_feedback = None
+                    for candidate in (archive_path, feedback_path):
+                        if not candidate.exists():
+                            continue
+                        candidate_feedback = read_json(candidate)
+                        if candidate_feedback.get("feedback_id") == last_feedback_id:
+                            persisted_feedback = candidate_feedback
+                            break
+                    if persisted_feedback is None:
+                        raise ValueError("Il batch indicato dallo stato della sessione non è disponibile")
+                    if persisted_feedback.get("action") not in {"feedback", "approve"}:
+                        raise ValueError("Il feedback persistito contiene un'azione non valida")
+                    append_only_json(archive_path, persisted_feedback)
+                    state_changed = False
+                    if current_state.get("last_feedback_path") != str(archive_path):
+                        current_state["last_feedback_path"] = str(archive_path)
+                        state_changed = True
+                    stored_action = current_state.get("last_action")
+                    if stored_action is None:
+                        current_state["last_action"] = persisted_feedback["action"]
+                        state_changed = True
+                    elif stored_action != persisted_feedback["action"]:
                         raise ValueError(
-                            "Il feedback pendente non coincide con lo stato della sessione"
+                            "last_action non coincide con l'azione del feedback persistito"
                         )
-                    recovered_event = feedback_event(feedback_path, pending_feedback)
+                    if state_changed:
+                        atomic_write_json(state_path, current_state)
+                    if last_feedback_id != applied_feedback_id:
+                        atomic_write_json(feedback_path, persisted_feedback)
+                        recovered_event = feedback_event(feedback_path, persisted_feedback)
+        finally:
+            for lock in reversed(locals().get("startup_locks", [])):
+                lock.release()
     except (KeyError, LockUnavailableError, OSError, TypeError, ValueError) as exc:
         server_lock.release()
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
@@ -1313,6 +1538,8 @@ def main() -> int:
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
             self.send_header(
                 "Content-Security-Policy",
                 "default-src 'self'; script-src 'self'; style-src 'self'; "
@@ -1326,7 +1553,7 @@ def main() -> int:
         def send_json(self, status: int, value: dict) -> None:
             self.send_bytes(
                 status,
-                json.dumps(value, ensure_ascii=False).encode("utf-8"),
+                strict_json_text(value).encode("utf-8"),
                 "application/json; charset=utf-8",
             )
 
@@ -1528,15 +1755,16 @@ def main() -> int:
                     self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
                     return
                 try:
-                    revision = manifest_model(manifest_path)["revision"]
-                except ValueError:
-                    revision = current_state.get("manifest_revision")
+                    current_manifest_status = manifest_status(manifest_path)
+                except ValueError as exc:
+                    self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
+                    return
                 last_id = current_state.get("last_feedback_id")
                 applied_id = current_state.get("applied_feedback_id")
                 self.send_json(
                     HTTPStatus.OK,
                     {
-                        "manifest_revision": revision,
+                        **current_manifest_status,
                         "last_feedback_id": last_id,
                         "last_action": current_state.get("last_action"),
                         "applied_feedback_id": applied_id,
@@ -1559,7 +1787,7 @@ def main() -> int:
                 self.send_json(HTTPStatus.FORBIDDEN, {"error": "Sessione non autorizzata"})
                 return
             content_type = self.headers.get("Content-Type", "")
-            if content_type and content_type.split(";")[0].strip() != "application/json":
+            if content_type.split(";")[0].strip().casefold() != "application/json":
                 self.send_json(
                     HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
                     {"error": "Il batch deve essere inviato come application/json"},
@@ -1580,7 +1808,13 @@ def main() -> int:
                 pending_event = None
                 event = None
                 pending_feedback_id = None
+                idempotent_replay = False
                 try:
+                    payload = strict_json_loads(body.decode("utf-8"))
+                    if not isinstance(payload, dict):
+                        raise ValueError("Il batch deve essere un oggetto JSON")
+                    requested_feedback_id = client_feedback_id(payload.get("feedback_id"))
+                    request_fingerprint = feedback_request_fingerprint(payload)
                     with InterprocessLock(transaction_lock_path):
                         pending_event = recover_feedback_commit(
                             journal_path=journal_path,
@@ -1592,11 +1826,31 @@ def main() -> int:
                         validate_state_manifest(current_state, manifest_path)
                         last_feedback_id = current_state.get("last_feedback_id")
                         applied_feedback_id = current_state.get("applied_feedback_id")
-                        if last_feedback_id and last_feedback_id != applied_feedback_id:
+                        archived_feedback = None
+                        if requested_feedback_id is not None:
+                            requested_archive = feedback_archive_path(
+                                session_dir, requested_feedback_id
+                            )
+                            if requested_archive.exists():
+                                archived_feedback = read_json(requested_archive)
+                                if (
+                                    archived_feedback.get("feedback_id") != requested_feedback_id
+                                    or archived_feedback.get("request_fingerprint")
+                                    != request_fingerprint
+                                ):
+                                    raise IdempotencyConflictError(
+                                        "feedback_id già usato per un batch diverso"
+                                    )
+                                event = feedback_event(feedback_path, archived_feedback)
+                                idempotent_replay = True
+                        if event is not None:
+                            pass
+                        elif last_feedback_id and last_feedback_id != applied_feedback_id:
                             pending_feedback_id = last_feedback_id
                         else:
-                            payload = json.loads(body.decode("utf-8"))
-                            current_model = manifest_model(manifest_path)
+                            current_model = manifest_model(
+                                manifest_path, include_internal=True
+                            )
                             feedback = validate_feedback(payload, current_model)
                             event = commit_feedback(
                                 journal_path=journal_path,
@@ -1610,7 +1864,7 @@ def main() -> int:
                 except LockUnavailableError as exc:
                     self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
                     return
-                except RuntimeError as exc:
+                except (IdempotencyConflictError, RuntimeError) as exc:
                     self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
                     return
                 except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
@@ -1643,7 +1897,8 @@ def main() -> int:
                         {"error": "Il feedback non è stato registrato"},
                     )
                     return
-                print(json.dumps(event, ensure_ascii=False), flush=True)
+                if not idempotent_replay:
+                    print(json.dumps(event, ensure_ascii=False), flush=True)
                 try:
                     journal_path.unlink(missing_ok=True)
                 except OSError:

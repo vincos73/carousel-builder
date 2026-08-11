@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
-from support import base_feedback, base_manifest, run_apply, slide
+from support import SCRIPTS, base_feedback, base_manifest, run_apply, slide, write_json
 
 
 class ApplyReviewTest(unittest.TestCase):
@@ -22,6 +26,21 @@ class ApplyReviewTest(unittest.TestCase):
     def apply(self, manifest: dict, feedback: dict, state: dict | None = None):
         result = run_apply(self.workdir, manifest, feedback, state)
         return result
+
+    def apply_path(self, feedback_path: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "apply_review.py"),
+                str(self.workdir / "manifest.json"),
+                str(feedback_path),
+                "--session-dir",
+                str(self.workdir / "session"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     def full_batch(self, **changes: str) -> list[dict]:
         return [
@@ -42,8 +61,10 @@ class ApplyReviewTest(unittest.TestCase):
         ]
 
     def test_applies_edits_and_bumps_revision(self) -> None:
+        original_manifest = base_manifest()
+        original_bytes = json.dumps(original_manifest, ensure_ascii=False).encode("utf-8")
         result = self.apply(
-            base_manifest(),
+            original_manifest,
             base_feedback(self.full_batch(**{"item-1": "Prima frase riscritta."})),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -56,6 +77,7 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertEqual(manifest["items"][0]["summary"], "Prima frase riscritta.")
         backups = list((self.workdir / "session" / "backups").glob("*.json"))
         self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), original_bytes)
 
     def test_applies_cover_subtitle_and_marks_accessibility_copy_stale(self) -> None:
         result = self.apply(
@@ -79,6 +101,21 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertEqual(
             self.manifest()["items"][0]["summary"],
             "Usa la versione 1.2.\nPoi riavvia.\nFatto.",
+        )
+
+    def test_enforces_all_sentence_endings_without_splitting_abbreviations_or_urls(self) -> None:
+        copy = (
+            "Dott. Rossi usa la versione 1.2. Funziona? Sì! Certo… "
+            "Visita https://example.com. Fine."
+        )
+        result = self.apply(
+            base_manifest(), base_feedback(self.full_batch(**{"item-1": copy}))
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.manifest()["items"][0]["summary"],
+            "Dott. Rossi usa la versione 1.2.\nFunziona?\nSì!\nCerto…\n"
+            "Visita https://example.com.\nFine.",
         )
 
     def test_rejects_stale_base_revision(self) -> None:
@@ -143,6 +180,24 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["status"], "already_applied")
         self.assertEqual(self.manifest()["revision"], 1)
 
+    def test_backfills_a_missing_last_action_and_rejects_a_conflict(self) -> None:
+        result = self.apply(base_manifest(), base_feedback(self.full_batch()))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = json.loads(
+            (self.workdir / "session" / "session-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(state["last_action"], "feedback")
+
+        result = self.apply(
+            base_manifest(),
+            base_feedback(self.full_batch()),
+            state={"last_action": "approve"},
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("last_action", json.loads(result.stderr)["error"])
+
     def test_requires_the_cover_in_the_batch(self) -> None:
         batch = [entry for entry in self.full_batch() if entry["id"] != "cover"]
         result = self.apply(base_manifest(), base_feedback(batch))
@@ -159,6 +214,164 @@ class ApplyReviewTest(unittest.TestCase):
         result = self.apply(base_manifest(), base_feedback(batch))
         self.assertEqual(result.returncode, 2)
         self.assertIn("chiusura", json.loads(result.stderr)["error"].lower())
+
+    def test_malformed_slide_and_non_finite_json_return_structured_errors(self) -> None:
+        feedback = base_feedback(self.full_batch())
+        feedback["slides"][1] = 7
+        result = self.apply(base_manifest(), feedback)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Ogni slide", json.loads(result.stderr)["error"])
+        self.assertNotIn("Traceback", result.stderr)
+
+        manifest_path = self.workdir / "manifest.json"
+        feedback_path = self.workdir / "session" / "feedback.json"
+        state_path = self.workdir / "session" / "session-state.json"
+        write_json(manifest_path, base_manifest())
+        feedback_path.write_text('{"feedback_id":"feedback-test","action":NaN}', encoding="utf-8")
+        write_json(
+            state_path,
+            {
+                "manifest": str(manifest_path.resolve()),
+                "last_feedback_id": "feedback-test",
+            },
+        )
+        result = self.apply_path(feedback_path)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Costante JSON", json.loads(result.stderr)["error"])
+
+    def test_accepts_only_the_legacy_alias_or_a_matching_direct_archive(self) -> None:
+        manifest_path = self.workdir / "manifest.json"
+        session_dir = self.workdir / "session"
+        archive_dir = session_dir / "feedback-batches"
+        feedback_id = str(uuid.uuid4())
+        archive_path = archive_dir / f"{feedback_id}.json"
+        feedback = base_feedback(self.full_batch(), feedback_id=feedback_id)
+        write_json(manifest_path, base_manifest())
+        write_json(archive_path, feedback)
+        write_json(
+            session_dir / "session-state.json",
+            {
+                "manifest": str(manifest_path.resolve()),
+                "last_feedback_id": feedback_id,
+                "last_feedback_path": str(archive_path.resolve()),
+                "last_action": "feedback",
+            },
+        )
+        result = self.apply_path(archive_path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        write_json(manifest_path, base_manifest())
+        write_json(archive_dir / "nome-diverso.json", feedback)
+        result = self.apply_path(archive_dir / "nome-diverso.json")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("nome del batch", json.loads(result.stderr)["error"])
+
+    def test_rejects_a_tampered_alias_when_the_canonical_archive_exists(self) -> None:
+        manifest_path = self.workdir / "manifest.json"
+        session_dir = self.workdir / "session"
+        feedback_id = str(uuid.uuid4())
+        canonical = base_feedback(self.full_batch(), feedback_id=feedback_id)
+        tampered = json.loads(json.dumps(canonical))
+        tampered["slides"][1]["summary"] = "Testo alterato nell'alias."
+        archive_path = session_dir / "feedback-batches" / f"{feedback_id}.json"
+        write_json(manifest_path, base_manifest())
+        write_json(archive_path, canonical)
+        write_json(session_dir / "feedback.json", tampered)
+        write_json(
+            session_dir / "session-state.json",
+            {
+                "manifest": str(manifest_path.resolve()),
+                "last_feedback_id": feedback_id,
+                "last_feedback_path": str(archive_path.resolve()),
+                "last_action": "feedback",
+            },
+        )
+        before = manifest_path.read_bytes()
+        result = self.apply_path(session_dir / "feedback.json")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("batch append-only canonico", json.loads(result.stderr)["error"])
+        self.assertEqual(manifest_path.read_bytes(), before)
+
+    @unittest.skipIf(os.name == "nt", "symlink non sempre disponibile su Windows")
+    def test_rejects_symlinked_or_unsafe_feedback_paths(self) -> None:
+        manifest_path = self.workdir / "manifest.json"
+        session_dir = self.workdir / "session"
+        archive_dir = session_dir / "feedback-batches"
+        feedback_id = str(uuid.uuid4())
+        real_path = archive_dir / f"{feedback_id}.json"
+        linked_path = archive_dir / "linked.json"
+        feedback = base_feedback(self.full_batch(), feedback_id=feedback_id)
+        write_json(manifest_path, base_manifest())
+        write_json(real_path, feedback)
+        linked_path.symlink_to(real_path)
+        write_json(
+            session_dir / "session-state.json",
+            {
+                "manifest": str(manifest_path.resolve()),
+                "last_feedback_id": feedback_id,
+                "last_action": "feedback",
+            },
+        )
+        result = self.apply_path(linked_path)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("collegamento simbolico", json.loads(result.stderr)["error"])
+
+        unsafe = base_feedback(self.full_batch(), feedback_id="../../escape")
+        result = self.apply(base_manifest(), unsafe)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("non valido o non sicuro", json.loads(result.stderr)["error"])
+
+    @unittest.skipIf(os.name == "nt", "symlink non sempre disponibile su Windows")
+    def test_transaction_lock_symlink_never_touches_its_target(self) -> None:
+        manifest_path = self.workdir / "manifest.json"
+        session_dir = self.workdir / "session"
+        feedback = base_feedback(self.full_batch())
+        write_json(manifest_path, base_manifest())
+        write_json(session_dir / "feedback.json", feedback)
+        write_json(
+            session_dir / "session-state.json",
+            {
+                "manifest": str(manifest_path.resolve()),
+                "last_feedback_id": feedback["feedback_id"],
+            },
+        )
+        victim = self.workdir / "victim.lock-target"
+        victim.write_bytes(b"")
+        victim.chmod(0o644)
+        before_mode = victim.stat().st_mode
+        (session_dir / ".review-transaction.lock").symlink_to(victim)
+
+        result = self.apply_path(session_dir / "feedback.json")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("collegamento simbolico", json.loads(result.stderr)["error"])
+        self.assertEqual(victim.read_bytes(), b"")
+        self.assertEqual(victim.stat().st_mode, before_mode)
+
+    @unittest.skipIf(os.name == "nt", "hard link non sempre disponibile su Windows")
+    def test_transaction_lock_hardlink_never_touches_its_target(self) -> None:
+        manifest_path = self.workdir / "manifest.json"
+        session_dir = self.workdir / "session"
+        feedback = base_feedback(self.full_batch())
+        write_json(manifest_path, base_manifest())
+        write_json(session_dir / "feedback.json", feedback)
+        write_json(
+            session_dir / "session-state.json",
+            {
+                "manifest": str(manifest_path.resolve()),
+                "last_feedback_id": feedback["feedback_id"],
+            },
+        )
+        victim = self.workdir / "victim.lock-target"
+        victim.write_bytes(b"")
+        victim.chmod(0o644)
+        before_mode = victim.stat().st_mode
+        os.link(victim, session_dir / ".review-transaction.lock")
+
+        result = self.apply_path(session_dir / "feedback.json")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("hard link", json.loads(result.stderr)["error"])
+        self.assertEqual(victim.read_bytes(), b"")
+        self.assertEqual(victim.stat().st_mode, before_mode)
 
     def test_drops_emphasis_that_no_longer_matches_the_new_text(self) -> None:
         result = self.apply(
@@ -271,12 +484,9 @@ class ApplyReviewTest(unittest.TestCase):
             manifest, base_feedback(self.full_batch(cover="Nuovo titolo"))
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(
-            any(
-                "prova visuale va riapprovata" in warning
-                for warning in json.loads(result.stdout)["warnings"]
-            )
-        )
+        written = self.manifest()
+        self.assertFalse(written["proof"]["approved"])
+        self.assertIn("proof.approved", json.loads(result.stdout)["changed"])
 
     def test_never_changes_the_workflow_state(self) -> None:
         batch = self.full_batch(cover="Nuovo titolo")
@@ -293,6 +503,30 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertTrue(payload["approval_requested"])
         self.assertFalse(payload["workflow_state_changed"])
         self.assertEqual(self.manifest()["workflow_state"], "bozza")
+
+    def test_visual_checkpoint_rejects_legacy_or_incomplete_approval_batches(self) -> None:
+        manifest = base_manifest()
+        manifest["workflow_state"] = "testi_approvati"
+        batch = self.full_batch()
+        batch[1]["summary_serif"] = []
+
+        legacy = self.apply(manifest, base_feedback(batch, action="approve"))
+        self.assertEqual(legacy.returncode, 2)
+        self.assertIn("approval_stage", json.loads(legacy.stderr)["error"])
+        self.assertFalse(self.manifest()["proof"]["approved"])
+
+        incomplete = self.apply(
+            manifest,
+            base_feedback(
+                batch,
+                action="approve",
+                approval_stage="visual_proof",
+                base_workflow_state="testi_approvati",
+            ),
+        )
+        self.assertEqual(incomplete.returncode, 2)
+        self.assertIn("fingerprint", json.loads(incomplete.stderr)["error"])
+        self.assertFalse(self.manifest()["proof"]["approved"])
 
     def test_persists_explicit_italic_and_removes_legacy_serif(self) -> None:
         batch = self.full_batch()
@@ -320,14 +554,22 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertEqual(first["summary_underline"], ["frase."])
         self.assertEqual(second["summary_accent"], ["frase."])
 
-    def test_prunes_received_emphasis_that_no_longer_exists(self) -> None:
+    def test_persists_three_distinct_phrases_for_the_same_emphasis_role(self) -> None:
+        batch = self.full_batch(**{"item-1": "Uno due tre."})
+        batch[1]["summary_serif"] = []
+        batch[1]["summary_accent"] = ["Uno", "due", "tre"]
+        result = self.apply(base_manifest(), base_feedback(batch))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.manifest()["items"][0]["summary_accent"], ["Uno", "due", "tre"]
+        )
+
+    def test_rejects_received_emphasis_that_no_longer_exists(self) -> None:
         batch = self.full_batch(**{"item-1": "Testo nuovo."})
         batch[1]["summary_bold"] = ["Prima"]
         result = self.apply(base_manifest(), base_feedback(batch))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        payload = json.loads(result.stdout)
-        self.assertEqual(self.manifest()["items"][0]["summary_bold"], [])
-        self.assertIn("Prima", payload["emphasis_dropped"]["item-1"])
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("una sola volta", json.loads(result.stderr)["error"])
 
     def test_rejects_overlapping_or_ambiguous_received_emphasis(self) -> None:
         batch = self.full_batch()
@@ -367,6 +609,17 @@ class ApplyReviewTest(unittest.TestCase):
         batch[2]["summary_accent"] = []
         result = self.apply(base_manifest(), base_feedback(batch, action="approve"))
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_approval_enforces_internal_copy_limits_server_side(self) -> None:
+        batch = self.full_batch()
+        batch[1]["title"] = "Titolo"
+        batch[1]["summary"] = "x" * 181
+        batch[1]["summary_serif"] = []
+        result = self.apply(
+            base_manifest(), base_feedback(batch, action="approve")
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("massimo 180", json.loads(result.stderr)["error"])
 
         batch[1]["summary"] = "Uno due tre."
         batch[1]["summary_bold"] = ["Uno"]

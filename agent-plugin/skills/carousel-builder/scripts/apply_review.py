@@ -4,13 +4,33 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
-import re
 import secrets
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from review_core import (  # noqa: E402
+    approval_stage_for_workflow,
+    atomic_write_json as core_atomic_write_json,
+    copy_limit_issues,
+    ensure_private_directory,
+    feedback_archive_path,
+    open_private_lock_file,
+    safe_feedback_id,
+    sentence_line_breaks,
+    strict_json_loads,
+    valid_sha256,
+    validate_emphasis_values,
+)
+
+from review_server import manifest_model as server_manifest_model  # noqa: E402
 
 if os.name == "nt":
     import msvcrt
@@ -30,8 +50,7 @@ class InterprocessLock:
         self._stream = None
 
     def acquire(self) -> "InterprocessLock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        stream = self.path.open("a+b")
+        stream = open_private_lock_file(self.path)
         stream.seek(0, os.SEEK_END)
         if stream.tell() == 0:
             stream.write(b"\0")
@@ -69,7 +88,7 @@ def now_iso() -> str:
 
 def read_json(path: Path) -> dict:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = strict_json_loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ValueError(f"File non trovato: {path}") from exc
     except json.JSONDecodeError as exc:
@@ -79,27 +98,23 @@ def read_json(path: Path) -> dict:
     return value
 
 
-def atomic_write_json(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            stream.write(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+def atomic_write_json(path: Path, value: dict, *, private: bool = False) -> None:
+    core_atomic_write_json(
+        path,
+        value,
+        mode=0o600 if private else None,
+        private_parent=private,
+    )
 
 
 def atomic_copy(source: Path, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.{secrets.token_hex(6)}.tmp")
+    ensure_private_directory(destination.parent)
+    temporary = destination.with_name(f".{destination.name}.{secrets.token_hex(12)}.tmp")
+    descriptor = None
     try:
-        with source.open("rb") as source_stream, temporary.open("wb") as target_stream:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with source.open("rb") as source_stream, os.fdopen(descriptor, "wb") as target_stream:
+            descriptor = None
             while True:
                 chunk = source_stream.read(1024 * 1024)
                 if not chunk:
@@ -107,8 +122,11 @@ def atomic_copy(source: Path, destination: Path) -> None:
                 target_stream.write(chunk)
             target_stream.flush()
             os.fsync(target_stream.fileno())
+        os.chmod(temporary, 0o600)
         os.replace(temporary, destination)
     finally:
+        if descriptor is not None:
+            os.close(descriptor)
         try:
             temporary.unlink(missing_ok=True)
         except OSError:
@@ -173,23 +191,6 @@ VISUAL_STYLE_ALIASES = {
     "istituzionale": "corporate-modular",
     "institutional": "corporate-modular",
 }
-SENTENCE_BREAK_ABBREVIATIONS = {
-    "ca", "cfr", "dott", "ecc", "es", "n", "pag", "pp", "prof", "sig", "sigg", "vs"
-}
-SENTENCE_BREAK_RE = re.compile(r'\.(?!\d)([”’"\')\]]*)[ \t]+(?=[A-ZÀÈÉÌÒÙ])')
-
-
-def sentence_line_breaks(value: str) -> str:
-    """Separa le frasi complete senza spezzare decimali, versioni o abbreviazioni."""
-    def replace(match: re.Match[str]) -> str:
-        token = re.search(r"([A-Za-zÀ-ÿ]+)$", value[: match.start()])
-        if token and token.group(1).casefold() in SENTENCE_BREAK_ABBREVIATIONS:
-            return match.group(0)
-        return "." + match.group(1) + "\n"
-
-    return SENTENCE_BREAK_RE.sub(replace, value)
-
-
 def normalized_visual_style_system(value: object) -> str | None:
     """Validate the persisted carousel override without mutating brand defaults."""
     if not isinstance(value, str):
@@ -252,20 +253,6 @@ def stale_emphasis(container: dict, field: str, text_value: str) -> list[str]:
     ]
 
 
-def _received_emphasis(value: object, *, field: str) -> list[str]:
-    """Validate a client-provided emphasis list before it reaches the manifest."""
-    if not isinstance(value, list):
-        raise ValueError(f"{field} deve essere una lista")
-    result: list[str] = []
-    for index, phrase in enumerate(value):
-        if not isinstance(phrase, str) or not phrase:
-            raise ValueError(f"{field}[{index}] deve essere una frase non vuota")
-        if phrase in result:
-            raise ValueError(f"{field} contiene un valore non univoco: {phrase!r}")
-        result.append(phrase)
-    return result
-
-
 def sync_emphasis(
     container: dict,
     *,
@@ -287,14 +274,10 @@ def sync_emphasis(
     for role, key in zip(EMPHASIS_ROLES, EMPHASIS_KEYS[manifest_field]):
         feedback_key = f"{slide_field}_{role}"
         if feedback_key in slide:
-            received = _received_emphasis(slide[feedback_key], field=feedback_key)
-            kept = [phrase for phrase in received if phrase in new_text]
-            dropped.extend(phrase for phrase in received if phrase not in kept)
-            for phrase in kept:
-                if new_text.count(phrase) != 1:
-                    raise ValueError(
-                        f"{feedback_key} deve comparire una sola volta nel testo della card"
-                    )
+            received = validate_emphasis_values(
+                slide[feedback_key], new_text, field=feedback_key
+            )
+            kept = received
             if received or key in container:
                 container[key] = kept
         elif text_changed:
@@ -380,15 +363,36 @@ def main() -> int:
     args = parser.parse_args()
 
     manifest_path = args.manifest.expanduser().resolve()
-    feedback_path = args.feedback.expanduser().resolve()
+    feedback_input = Path(os.path.abspath(os.fspath(args.feedback.expanduser())))
+    feedback_path = feedback_input.resolve()
     session_dir = args.session_dir.expanduser().resolve()
     state_path = session_dir / "session-state.json"
     expected_feedback_path = (session_dir / "feedback.json").resolve()
+    archive_dir_input = session_dir / "feedback-batches"
+    archive_dir = archive_dir_input.resolve()
     locks: list[InterprocessLock] = []
 
     try:
-        if not same_path(feedback_path, expected_feedback_path):
-            raise ValueError("Il feedback deve essere <session-dir>/feedback.json")
+        ensure_private_directory(session_dir)
+        if feedback_input.is_symlink():
+            raise ValueError("Il feedback non può essere un collegamento simbolico")
+        is_legacy_alias = same_path(feedback_path, expected_feedback_path)
+        is_direct_archive = (
+            feedback_path.parent == archive_dir
+            and not archive_dir_input.is_symlink()
+            and feedback_path.suffix == ".json"
+        )
+        if not (is_legacy_alias or is_direct_archive):
+            raise ValueError(
+                "Il feedback deve essere <session-dir>/feedback.json oppure un batch diretto in <session-dir>/feedback-batches"
+            )
+        for private_file in (feedback_path, state_path):
+            if private_file.exists():
+                if private_file.is_symlink():
+                    raise ValueError(
+                        f"Il file di sessione non può essere un collegamento simbolico: {private_file.name}"
+                    )
+                private_file.chmod(0o600)
         locks = [
             InterprocessLock(
                 manifest_path.with_name(f".{manifest_path.name}.review.lock")
@@ -402,17 +406,48 @@ def main() -> int:
         feedback = read_json(feedback_path)
         state = read_json(state_path)
         validate_state_manifest(state, manifest_path)
+        feedback_id = safe_feedback_id(feedback.get("feedback_id"))
+        if is_direct_archive and feedback_path.name != f"{feedback_id}.json":
+            raise ValueError("Il nome del batch append-only non coincide con feedback_id")
+        action = feedback.get("action")
+        if action not in {"feedback", "approve"}:
+            raise ValueError("Azione del batch non valida")
+        bind_approved_proof = False
+        approval_stage = None
+        stored_action = state.get("last_action")
+        if stored_action is None:
+            state["last_action"] = action
+        elif stored_action != action:
+            raise ValueError("last_action non coincide con l'azione del feedback")
         revision = manifest.get("revision", 1)
-        if not isinstance(revision, int) or revision < 0:
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
             raise ValueError("revision deve essere un intero non negativo")
-        if feedback.get("feedback_id") != state.get("last_feedback_id"):
+        if feedback_id != state.get("last_feedback_id"):
             raise ValueError("Il batch non coincide con l'ultimo feedback della sessione")
-        if feedback.get("feedback_id") == state.get("applied_feedback_id"):
+        expected_archive_path = feedback_archive_path(session_dir, feedback_id)
+        if expected_archive_path.is_symlink():
+            raise ValueError("Il batch append-only non può essere un collegamento simbolico")
+        if is_legacy_alias and expected_archive_path.exists():
+            canonical_feedback = read_json(expected_archive_path)
+            if canonical_feedback != feedback:
+                raise ValueError(
+                    "feedback.json non coincide con il batch append-only canonico"
+                )
+            feedback = canonical_feedback
+        bound_feedback_path = state.get("last_feedback_path")
+        if bound_feedback_path is not None and not same_path(
+            bound_feedback_path, expected_archive_path
+        ):
+            raise ValueError("last_feedback_path non coincide con il batch della sessione")
+        if bound_feedback_path is not None and not expected_archive_path.is_file():
+            raise ValueError("Il batch append-only canonico indicato dallo stato manca")
+        if feedback_id == state.get("applied_feedback_id"):
+            atomic_write_json(state_path, state, private=True)
             print(
                 json.dumps(
                     {
                         "status": "already_applied",
-                        "feedback_id": feedback["feedback_id"],
+                        "feedback_id": feedback_id,
                         "manifest_revision": revision,
                     },
                     ensure_ascii=False,
@@ -425,20 +460,20 @@ def main() -> int:
             if isinstance(manifest.get("review"), dict)
             else {}
         )
-        if existing_review.get("last_feedback_id") == feedback.get("feedback_id"):
+        if existing_review.get("last_feedback_id") == feedback_id:
             state.update(
                 {
-                    "applied_feedback_id": feedback["feedback_id"],
+                    "applied_feedback_id": feedback_id,
                     "applied_at": now_iso(),
                     "manifest_revision": revision,
                 }
             )
-            atomic_write_json(state_path, state)
+            atomic_write_json(state_path, state, private=True)
             print(
                 json.dumps(
                     {
                         "status": "recovered",
-                        "feedback_id": feedback["feedback_id"],
+                        "feedback_id": feedback_id,
                         "manifest_revision": revision,
                         "state_repaired": True,
                     },
@@ -447,12 +482,62 @@ def main() -> int:
                 )
             )
             return 0
-        if feedback.get("base_revision") != revision:
+        base_revision = feedback.get("base_revision")
+        if not isinstance(base_revision, int) or isinstance(base_revision, bool):
+            raise ValueError("base_revision deve essere un intero")
+        if base_revision != revision:
             raise ValueError(
                 f"Il batch parte dalla revisione {feedback.get('base_revision')}, ma il manifest è alla revisione {revision}"
             )
-        if feedback.get("action") not in {"feedback", "approve"}:
-            raise ValueError("Azione del batch non valida")
+        if action == "approve":
+            workflow_state = manifest.get("workflow_state", "bozza")
+            expected_approval_stage = approval_stage_for_workflow(workflow_state)
+            received_approval_stage = feedback.get("approval_stage")
+            modern_contract = any(
+                key in feedback
+                for key in (
+                    "approval_stage",
+                    "base_workflow_state",
+                    "base_render_fingerprint",
+                    "render_fingerprint",
+                )
+            )
+            if expected_approval_stage == "visual_proof" or modern_contract:
+                if received_approval_stage != expected_approval_stage:
+                    raise ValueError(
+                        "approval_stage non coincide con il checkpoint corrente del workflow"
+                    )
+                if feedback.get("base_workflow_state") != workflow_state:
+                    raise ValueError(
+                        "base_workflow_state non coincide con lo stato corrente del workflow"
+                    )
+                base_render_fingerprint = valid_sha256(
+                    feedback.get("base_render_fingerprint")
+                )
+                approved_render_fingerprint = valid_sha256(
+                    feedback.get("render_fingerprint")
+                )
+                if (
+                    base_render_fingerprint is None
+                    or approved_render_fingerprint is None
+                ):
+                    raise ValueError(
+                        "Il checkpoint di approvazione richiede entrambi i fingerprint visuali validi"
+                    )
+                current_render_fingerprint = server_manifest_model(
+                    manifest_path, manifest=manifest
+                )["render_fingerprint"]
+                if base_render_fingerprint != current_render_fingerprint:
+                    raise ValueError(
+                        "Gli asset, il contenuto o il checkpoint sono cambiati dopo l'approvazione; ricarica l'editor"
+                    )
+                approval_stage = received_approval_stage
+                bind_approved_proof = approval_stage == "visual_proof"
+            else:
+                # Compatibility for pre-fingerprint batches is deliberately
+                # limited to the profile/text checkpoint.  It must never bind a
+                # visual proof.
+                approval_stage = "profile_text"
         selected_visual_style = None
         if "visual_style_system" in feedback:
             selected_visual_style = normalized_visual_style_system(
@@ -481,6 +566,8 @@ def main() -> int:
         slides = feedback.get("slides")
         if not isinstance(slides, list):
             raise ValueError("Il batch non contiene slides valide")
+        if not all(isinstance(slide, dict) for slide in slides):
+            raise ValueError("Ogni slide del batch deve essere un oggetto")
         cover = next((slide for slide in slides if slide.get("id") == "cover"), None)
         if not isinstance(cover, dict):
             raise ValueError("La copertina manca dal batch")
@@ -690,28 +777,75 @@ def main() -> int:
             )
         if stale_transcript:
             warnings.append("La trascrizione di accessibilità non riflette più i testi correnti")
-        if proof is not None and proof.get("approved") and changed:
+        if (
+            proof is not None
+            and proof.get("approved") is True
+            and changed
+            and (action == "feedback" or not bind_approved_proof)
+        ):
+            proof["approved"] = False
+            changed.append("proof.approved")
             warnings.append(
-                "proof.approved resta true ma il contenuto della prova è cambiato: la prova visuale va riapprovata"
+                "proof.approved è stato invalidato perché il contenuto della prova è cambiato"
             )
 
-        approval_issues = approval_warnings(new_items)
+        approval_slides = [
+            {
+                "id": item["id"],
+                "kind": "item",
+                "title": item.get("title", ""),
+                "summary": item.get("summary", ""),
+            }
+            for item in new_items
+        ]
+        approval_issues = approval_warnings(new_items) + copy_limit_issues(approval_slides)
         if feedback["action"] == "approve" and approval_issues:
             raise ValueError("Approvazione bloccata: " + "; ".join(approval_issues))
         if feedback["action"] == "feedback":
             warnings.extend(approval_issues)
 
+        if bind_approved_proof:
+            candidate_manifest = copy.deepcopy(manifest)
+            candidate_manifest["cover_title"] = new_cover
+            candidate_manifest["cover_subtitle"] = new_cover_subtitle
+            candidate_manifest["items"] = new_items
+            candidate_manifest.update(cover_emphasis)
+            if new_outro is not None:
+                candidate_manifest["outro"] = new_outro
+            if selected_visual_style is not None:
+                candidate_manifest["visual_style_system"] = selected_visual_style
+            if logo_mode_changed:
+                candidate_manifest["logo_mode"] = selected_logo_mode
+            final_render_fingerprint = server_manifest_model(
+                manifest_path, manifest=candidate_manifest
+            )["render_fingerprint"]
+            if final_render_fingerprint != approved_render_fingerprint:
+                raise ValueError(
+                    "Il fingerprint del batch non coincide con il render finale applicabile"
+                )
+            if proof is None:
+                proof = {}
+                manifest["proof"] = proof
+            if proof.get("render_fingerprint") != final_render_fingerprint:
+                proof["render_fingerprint"] = final_render_fingerprint
+                changed.append("proof.render_fingerprint")
+            if proof.get("approved") is not True:
+                proof["approved"] = True
+                changed.append("proof.approved")
+
         review = dict(existing_review)
         review.update(
             {
                 "mode": "visual",
-                "last_feedback_id": feedback["feedback_id"],
-                "last_action": feedback["action"],
-                "approval_requested": feedback["action"] == "approve",
+                "last_feedback_id": feedback_id,
+                "last_action": action,
+                "approval_requested": action == "approve",
                 "comments_pending": len(feedback.get("comments", [])),
                 "updated_at": now_iso(),
             }
         )
+        if approval_stage is not None:
+            review["approval_stage"] = approval_stage
         if selected_visual_style is not None:
             review["visual_style_system"] = selected_visual_style
         if changed or existing_review != review:
@@ -720,7 +854,7 @@ def main() -> int:
             # identica in più a ogni batch di soli commenti.
             if changed:
                 backups_dir = session_dir / "backups"
-                backup_name = f"manifest-r{revision}-{feedback['feedback_id']}.json"
+                backup_name = f"manifest-r{revision}-{feedback_id}.json"
                 atomic_copy(manifest_path, backups_dir / backup_name)
                 manifest["cover_title"] = new_cover
                 manifest["cover_subtitle"] = new_cover_subtitle
@@ -738,26 +872,27 @@ def main() -> int:
                     manifest["logo_mode"] = selected_logo_mode
                 manifest["revision"] = revision + 1
             manifest["review"] = review
-            atomic_write_json(manifest_path, manifest)
+            atomic_write_json(manifest_path, manifest, private=False)
 
         applied_revision = manifest.get("revision", revision)
         state.update(
             {
-                "applied_feedback_id": feedback["feedback_id"],
+                "applied_feedback_id": feedback_id,
                 "applied_at": now_iso(),
                 "manifest_revision": applied_revision,
             }
         )
-        atomic_write_json(state_path, state)
+        atomic_write_json(state_path, state, private=True)
         result = {
             "status": "applied",
-            "feedback_id": feedback["feedback_id"],
-            "action": feedback["action"],
+            "feedback_id": feedback_id,
+            "action": action,
             "changed": changed,
             "manifest_revision": applied_revision,
             "comments": feedback.get("comments", []),
             "overall_note": feedback.get("overall_note", ""),
-            "approval_requested": feedback["action"] == "approve",
+            "approval_requested": action == "approve",
+            "approval_stage": approval_stage,
             "workflow_state_changed": False,
             "emphasis_dropped": emphasis_dropped,
             "proof_slide_ids_pruned": pruned_proof_ids,

@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
+import os
+import stat
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
+from unittest import mock
 
 from support import base_manifest, slide, write_json
 
@@ -47,6 +53,98 @@ class ManifestModelTest(unittest.TestCase):
         manifest["cover_subtitle"] = "Ecco cosa puoi fare"
         cover = self.model(manifest)["slides"][0]
         self.assertEqual(cover["summary"], "Ecco cosa puoi fare")
+
+    def test_exposes_only_a_strict_fingerprint_bound_proof_approval(self) -> None:
+        manifest = base_manifest()
+        manifest["proof"]["approved"] = True
+        unbound = self.model(manifest)
+        self.assertFalse(unbound["proof_approved"])
+        manifest["proof"]["render_fingerprint"] = unbound["render_fingerprint"]
+        self.assertTrue(self.model(manifest)["proof_approved"])
+        manifest["proof"]["approved"] = 1
+        self.assertFalse(self.model(manifest)["proof_approved"])
+        manifest["proof"] = "invalid"
+        self.assertFalse(self.model(manifest)["proof_approved"])
+
+    def test_render_fingerprint_tracks_the_coarse_approval_checkpoint(self) -> None:
+        manifest = base_manifest()
+        profile = self.model(manifest)
+        self.assertEqual(profile["approval_checkpoint"], "profile_text")
+
+        for workflow_state in (
+            "draft",
+            "in_revisione",
+            "in_revisione_editoriale",
+            "in_review",
+            "feedback",
+        ):
+            manifest["workflow_state"] = workflow_state
+            legacy_profile = self.model(manifest)
+            self.assertEqual(legacy_profile["approval_checkpoint"], "profile_text")
+            self.assertEqual(legacy_profile["render_fingerprint"], profile["render_fingerprint"])
+
+        manifest["workflow_state"] = "testi_approvati"
+        visual = self.model(manifest)
+        self.assertEqual(visual["approval_checkpoint"], "visual_proof")
+        self.assertNotEqual(visual["render_fingerprint"], profile["render_fingerprint"])
+        manifest["proof"].update(
+            {"approved": True, "render_fingerprint": visual["render_fingerprint"]}
+        )
+        for workflow_state in (
+            "prova_visuale_approvata",
+            "rendering",
+            "qa",
+            "consegnato",
+            "approvato",
+            "approved",
+            "pubblicato",
+            "published",
+        ):
+            manifest["workflow_state"] = workflow_state
+            later = self.model(manifest)
+            self.assertEqual(later["approval_checkpoint"], "visual_proof")
+            self.assertEqual(later["render_fingerprint"], visual["render_fingerprint"])
+            self.assertTrue(later["proof_approved"])
+
+    def test_asset_byte_changes_invalidate_the_render_fingerprint(self) -> None:
+        cover = self.workdir / "cover.png"
+        logo = self.workdir / "logo.png"
+        body = self.workdir / "body.woff2"
+        cover.write_bytes(b"cover-a")
+        logo.write_bytes(b"logo-a")
+        body.write_bytes(b"font-a")
+        manifest = base_manifest()
+        manifest["cover_image"] = "cover.png"
+        manifest["brand"] = {
+            "logos": {"on_light": "logo.png"},
+            "fonts": {
+                "body": {
+                    "family": "Test Body",
+                    "file": "body.woff2",
+                    "source": "uploaded",
+                }
+            },
+        }
+        initial = self.model(manifest)
+        manifest["proof"].update(
+            {
+                "approved": True,
+                "render_fingerprint": initial["render_fingerprint"],
+            }
+        )
+        self.assertTrue(self.model(manifest)["proof_approved"])
+
+        for path, replacement in (
+            (cover, b"cover-b"),
+            (logo, b"logo-b"),
+            (body, b"font-b"),
+        ):
+            before = self.model(manifest)["render_fingerprint"]
+            manifest["proof"]["render_fingerprint"] = before
+            path.write_bytes(replacement)
+            after = self.model(manifest)
+            self.assertNotEqual(after["render_fingerprint"], before)
+            self.assertFalse(after["proof_approved"])
 
     def test_exposes_a_safe_cover_image_endpoint_without_a_local_path(self) -> None:
         image = self.workdir / "cover.png"
@@ -152,6 +250,45 @@ class ManifestModelTest(unittest.TestCase):
             "È disponibile la versione 1.2.\nOra puoi aggiornare.\nUltima frase.",
         )
 
+    def test_breaks_question_exclamation_and_ellipsis_without_splitting_urls_or_abbreviations(self) -> None:
+        manifest = base_manifest()
+        manifest["items"][0]["summary"] = (
+            "Versione 1.2. Dott. Rossi chiede: funziona? Sì! Certo… "
+            "Visita https://example.com. Fine."
+        )
+        summary = self.model(manifest)["slides"][1]["summary"]
+        self.assertEqual(
+            summary,
+            "Versione 1.2.\nDott. Rossi chiede: funziona?\nSì!\nCerto…\n"
+            "Visita https://example.com.\nFine.",
+        )
+
+    def test_rejects_non_finite_json_constants(self) -> None:
+        path = self.workdir / "manifest-nan.json"
+        path.write_text(
+            '{"revision":1,"cover_title":"T","items":[{"id":"i","summary":"S"}],"format":{"master_width":NaN}}',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "Costante JSON"):
+            review_server.manifest_model(path)
+
+    def test_status_polling_does_not_hash_render_assets(self) -> None:
+        path = self.workdir / "manifest.json"
+        write_json(path, base_manifest())
+        with mock.patch.object(
+            review_server,
+            "render_asset_digests",
+            side_effect=AssertionError("asset hashing must not run"),
+        ):
+            self.assertEqual(
+                review_server.manifest_status(path),
+                {
+                    "manifest_revision": 1,
+                    "workflow_state": "bozza",
+                    "approval_checkpoint": "profile_text",
+                },
+            )
+
     def test_omits_a_disabled_outro(self) -> None:
         manifest = base_manifest()
         manifest["outro"]["enabled"] = False
@@ -186,8 +323,46 @@ class ManifestModelTest(unittest.TestCase):
         self.assertEqual(brand["name"], "Studio")
         self.assertEqual(brand["sans"], "Brand Sans")
         self.assertEqual(brand["palette"]["accent"], "#C65A3A")
+        self.assertTrue(brand["palette_declared"]["accent"])
+        self.assertFalse(brand["palette_declared"]["background_light"])
         self.assertFalse(brand["logos"]["on_light"]["available"])
         self.assertNotIn("assets/logo.svg", json.dumps(brand))
+
+    def test_palette_provenance_distinguishes_missing_partial_and_fallback_colors(self) -> None:
+        fields = {
+            "background_light",
+            "background_dark",
+            "text_on_light",
+            "text_on_dark",
+            "accent",
+        }
+        missing = self.model(base_manifest())
+        self.assertEqual(
+            missing["brand"]["palette_declared"],
+            {field: False for field in fields},
+        )
+        self.assertEqual(missing["brand"]["palette"]["accent"], "#FEBD08")
+        self.assertEqual(
+            missing["visual_proofs"]["identity"]["brand"]["palette_declared"],
+            missing["brand"]["palette_declared"],
+        )
+        self.assertEqual(
+            missing["brand_profile"]["palette_declared"],
+            missing["brand"]["palette_declared"],
+        )
+
+        manifest = base_manifest()
+        manifest["brand"] = {
+            "palette": {
+                "accent": "#C65A3A",
+                "background_dark": "not-a-hex",
+            }
+        }
+        partial = self.model(manifest)["brand"]
+        self.assertEqual(partial["palette"]["accent"], "#C65A3A")
+        self.assertTrue(partial["palette_declared"]["accent"])
+        self.assertTrue(partial["palette_declared"]["background_dark"])
+        self.assertFalse(partial["palette_declared"]["text_on_dark"])
 
     def test_exposes_a_portable_brand_profile_without_local_asset_paths(self) -> None:
         manifest = base_manifest()
@@ -204,7 +379,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.8.8")
+        self.assertEqual(model["editor_version"], "2.8.9")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
@@ -473,7 +648,7 @@ class ValidateFeedbackTest(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         path = self.workdir / "manifest.json"
         path.write_text(json.dumps(base_manifest()), encoding="utf-8")
-        self.model = review_server.manifest_model(path)
+        self.model = review_server.manifest_model(path, include_internal=True)
 
     def payload(self, slides: list[dict] | None = None, **overrides: object) -> dict:
         value = {
@@ -491,13 +666,64 @@ class ValidateFeedbackTest(unittest.TestCase):
             "overall_note": "",
         }
         value.update(overrides)
+        if value.get("action") == "approve" and "render_fingerprint" not in value:
+            value["render_fingerprint"] = self.model["render_fingerprint"]
+        if value.get("action") == "approve" and "base_workflow_state" not in value:
+            value["base_workflow_state"] = self.model["workflow_state"]
         return value
 
     def test_accepts_a_well_formed_batch(self) -> None:
         result = review_server.validate_feedback(self.payload(), self.model)
         self.assertEqual(result["action"], "feedback")
-        self.assertTrue(result["feedback_id"].startswith("feedback-"))
+        self.assertEqual(str(uuid.UUID(result["feedback_id"])), result["feedback_id"])
         self.assertEqual(len(result["slides"]), 4)
+
+    def test_accepts_a_canonical_client_feedback_uuid_and_rejects_other_ids(self) -> None:
+        feedback_id = str(uuid.uuid4())
+        result = review_server.validate_feedback(
+            self.payload(feedback_id=feedback_id), self.model
+        )
+        self.assertEqual(result["feedback_id"], feedback_id)
+        for invalid in ("feedback-test", "../escape", feedback_id.upper(), ""):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "UUID"):
+                review_server.validate_feedback(
+                    self.payload(feedback_id=invalid), self.model
+                )
+
+    def test_accepts_three_distinct_emphasis_phrases_in_one_role(self) -> None:
+        slides = self.payload()["slides"]
+        slides[1]["summary"] = "Uno due tre."
+        slides[1]["summary_serif"] = []
+        slides[1]["summary_accent"] = ["Uno", "due", "tre"]
+        result = review_server.validate_feedback(self.payload(slides), self.model)
+        self.assertEqual(
+            result["slides"][1]["summary_accent"], ["Uno", "due", "tre"]
+        )
+
+    def test_approval_enforces_documented_internal_copy_limits(self) -> None:
+        slides = self.payload()["slides"]
+        slides[0]["title_serif"] = []
+        slides[1].update(
+            {
+                "title": "Titolo",
+                "summary": "x" * 181,
+                "summary_serif": [],
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "massimo 180"):
+            review_server.validate_feedback(
+                self.payload(slides, action="approve"), self.model
+            )
+
+        slides[1]["title"] = ""
+        slides[1]["summary"] = "x" * 321
+        with self.assertRaisesRegex(ValueError, "massimo 320"):
+            review_server.validate_feedback(
+                self.payload(slides, action="approve"), self.model
+            )
+
+        feedback = review_server.validate_feedback(self.payload(slides), self.model)
+        self.assertTrue(any("massimo 320" in warning for warning in feedback["warnings"]))
 
     def test_transports_all_emphasis_roles_and_preserves_legacy_serif(self) -> None:
         slides = self.payload()["slides"]
@@ -556,6 +782,90 @@ class ValidateFeedbackTest(unittest.TestCase):
             self.payload(slides, action="approve"), self.model
         )
         self.assertEqual(approved["action"], "approve")
+        self.assertEqual(approved["approval_stage"], "profile_text")
+        self.assertEqual(
+            approved["base_render_fingerprint"], self.model["render_fingerprint"]
+        )
+        self.assertEqual(len(approved["render_fingerprint"]), 64)
+
+    def test_visual_approval_stage_is_derived_and_stale_fingerprints_fail(self) -> None:
+        slides = self.payload()["slides"]
+        slides[0]["title_serif"] = []
+        slides[1]["summary_serif"] = []
+        manifest = base_manifest()
+        manifest["workflow_state"] = "testi_approvati"
+        manifest_path = self.workdir / "visual-manifest.json"
+        write_json(manifest_path, manifest)
+        visual_model = review_server.manifest_model(
+            manifest_path, include_internal=True
+        )
+        approved = review_server.validate_feedback(
+            self.payload(
+                slides,
+                action="approve",
+                base_workflow_state=visual_model["workflow_state"],
+                render_fingerprint=visual_model["render_fingerprint"],
+            ),
+            visual_model,
+        )
+        self.assertEqual(approved["approval_stage"], "visual_proof")
+        for workflow_state in (
+            "prova_visuale_approvata",
+            "rendering",
+            "qa",
+            "consegnato",
+        ):
+            manifest["workflow_state"] = workflow_state
+            write_json(manifest_path, manifest)
+            reapproval_model = review_server.manifest_model(
+                manifest_path, include_internal=True
+            )
+            reapproved = review_server.validate_feedback(
+                self.payload(
+                    slides,
+                    action="approve",
+                    base_workflow_state=workflow_state,
+                    render_fingerprint=reapproval_model["render_fingerprint"],
+                ),
+                reapproval_model,
+            )
+            self.assertEqual(reapproved["approval_stage"], "visual_proof")
+
+        with self.assertRaisesRegex(ValueError, "base_workflow_state"):
+            review_server.validate_feedback(
+                self.payload(slides, action="approve"), visual_model
+            )
+
+        with self.assertRaisesRegex(ValueError, "render_fingerprint"):
+            review_server.validate_feedback(
+                self.payload(
+                    slides,
+                    action="approve",
+                    base_workflow_state=visual_model["workflow_state"],
+                    render_fingerprint="0" * 64,
+                ),
+                visual_model,
+            )
+        with self.assertRaisesRegex(ValueError, "approval_stage"):
+            review_server.validate_feedback(
+                self.payload(
+                    slides,
+                    action="approve",
+                    base_workflow_state=visual_model["workflow_state"],
+                    render_fingerprint=visual_model["render_fingerprint"],
+                    approval_stage="profile_text",
+                ),
+                visual_model,
+            )
+
+    def test_approval_requires_the_server_issued_workflow_echo(self) -> None:
+        slides = self.payload()["slides"]
+        slides[0]["title_serif"] = []
+        slides[1]["summary_serif"] = []
+        payload = self.payload(slides, action="approve")
+        payload.pop("base_workflow_state")
+        with self.assertRaisesRegex(ValueError, "base_workflow_state"):
+            review_server.validate_feedback(payload, self.model)
 
     def test_approve_allows_multiple_non_overlapping_emphasis_styles(self) -> None:
         slides = self.payload()["slides"]
@@ -692,6 +1002,123 @@ class ValidateFeedbackTest(unittest.TestCase):
             )
 
 
+class StartupLockingTest(unittest.TestCase):
+    def test_writes_and_recovers_state_while_holding_apply_compatible_locks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workdir = Path(temporary)
+            manifest_path = (workdir / "manifest.json").resolve()
+            session_dir = (workdir / "session").resolve()
+            state_path = session_dir / "session-state.json"
+            manifest_lock = manifest_path.with_name(
+                f".{manifest_path.name}.review.lock"
+            )
+            transaction_lock = session_dir / ".review-transaction.lock"
+            write_json(manifest_path, base_manifest())
+
+            class TrackingLock:
+                held: set[str] = set()
+
+                def __init__(self, path: Path):
+                    self.path = path
+
+                def acquire(self):
+                    self.held.add(str(self.path))
+                    return self
+
+                def release(self) -> None:
+                    self.held.discard(str(self.path))
+
+                def __enter__(self):
+                    return self.acquire()
+
+                def __exit__(self, *_args: object) -> None:
+                    self.release()
+
+            class FakeServer:
+                server_address = ("127.0.0.1", 43210)
+
+                def __init__(self, *_args: object, **_kwargs: object):
+                    pass
+
+                def serve_forever(self, **_kwargs: object) -> None:
+                    pass
+
+                def server_close(self) -> None:
+                    pass
+
+            original_atomic_write = review_server.atomic_write_json
+
+            def checked_atomic_write(path: Path, value: dict) -> None:
+                if path == state_path:
+                    self.assertTrue(
+                        {str(manifest_lock), str(transaction_lock)}.issubset(
+                            TrackingLock.held
+                        )
+                    )
+                original_atomic_write(path, value)
+
+            argv = [
+                "review_server.py",
+                str(manifest_path),
+                "--session-dir",
+                str(session_dir),
+                "--port",
+                "0",
+            ]
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(
+                    mock.patch.object(review_server, "InterprocessLock", TrackingLock)
+                )
+                stack.enter_context(
+                    mock.patch.object(review_server, "ThreadingHTTPServer", FakeServer)
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        review_server, "atomic_write_json", checked_atomic_write
+                    )
+                )
+                stack.enter_context(mock.patch("sys.argv", argv))
+                stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+                stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+                self.assertEqual(review_server.main(), 0)
+
+
+class LockFileSecurityTest(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "symlink non sempre disponibile su Windows")
+    def test_lock_open_rejects_a_symlink_without_touching_its_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workdir = Path(temporary)
+            victim = workdir / "victim"
+            victim.write_bytes(b"")
+            victim.chmod(0o644)
+            before_mode = stat.S_IMODE(victim.stat().st_mode)
+            lock_path = workdir / ".review-transaction.lock"
+            lock_path.symlink_to(victim)
+
+            with self.assertRaisesRegex(OSError, "collegamento simbolico"):
+                review_server.InterprocessLock(lock_path).acquire()
+
+            self.assertEqual(victim.read_bytes(), b"")
+            self.assertEqual(stat.S_IMODE(victim.stat().st_mode), before_mode)
+
+    @unittest.skipIf(os.name == "nt", "hard link non sempre disponibile su Windows")
+    def test_lock_open_rejects_a_hardlink_without_touching_its_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workdir = Path(temporary)
+            victim = workdir / "victim"
+            victim.write_bytes(b"")
+            victim.chmod(0o644)
+            before_mode = stat.S_IMODE(victim.stat().st_mode)
+            lock_path = workdir / ".review-transaction.lock"
+            os.link(victim, lock_path)
+
+            with self.assertRaisesRegex(OSError, "hard link"):
+                review_server.InterprocessLock(lock_path).acquire()
+
+            self.assertEqual(victim.read_bytes(), b"")
+            self.assertEqual(stat.S_IMODE(victim.stat().st_mode), before_mode)
+
+
 class FeedbackTransactionTest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -766,6 +1193,24 @@ class FeedbackTransactionTest(unittest.TestCase):
         recovered_state = json.loads(self.state_path.read_text(encoding="utf-8"))
         self.assertEqual(recovered_state["last_action"], "feedback")
 
+    def test_recovers_a_pre_state_crash_when_the_new_action_alternates(self) -> None:
+        self.state["last_action"] = "feedback"
+        self.feedback["action"] = "approve"
+        write_json(self.state_path, self.state)
+        self.commit()
+        write_json(self.state_path, self.state)
+
+        event = review_server.recover_feedback_commit(
+            journal_path=self.journal_path,
+            feedback_path=self.feedback_path,
+            state_path=self.state_path,
+            manifest_path=self.manifest_path,
+        )
+
+        self.assertEqual(event["action"], "approve")
+        recovered_state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(recovered_state["last_action"], "approve")
+
     def test_rejects_recovery_after_an_unrelated_state_change(self) -> None:
         self.commit()
         conflicting = dict(self.state)
@@ -773,6 +1218,20 @@ class FeedbackTransactionTest(unittest.TestCase):
         write_json(self.state_path, conflicting)
 
         with self.assertRaisesRegex(ValueError, "stato è cambiato"):
+            review_server.recover_feedback_commit(
+                journal_path=self.journal_path,
+                feedback_path=self.feedback_path,
+                state_path=self.state_path,
+                manifest_path=self.manifest_path,
+            )
+
+    def test_rejects_recovery_when_last_action_conflicts_with_the_batch(self) -> None:
+        self.commit()
+        conflicting = json.loads(self.state_path.read_text(encoding="utf-8"))
+        conflicting["last_action"] = "approve"
+        write_json(self.state_path, conflicting)
+
+        with self.assertRaisesRegex(ValueError, "last_action"):
             review_server.recover_feedback_commit(
                 journal_path=self.journal_path,
                 feedback_path=self.feedback_path,

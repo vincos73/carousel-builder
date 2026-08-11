@@ -5,9 +5,16 @@ on:
     branches: ["**"]
   pull_request:
 
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unittest:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPYCACHEPREFIX: ${{ runner.temp }}/carousel-builder-pycache
     strategy:
       fail-fast: false
       matrix:
@@ -20,10 +27,13 @@ jobs:
       - name: Compile scripts
         run: python -m compileall -q scripts tests
       - name: Run tests
-        run: python -m unittest discover -s tests -t tests -v
+        run: python -B -m unittest discover -s tests -t tests -v
 
   windows-unittest:
     runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPYCACHEPREFIX: ${{ runner.temp }}\carousel-builder-pycache
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -32,21 +42,44 @@ jobs:
       - name: Compile scripts
         run: python -m compileall -q scripts tests
       - name: Run tests
-        run: python -m unittest discover -s tests -t tests -v
+        run: python -B -m unittest discover -s tests -t tests -v
+
+  node-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check JavaScript syntax
+        run: |
+          node --check scripts/export_review_pdf.cjs
+          node --check assets/review-editor/app.js
+      - name: Run exporter regression tests
+        run: node --test tests/test_export_review_pdf.cjs
 
   package-sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Valida skill root e skill nel pacchetto Agent Plugin
+        run: |
+          python -B tests/quick_validate.py .
+          python -B tests/quick_validate.py agent-plugin/skills/carousel-builder
       - name: Il pacchetto Agent Plugins deve restare identico alla skill
         run: |
-          for path in SKILL.md references scripts assets agents; do
-            diff -r -x __pycache__ "$path" "agent-plugin/skills/carousel-builder/$path"
+          for shared_path in SKILL.md references scripts assets agents; do
+            diff -r -x __pycache__ "$shared_path" "agent-plugin/skills/carousel-builder/$shared_path"
           done
       - name: La versione della skill deve coincidere con quella del plugin
         run: |
           skill_version=$(grep -oP '(?<=^Versione: \*\*)[^*]+' SKILL.md)
-          plugin_version=$(python3 -c "import json;print(json.load(open('agent-plugin/plugin.json'))['version'])")
+          plugin_version=$(python -c "import json;print(json.load(open('agent-plugin/plugin.json'))['version'])")
           echo "SKILL.md=$skill_version plugin.json=$plugin_version"
           test "$skill_version" = "$plugin_version"
       - name: La licenza MIT deve essere inclusa nel pacchetto Agent Plugin

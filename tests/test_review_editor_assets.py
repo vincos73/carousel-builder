@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -32,6 +34,263 @@ PLUGIN_EXPORTER = (
 class ReviewEditorAssetTest(unittest.TestCase):
     def setUp(self) -> None:
         self.source = EDITOR.read_text(encoding="utf-8")
+        self.html = (EDITOR_DIR / "index.html").read_text(encoding="utf-8")
+        self.stylesheet = (EDITOR_DIR / "styles.css").read_text(encoding="utf-8")
+
+    def test_feedback_batch_is_client_identified_and_persisted_before_post(self) -> None:
+        submit_start = self.source.index("async function sendPendingSubmission()")
+        persist_at = self.source.index("persistDraft({ immediate: true });", submit_start)
+        post_at = self.source.index('fetchJson("/api/submit"', submit_start)
+        self.assertLess(persist_at, post_at)
+        self.assertIn("feedback_id: feedbackId", self.source)
+        self.assertIn("pending_submission: pendingSubmission", self.source)
+        self.assertIn("if (data.feedback_id !== pendingSubmission.feedback_id)", self.source)
+        backup_at = self.source.index('preservePendingSubmission("pre-post-backup"', submit_start)
+        self.assertLess(backup_at, post_at)
+        self.assertIn("markRecoveryApplied(appliedFeedbackId)", self.source)
+
+    def test_stale_pending_is_recovered_and_never_retried_against_a_new_base(self) -> None:
+        hydrate = self.source.split("function hydrateDraft()", 1)[1].split("function fontStack", 1)[0]
+        retry = self.source.split("async function sendPendingSubmission()", 1)[1].split("async function submit", 1)[0]
+        self.assertIn('recoveryFromPending(savedPending, reason, saved)', hydrate)
+        self.assertIn('const sameFingerprint', hydrate)
+        self.assertIn('base-revision-mismatch-before-retry', retry)
+        self.assertIn('base-workflow-mismatch-before-retry', retry)
+        self.assertIn('render-fingerprint-mismatch-before-retry', retry)
+        self.assertLess(retry.index("if (!baseMatches || !fingerprintMatches || !workflowMatches)"), retry.index('fetchJson("/api/submit"'))
+        self.assertIn("recovery_submissions: recoverySubmissions", self.source)
+        self.assertIn('id="export-recovery-button"', self.html)
+
+    def test_stale_plain_draft_and_recoveries_have_dedicated_storage(self) -> None:
+        hydrate = self.source.split("function hydrateDraft()", 1)[1].split("function fontStack", 1)[0]
+        self.assertIn('recoveryDraftFromSaved(saved, reason)', hydrate)
+        self.assertIn('editable_draft !== false', hydrate)
+        self.assertIn('recoveryStorageKey(kind, identifier)', self.source)
+        self.assertIn('if (safeStorageGet(key) !== null) return true', self.source)
+        self.assertIn('loadDedicatedRecoveries()', hydrate)
+        self.assertIn('drafts: clone(recoveryDrafts)', self.source)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js non disponibile")
+    def test_tab_scoped_primary_storage_preserves_two_tabs_and_pending_reload(self) -> None:
+        script = r'''
+const assert = require("node:assert/strict");
+const { tabDraftStorageKey } = require(process.argv[1]);
+const shared = "carousel-builder:session-token";
+const keyA = tabDraftStorageKey(shared, "tab-a");
+const keyB = tabDraftStorageKey(shared, "tab-b");
+assert.notEqual(keyA, keyB);
+const storage = new Map();
+storage.set(keyA, JSON.stringify({ slides: [{ id: "a" }], pending_submission: { feedback_id: "pending-a" } }));
+storage.set(keyB, JSON.stringify({ slides: [{ id: "b" }], pending_submission: null }));
+const reloadA = JSON.parse(storage.get(keyA));
+assert.equal(reloadA.slides[0].id, "a");
+assert.equal(reloadA.pending_submission.feedback_id, "pending-a");
+assert.equal(JSON.parse(storage.get(keyB)).slides[0].id, "b");
+'''
+        result = subprocess.run(
+            ["node", "-e", script, str(EDITOR)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("const tabId = productionRender ? \"production\" : getOrCreateTabId(tabSessionKey)", self.source)
+        self.assertIn("const storageKey = tabDraftStorageKey(sharedStorageKey, tabId)", self.source)
+        self.assertIn('return `${sharedStorageKey}:recovery:${kind}:${identifier}`', self.source)
+        self.assertIn("navigator.locks?.request", self.source)
+        self.assertIn(".then(() => loadSession())", self.source)
+        self.assertIn("productionRender ? Promise.resolve() : migrateLegacyStorage()", self.source)
+
+    def test_foreign_pending_locks_without_claiming_or_discarding_local_draft(self) -> None:
+        poll = self.source.split("async function pollStatus()", 1)[1].split("function clearPendingSelection", 1)[0]
+        self.assertIn("const ownPending", poll)
+        self.assertIn('preserveCurrentDraft("foreign-feedback-pending"', poll)
+        self.assertIn("foreignFeedbackId = serverFeedbackId", poll)
+        foreign_branch = poll.split("if (ownPending)", 1)[1].split("persistDraft({ immediate: true });", 1)[0]
+        self.assertNotIn("awaitingFeedbackId = serverFeedbackId", foreign_branch.split("} else {", 1)[1])
+        self.assertIn('preserveCurrentDraft("foreign-feedback-applied"', poll)
+        self.assertIn("La bozza locale non è stata ricaricata", poll)
+
+    def test_approve_payload_echoes_server_fingerprint_without_client_stage(self) -> None:
+        submit = self.source.split("async function submit(action)", 1)[1].split("function schedulePoll", 1)[0]
+        self.assertIn('payload.render_fingerprint = model.render_fingerprint', submit)
+        self.assertIn('payload.base_workflow_state = model.workflow_state', submit)
+        self.assertIn('pendingSubmission.action !== "approve"', self.source)
+        self.assertNotIn("function approvalStage()", self.source)
+        self.assertNotIn("approval_stage", self.source)
+        self.assertIn('response.status === 422 && rejectedAction === "approve"', self.source)
+        self.assertIn("await loadSession()", self.source)
+
+    def test_status_checkpoint_change_reloads_clean_and_preserves_dirty_or_pending(self) -> None:
+        poll = self.source.split("async function pollStatus()", 1)[1].split("function clearPendingSelection", 1)[0]
+        self.assertIn("statusBaseChange(status)", poll)
+        self.assertIn("status.workflow_state", poll)
+        self.assertIn("status.approval_checkpoint", poll)
+        self.assertIn("if (!hasLocalRisk)", poll)
+        self.assertIn("await loadSession()", poll)
+        self.assertIn('preservePendingSubmission("workflow-checkpoint-changed"', poll)
+        self.assertIn('preserveCurrentDraft("workflow-checkpoint-changed"', poll)
+        self.assertIn("if (baseChange.workflowChanged || baseChange.checkpointChanged)", poll)
+        self.assertIn("base_workflow_state: model.workflow_state", self.source)
+        self.assertIn("base_approval_checkpoint: model.approval_checkpoint", self.source)
+
+    def test_status_poll_is_serial_timed_backed_off_and_visibility_aware(self) -> None:
+        self.assertIn("pollInFlight", self.source)
+        self.assertIn("POLL_MAX_DELAY", self.source)
+        self.assertIn("REQUEST_TIMEOUT", self.source)
+        self.assertIn('document.addEventListener("visibilitychange"', self.source)
+        self.assertIn("pollAbortController?.abort()", self.source)
+        self.assertIn("status.feedback_pending === true", self.source)
+        self.assertIn("awaitingFeedbackId = serverFeedbackId", self.source)
+        self.assertNotIn("setInterval(pollStatus", self.source)
+
+    def test_approval_uses_one_blocking_gate_with_inline_focusable_errors(self) -> None:
+        self.assertIn("function runApprovalGate", self.source)
+        self.assertGreaterEqual(self.source.count("runApprovalGate()"), 2)
+        self.assertIn("collectPaletteContrastIssues", self.source)
+        self.assertIn("warning.schema", self.source)
+        self.assertIn("warning.overflow", self.source)
+        self.assertIn("warning.emphasis", self.source)
+        self.assertIn('target.setAttribute("aria-invalid", "true")', self.source)
+        self.assertIn('id="validation-summary"', self.html)
+        self.assertIn('id="validation-list"', self.html)
+
+    def test_palette_gate_uses_backend_provenance_before_contrast(self) -> None:
+        gate = self.source.split("function collectPaletteContrastIssues()", 1)[1].split("function collectApprovalIssues()", 1)[0]
+        self.assertIn("collectPaletteDeclarationIssues(brand)", gate)
+        self.assertIn("const palette = brand.palette || {}", gate)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js non disponibile")
+    def test_palette_provenance_gate_and_preview_merge_execute_fail_closed(self) -> None:
+        script = r'''
+const assert = require("node:assert/strict");
+const { collectPaletteDeclarationIssues, mergePreviewBrand } = require(process.argv[1]);
+const palette = {
+  background_light: "#F5F1E8",
+  background_dark: "#172033",
+  text_on_light: "#172033",
+  text_on_dark: "#FFFFFF",
+  accent: "#FEBD08",
+};
+const fields = Object.keys(palette);
+assert.equal(collectPaletteDeclarationIssues({ palette }).length, 5);
+assert.equal(collectPaletteDeclarationIssues({
+  palette,
+  palette_declared: Object.fromEntries(fields.map((field) => [field, true])),
+}).length, 0);
+assert.equal(collectPaletteDeclarationIssues({
+  palette: { ...palette, accent: "gold" },
+  palette_declared: Object.fromEntries(fields.map((field) => [field, true])),
+}).length, 1);
+
+const profile = {
+  palette,
+  palette_declared: Object.fromEntries(fields.map((field) => [field, true])),
+};
+const unprovenOverride = mergePreviewBrand(profile, { palette: { accent: "#C65A3A" } });
+assert.equal(unprovenOverride.palette.accent, "#C65A3A");
+assert.equal(unprovenOverride.palette_declared.accent, false);
+assert.equal(collectPaletteDeclarationIssues(unprovenOverride).length, 1);
+const provenOverride = mergePreviewBrand(profile, {
+  palette: { accent: "#C65A3A" },
+  palette_declared: { accent: true },
+});
+assert.equal(provenOverride.palette_declared.accent, true);
+assert.equal(collectPaletteDeclarationIssues(provenOverride).length, 0);
+'''
+        result = subprocess.run(
+            ["node", "-e", script, str(EDITOR)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_radiogroups_use_roving_tabindex_and_apg_navigation(self) -> None:
+        self.assertIn("button.tabIndex = selected ? 0 : -1", self.source)
+        self.assertIn('event.key === "Home"', self.source)
+        self.assertIn('event.key === "End"', self.source)
+        self.assertIn('"ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"', self.source)
+        self.assertIn('data-logo-mode="hidden" role="radio" aria-checked="false" tabindex="-1"', self.html)
+        self.assertIn("captureFocus(elements.slides)", self.source)
+        self.assertIn("restoreFocus(focusSnapshot, elements.slides)", self.source)
+
+    def test_preview_measurement_and_draft_storage_are_coalesced(self) -> None:
+        self.assertIn("function schedulePreviewMeasure", self.source)
+        self.assertIn("schedulePreviewMeasure(slide.id);", self.source)
+        self.assertIn("storageTimer = window.setTimeout(flushDraft, 220)", self.source)
+        self.assertNotIn("requestAnimationFrame(measurePreviews", self.source)
+
+    def test_real_italic_and_render_contract_are_fail_closed(self) -> None:
+        self.assertIn("loadedFontKeys.has(fontAssetKey(asset, \"italic\"))", self.source)
+        self.assertIn("il sottotitolo richiede una vera variante corsiva", self.source)
+        self.assertIn("const realItalic = slide.kind === \"cover\" && hasRealItalicFont()", self.source)
+        self.assertIn(".slide-preview.has-real-italic .preview-cover-subtitle", self.stylesheet)
+        self.assertIn("getRenderContract", self.source)
+        self.assertIn("proofApproved: model?.proof_approved === true", self.source)
+        for field in ("revision", "workflowState", "styleSystem", "contentSnapshot", "frames", "geometry"):
+            with self.subTest(field=field):
+                self.assertIn(f"{field}:", self.source)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js non disponibile")
+    def test_geometry_treats_zero_layout_descendants_as_hidden(self) -> None:
+        script = r'''
+const assert = require("node:assert/strict");
+const { geometryPartIsHidden } = require(process.argv[1]);
+const node = (rectCount = 1, hidden = false) => ({
+  hidden,
+  getClientRects() { return Array.from({ length: rectCount }, () => ({})); },
+});
+assert.equal(geometryPartIsHidden(node(), { display: "block", visibility: "visible" }), false);
+assert.equal(geometryPartIsHidden(node(0), { display: "block", visibility: "visible" }), true);
+assert.equal(geometryPartIsHidden(node(), { display: "none", visibility: "visible" }), true);
+assert.equal(geometryPartIsHidden(node(), { display: "block", visibility: "hidden" }), true);
+assert.equal(geometryPartIsHidden(node(), { display: "block", visibility: "collapse" }), true);
+assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility: "visible" }), true);
+'''
+        result = subprocess.run(
+            ["node", "-e", script, str(EDITOR)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        geometry_part = self.source.split("function geometryPart(node, previewBounds)", 1)[1].split(
+            "function previewGeometrySnapshot", 1
+        )[0]
+        self.assertLess(
+            geometry_part.index("geometryPartIsHidden(node, style)"),
+            geometry_part.index("node.getBoundingClientRect()"),
+        )
+
+    def test_preview_ready_waits_for_backgrounds_and_parity_capture_box(self) -> None:
+        wait = self.source.split("async function waitForPreviewImages()", 1)[1].split("async function publishPreviewContract", 1)[0]
+        self.assertIn("window.getComputedStyle(preview).backgroundImage", wait)
+        self.assertIn("const probe = new Image()", wait)
+        self.assertIn("await probe.decode()", wait)
+        self.assertIn('queryParams.get("capture") === "parity"', self.source)
+        self.assertIn('html[data-capture-target="true"] .slide-preview', self.stylesheet)
+        for selector in (
+            'html[data-capture-target="true"] body',
+            'html[data-capture-target="true"] .topbar',
+            'html[data-capture-target="true"] .shell',
+            'html[data-capture-target="true"] .slide-row',
+        ):
+            with self.subTest(selector=selector):
+                self.assertIn(selector, self.stylesheet)
+        for declaration in ("width: 440px;", "border: 10px solid", "border-radius: 0;", "box-shadow: none;"):
+            with self.subTest(declaration=declaration):
+                self.assertIn(declaration, self.stylesheet.split('html[data-capture-target="true"] .slide-preview', 1)[1])
+
+    def test_editor_tokens_targets_and_reduced_motion_meet_hardening_floor(self) -> None:
+        self.assertIn('content="light"', self.html)
+        self.assertIn("--muted: #696a69;", self.stylesheet)
+        self.assertIn("color: #6b6c6b;", self.stylesheet)
+        self.assertIn(".visual-system-option {\n  min-height: 44px;", self.stylesheet)
+        self.assertIn(".applied-style-chip", self.stylesheet)
+        self.assertIn("min-height: 44px;", self.stylesheet)
+        reduced_motion = self.stylesheet.split("@media (prefers-reduced-motion: reduce)", 1)[1].split("}", 4)[0]
+        self.assertNotIn("*::before", reduced_motion)
 
     def test_root_and_agent_plugin_editors_match(self) -> None:
         for name in ("app.js", "index.html", "styles.css", "vincos-lockup-white.svg"):
