@@ -204,7 +204,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.8.7")
+        self.assertEqual(model["editor_version"], "2.8.8")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
@@ -557,7 +557,7 @@ class ValidateFeedbackTest(unittest.TestCase):
         )
         self.assertEqual(approved["action"], "approve")
 
-    def test_approve_rejects_more_than_one_secondary_emphasis(self) -> None:
+    def test_approve_allows_multiple_non_overlapping_emphasis_styles(self) -> None:
         slides = self.payload()["slides"]
         slides[1]["summary"] = "Prima seconda terza."
         slides[1]["summary_bold"] = ["Prima"]
@@ -566,10 +566,12 @@ class ValidateFeedbackTest(unittest.TestCase):
         slides[0]["title_serif"] = []
         slides[1]["summary_serif"] = []
         slides[2]["summary_accent"] = []
-        with self.assertRaisesRegex(ValueError, "un solo trattamento"):
-            review_server.validate_feedback(
-                self.payload(slides, action="approve"), self.model
-            )
+        approved = review_server.validate_feedback(
+            self.payload(slides, action="approve"), self.model
+        )
+        self.assertEqual(approved["slides"][1]["summary_bold"], ["Prima"])
+        self.assertEqual(approved["slides"][1]["summary_underline"], ["seconda"])
+        self.assertEqual(approved["slides"][1]["summary_accent"], ["terza."])
 
     def test_approve_rejects_italic_when_no_real_italic_font_is_available(self) -> None:
         slides = self.payload()["slides"]
@@ -742,6 +744,27 @@ class FeedbackTransactionTest(unittest.TestCase):
         recovered_state = json.loads(self.state_path.read_text(encoding="utf-8"))
         self.assertEqual(recovered_feedback, self.feedback)
         self.assertEqual(recovered_state["last_feedback_id"], "feedback-transaction")
+        self.assertEqual(recovered_state["last_action"], "feedback")
+
+    def test_recovers_a_legacy_journal_without_last_action(self) -> None:
+        self.commit()
+        journal = json.loads(self.journal_path.read_text(encoding="utf-8"))
+        journal["state_patch"].pop("last_action")
+        journal["state_before"].pop("last_action")
+        write_json(self.journal_path, journal)
+        self.feedback_path.unlink()
+        write_json(self.state_path, self.state)
+
+        event = review_server.recover_feedback_commit(
+            journal_path=self.journal_path,
+            feedback_path=self.feedback_path,
+            state_path=self.state_path,
+            manifest_path=self.manifest_path,
+        )
+
+        self.assertEqual(event["action"], "feedback")
+        recovered_state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(recovered_state["last_action"], "feedback")
 
     def test_rejects_recovery_after_an_unrelated_state_change(self) -> None:
         self.commit()

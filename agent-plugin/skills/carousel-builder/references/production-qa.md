@@ -95,7 +95,7 @@ Confrontare ogni card con l'ultima anteprima approvata e verificare:
 - gerarchia subordinata del sottotitolo e ruolo `emphasis_italic` effettivamente risolto; se è Playfair Display, verificarne sempre la variante corsiva;
 - ritorno a capo dopo ogni punto di frase, senza spezzare decimali, versioni o abbreviazioni;
 - presenza di un blocco distinto per ogni frase e di uno spazio `sentence_gap_em` dopo ogni frase tranne l'ultima, aggiuntivo rispetto a `body_line_height`;
-- `summary_bold` proposta di default nelle card interne con corpo, ma facoltativa e liberamente rimovibile; al massimo un trattamento complessivo tra `summary_italic`, `summary_underline` e `summary_accent`;
+- `summary_bold` proposta di default nelle card interne con corpo, ma facoltativa e liberamente rimovibile; più trattamenti ammessi su parole o locuzioni distinte, senza stili multipli sulla stessa unità né selezioni sovrapposte;
 - in modalità `narrative`, titoli interni vuoti e assenza di etichette tecniche;
 
 ## Controllo visivo

@@ -114,6 +114,21 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertIn("const conflict = firstStyleOverlap(start, end);", self.source)
         self.assertIn("Rimuovi prima il formato dalla riga sotto il testo.", self.source)
         self.assertIn('button.setAttribute("aria-pressed", active ? "true" : mixed ? "mixed" : "false");', self.source)
+        self.assertNotIn("La card interna può usare un solo trattamento", self.source)
+
+    def test_cover_comment_suggests_a_title_coherent_drawing(self) -> None:
+        self.assertIn('slide.kind === "cover"', self.source)
+        self.assertIn("Per esempio: aggiungi un disegno coerente col titolo", self.source)
+        self.assertIn("Per esempio: questa slide ripete la precedente", self.source)
+
+    def test_agent_recovers_durable_editor_events_at_every_checkpoint(self) -> None:
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        visual_review = (ROOT / "references" / "visual-review.md").read_text(encoding="utf-8")
+        self.assertIn("anche in questo checkpoint e in ogni prova successiva", skill)
+        self.assertIn("in ogni checkpoint dell'editor", visual_review)
+        self.assertIn("session-state.json", visual_review)
+        self.assertIn("last_feedback_id", visual_review)
+        self.assertIn("last_action", visual_review)
 
     def test_preview_grids_do_not_split_words_arbitrarily(self) -> None:
         stylesheet = (EDITOR_DIR / "styles.css").read_text(encoding="utf-8")
