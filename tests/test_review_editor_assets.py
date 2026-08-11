@@ -18,6 +18,15 @@ PLUGIN_EDITOR_DIR = (
 )
 EDITOR = EDITOR_DIR / "app.js"
 PLUGIN_EDITOR = PLUGIN_EDITOR_DIR / "app.js"
+EXPORTER = ROOT / "scripts" / "export_review_pdf.cjs"
+PLUGIN_EXPORTER = (
+    ROOT
+    / "agent-plugin"
+    / "skills"
+    / "carousel-builder"
+    / "scripts"
+    / "export_review_pdf.cjs"
+)
 
 
 class ReviewEditorAssetTest(unittest.TestCase):
@@ -32,18 +41,59 @@ class ReviewEditorAssetTest(unittest.TestCase):
                     (PLUGIN_EDITOR_DIR / name).read_bytes(),
                 )
 
+    def test_root_and_agent_plugin_exporters_match(self) -> None:
+        self.assertEqual(EXPORTER.read_bytes(), PLUGIN_EXPORTER.read_bytes())
+
+    def test_pdf_export_reuses_approved_preview_renderer(self) -> None:
+        stylesheet = (EDITOR_DIR / "styles.css").read_text(encoding="utf-8")
+        exporter = EXPORTER.read_text(encoding="utf-8")
+        self.assertIn("productionRender", self.source)
+        self.assertIn("approved-preview-dom-v1", self.source)
+        self.assertIn("getSlideFrames", self.source)
+        self.assertIn("getSlideGeometry", self.source)
+        self.assertIn('preview.dataset.productionSource = "approved-preview"', self.source)
+        self.assertIn("html.production-render .slide-preview", stylesheet)
+        self.assertNotIn("production-render .preview-sphere", stylesheet)
+        self.assertIn("window.carouselBuilderPreview", exporter)
+        self.assertIn('searchParams.set("render", "production")', exporter)
+        self.assertIn("Preview/production geometry mismatch", exporter)
+        self.assertIn('row.style.display = previewIndex === targetIndex ? "block" : "none"', exporter)
+        self.assertIn("targetPreview.screenshot", exporter)
+        self.assertIn('externalRequire("sharp")', exporter)
+        self.assertIn('externalRequire("pdf-lib")', exporter)
+        self.assertNotIn("preview-sphere-primary", exporter)
+
     def test_review_copy_is_actionable_and_product_is_branded(self) -> None:
         html = (EDITOR_DIR / "index.html").read_text(encoding="utf-8")
         self.assertIn('class="product-byline"', html)
         self.assertIn('/assets/vincos-lockup-white.svg', html)
         self.assertIn('class="workflow-status"', html)
+        self.assertIn('id="builder-version"', html)
         self.assertIn("Commenta lo stile", html)
+        self.assertIn("Stile riutilizzabile", html)
+        self.assertIn('id="export-style-button"', html)
         self.assertIn('id="brand-typography"', html)
         self.assertIn("Correggi i testi nell’editor accanto all’anteprima", html)
         self.assertIn("Indicazione per l’intero carosello", html)
         self.assertNotIn("Commento sul profilo", html)
         self.assertNotIn("Un'osservazione sull'intera sequenza", html)
         self.assertNotIn('id="brand-details"', html)
+        self.assertNotIn('id="change-label"', html)
+
+    def test_status_is_consolidated_and_style_can_be_saved(self) -> None:
+        html = (EDITOR_DIR / "index.html").read_text(encoding="utf-8")
+        stylesheet = (EDITOR_DIR / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("exportedStyleProfile", self.source)
+        self.assertIn("brand_profile", self.source)
+        self.assertIn("Stile JSON salvato", self.source)
+        self.assertIn("Ti aggiorno qui appena", self.source)
+        self.assertIn("Prova visiva · copertina tipografica", self.source)
+        self.assertIn(".style-transfer", stylesheet)
+        self.assertIn(".builder-version", stylesheet)
+        self.assertIn(".actionbar {\n  justify-content: flex-end;", stylesheet)
+        self.assertIn("background: var(--editor-gold);", stylesheet)
+        self.assertNotIn("background: var(--vincos-navy);", stylesheet)
+        self.assertNotIn('id="change-label"', html)
 
     def test_applied_formats_are_compact_visible_and_directly_removable(self) -> None:
         stylesheet = (EDITOR_DIR / "styles.css").read_text(encoding="utf-8")

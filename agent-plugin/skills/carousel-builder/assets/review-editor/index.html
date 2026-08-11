@@ -33,6 +33,7 @@
       <div class="topbar-meta">
         <span id="workflow-badge" class="workflow-status" role="status" aria-live="polite">Caricamento</span>
         <span id="revision-label" class="meta-label"></span>
+        <span id="builder-version" class="meta-label builder-version" aria-label="Versione Carousel Builder"></span>
       </div>
     </header>
 
@@ -83,6 +84,13 @@
             </section>
             <div id="palette" class="palette" aria-label="Palette del profilo"></div>
             <dl id="brand-typography" class="brand-typography" aria-label="Tipografia del profilo"></dl>
+            <section class="style-transfer" aria-labelledby="style-transfer-title">
+              <div class="panel-heading">
+                <h3 id="style-transfer-title" class="subpanel-title">Stile riutilizzabile</h3>
+                <button id="export-style-button" class="button button-ghost button-compact" type="button">Salva JSON</button>
+              </div>
+              <p>Salva palette, font e sistema visivo. Al prossimo carosello allega il file alla richiesta. Logo e font non sono incorporati.</p>
+            </section>
             <label class="field-label" for="brand-note">Commenta lo stile</label>
             <textarea id="brand-note" rows="3" placeholder="Per esempio: usa un fondo più chiaro o uno stile più essenziale"></textarea>
           </section>
@@ -113,10 +121,6 @@
     </main>
 
     <footer id="actionbar" class="actionbar hidden">
-      <div class="change-summary">
-        <span id="dirty-dot" class="dirty-dot" aria-hidden="true"></span>
-        <span id="change-label">Nessuna modifica</span>
-      </div>
       <div class="actions">
         <button id="undo-button" class="button button-ghost" type="button" disabled>Annulla ultima</button>
         <button id="reset-button" class="button button-ghost" type="button">Ripristina</button>

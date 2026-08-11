@@ -22,7 +22,10 @@
     return;
   }
 
-  const token = new URLSearchParams(window.location.search).get("token") || "";
+  const queryParams = new URLSearchParams(window.location.search);
+  const token = queryParams.get("token") || "";
+  const productionRender = queryParams.get("render") === "production";
+  if (productionRender) document.documentElement.classList.add("production-render");
   const api = (path) => {
     const url = new URL(path, window.location.origin);
     if (token) url.searchParams.set("token", token);
@@ -36,6 +39,7 @@
     actionbar: document.querySelector("#actionbar"),
     workflowBadge: document.querySelector("#workflow-badge"),
     revisionLabel: document.querySelector("#revision-label"),
+    builderVersion: document.querySelector("#builder-version"),
     brandName: document.querySelector("#brand-name"),
     brandTypography: document.querySelector("#brand-typography"),
     palette: document.querySelector("#palette"),
@@ -43,6 +47,7 @@
     logoPreferenceStatus: document.querySelector("#logo-preference-status"),
     logoVariants: document.querySelector("#logo-variants"),
     logoWarning: document.querySelector("#logo-warning"),
+    styleExportButton: document.querySelector("#export-style-button"),
     brandNote: document.querySelector("#brand-note"),
     slideCount: document.querySelector("#slide-count"),
     slides: document.querySelector("#slides"),
@@ -99,6 +104,7 @@
   let selectedVisualSystem = "editorial-frame";
   let logoMode = "auto";
   let undoState = null;
+  let previewContractRun = 0;
   const fitWarnings = new Map();
 
   const visualSystems = [
@@ -375,6 +381,7 @@
   }
 
   function resolveVisualSystem() {
+    if (productionRender) return modelVisualSystem();
     return supportedVisualSystem(safeStorageGet(visualSystemStorageKey())) || modelVisualSystem();
   }
 
@@ -415,7 +422,7 @@
       for (const system of visualSystems) preview.classList.toggle(`visual-system-${system.id}`, system.id === next);
     }
     renderBrand();
-    configurePreviewTypography();
+    publishPreviewContract(configurePreviewTypography());
     persistDraft();
     window.requestAnimationFrame(measurePreviews);
   }
@@ -522,7 +529,7 @@
   }
 
   function persistDraft() {
-    if (!model) return;
+    if (!model || productionRender) return;
     safeStorageSet(storageKey, JSON.stringify({
       base_revision: model.revision,
       slides: normalizedSlides(draftSlides),
@@ -547,6 +554,7 @@
     logoMode = initialLogoMode();
     undoState = null;
     awaitingFeedbackId = null;
+    if (productionRender) return;
     try {
       const saved = JSON.parse(safeStorageGet(storageKey) || "null");
       if (!saved || saved.base_revision !== model.revision || !Array.isArray(saved.slides)) return;
@@ -907,6 +915,43 @@
       }
     }
     elements.brandNote.value = brandNote;
+    if (elements.styleExportButton) {
+      elements.styleExportButton.disabled = model?.brand_profile?.profile_type !== "carousel-brand";
+    }
+  }
+
+  function exportedStyleProfile() {
+    const source = model?.brand_profile;
+    if (!source || typeof source !== "object" || source.profile_type !== "carousel-brand") return null;
+    const profile = clone(source);
+    profile.visual_signature = {
+      ...(profile.visual_signature || {}),
+      style_system: selectedVisualSystem,
+    };
+    return profile;
+  }
+
+  function styleExportFilename(profile) {
+    const stem = String(profile?.name || "stile-carousel")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase() || "stile-carousel";
+    return `${stem}-carousel-brand.json`;
+  }
+
+  function exportStyleProfile() {
+    const profile = exportedStyleProfile();
+    if (!profile) return showToast("Lo stile non è ancora pronto per il salvataggio.", true);
+    const blob = new Blob([`${JSON.stringify(profile, null, 2)}\n`], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = styleExportFilename(profile);
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    showToast("Stile JSON salvato. Allegalo alla prossima richiesta per riutilizzarlo.");
   }
 
   function renderLogoControls() {
@@ -1486,6 +1531,7 @@
       preview.dataset.kind = slide.kind;
       preview.dataset.surface = colors.surface;
       preview.dataset.constellationPosition = index % 2 === 0 ? "high" : "low";
+      preview.dataset.productionSource = "approved-preview";
       preview.classList.add(`visual-system-${selectedVisualSystem}`);
       const coverVisual = selectedVisualProof()?.cover_visual || model.cover_visual;
       if (slide.kind === "cover" && coverVisual?.available && coverVisual.endpoint) {
@@ -1574,15 +1620,15 @@
         const proofReady = copyApproved || visualApproved;
         const coverMessage = coverMode === "generated"
           ? (proofReady
-              ? "Questa prova usa l’immagine generata: controlla crop, composizione, sito e firma."
-              : "Dopo l’approvazione dei testi verrà mostrata una prova con l’immagine generata.")
+                ? "Prova visiva · immagine generata"
+              : "Immagine generata prevista dopo l’approvazione dei testi.")
           : coverMode === "provided"
             ? (proofReady
-                ? "Questa prova usa l’immagine fornita: controlla crop, composizione, sito e firma."
-                : "Dopo l’approvazione dei testi verrà mostrata una prova con l’immagine fornita.")
+                ? "Prova visiva · immagine fornita"
+                : "Immagine fornita prevista dopo l’approvazione dei testi.")
             : (proofReady
-                ? "Questa prova usa una copertina tipografica completa: controlla composizione, gerarchia, sito e firma."
-                : "Dopo l’approvazione dei testi verrà mostrata una copertina tipografica completa, senza dipendere dalla generazione di immagini.");
+                ? "Prova visiva · copertina tipografica"
+                : "Copertina tipografica prevista dopo l’approvazione dei testi.");
         form.append(create(
           "p",
           "cover-visual-note",
@@ -1635,6 +1681,120 @@
     window.requestAnimationFrame(measurePreviews);
   }
 
+  function roundedMetric(value) {
+    return Number(Number(value || 0).toFixed(6));
+  }
+
+  function productionSlideFrames() {
+    return [...(elements.slides?.querySelectorAll('.slide-preview[data-production-source="approved-preview"]') || [])].map((preview) => {
+      const row = preview.closest(".slide-row");
+      const bounds = preview.getBoundingClientRect();
+      return {
+        id: row?.dataset.slideId || "",
+        kind: preview.dataset.kind || "",
+        x: roundedMetric(bounds.left + window.scrollX),
+        y: roundedMetric(bounds.top + window.scrollY),
+        width: roundedMetric(bounds.width),
+        height: roundedMetric(bounds.height),
+      };
+    });
+  }
+
+  function geometryPart(node, previewBounds) {
+    if (!node) return null;
+    const style = window.getComputedStyle(node);
+    if (style.display === "none" || node.hidden) return { hidden: true };
+    const bounds = node.getBoundingClientRect();
+    const width = previewBounds.width || 1;
+    const height = previewBounds.height || 1;
+    return {
+      x: roundedMetric((bounds.left - previewBounds.left) / width),
+      y: roundedMetric((bounds.top - previewBounds.top) / height),
+      width: roundedMetric(bounds.width / width),
+      height: roundedMetric(bounds.height / height),
+      font_family: style.fontFamily,
+      font_size: roundedMetric(Number.parseFloat(style.fontSize) / width),
+      font_weight: style.fontWeight,
+      line_height: style.lineHeight,
+    };
+  }
+
+  function previewGeometrySnapshot() {
+    const parts = [
+      "preview-copy",
+      "preview-title",
+      "preview-summary",
+      "preview-page",
+      "preview-brand",
+      "preview-logo",
+      "preview-website",
+      "preview-sphere-primary",
+      "preview-sphere-core",
+      "preview-sphere-ring",
+      "preview-sphere-moon",
+      "preview-sphere-satellite",
+    ];
+    return [...(elements.slides?.querySelectorAll('.slide-preview[data-production-source="approved-preview"]') || [])].map((preview) => {
+      const bounds = preview.getBoundingClientRect();
+      return {
+        id: preview.closest(".slide-row")?.dataset.slideId || "",
+        kind: preview.dataset.kind || "",
+        surface: preview.dataset.surface || "",
+        constellation_position: preview.dataset.constellationPosition || "",
+        visual_system: selectedVisualSystem,
+        aspect_ratio: roundedMetric(bounds.width / (bounds.height || 1)),
+        parts: Object.fromEntries(parts.map((name) => [name, geometryPart(preview.querySelector(`.${name}`), bounds)])),
+      };
+    });
+  }
+
+  function nextPaint() {
+    return new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
+  }
+
+  async function waitForPreviewImages() {
+    const images = [...(elements.slides?.querySelectorAll(".slide-preview img") || [])];
+    await Promise.all(images.map((image) => {
+      if (image.complete) return Promise.resolve();
+      return new Promise((resolve) => {
+        image.addEventListener("load", resolve, { once: true });
+        image.addEventListener("error", resolve, { once: true });
+      });
+    }));
+    const broken = images.find((image) => !image.complete || image.naturalWidth < 1);
+    if (broken) throw new Error("Un asset dell’anteprima approvata non si è caricato.");
+  }
+
+  async function publishPreviewContract(typographyReady) {
+    const run = ++previewContractRun;
+    delete document.documentElement.dataset.previewReady;
+    delete document.documentElement.dataset.productionReady;
+    delete document.documentElement.dataset.productionError;
+    try {
+      await typographyReady;
+      if (document.fonts?.ready) await document.fonts.ready;
+      await waitForPreviewImages();
+      await nextPaint();
+      measurePreviews();
+      await nextPaint();
+      if (run !== previewContractRun) return;
+      const blocking = [...fitWarnings.entries()].filter(([, warning]) => warning.schema || warning.overflow || warning.emphasis?.length);
+      if (blocking.length) throw new Error(`Produzione bloccata: ${blocking.map(([id]) => id).join(", ")}.`);
+      window.carouselBuilderPreview = Object.freeze({
+        contract: "approved-preview-dom-v1",
+        production: productionRender,
+        styleSystem: selectedVisualSystem,
+        getSlideFrames: productionSlideFrames,
+        getSlideGeometry: previewGeometrySnapshot,
+      });
+      document.documentElement.dataset.previewReady = "true";
+      if (productionRender) document.documentElement.dataset.productionReady = "true";
+    } catch (error) {
+      if (run !== previewContractRun) return;
+      document.documentElement.dataset.productionError = error?.message || "Anteprima non pronta";
+    }
+  }
+
   function renderComments() {
     elements.commentsList.replaceChildren();
     elements.commentCount.textContent = String(selectionComments.length);
@@ -1662,6 +1822,7 @@
 
   function renderAll() {
     if (elements.revisionLabel) elements.revisionLabel.textContent = `Revisione ${model.revision}`;
+    if (elements.builderVersion) elements.builderVersion.textContent = model.editor_version ? `v${model.editor_version}` : "";
     const visualProofStage = model.workflow_state === "testi_approvati";
     const visualApproved = ["prova_visuale_approvata", "rendering", "qa", "consegnato"].includes(model.workflow_state);
     const delivered = model.workflow_state === "consegnato";
@@ -1701,7 +1862,7 @@
     elements.actionbar.classList.remove("hidden");
     if (awaitingFeedbackId) lockEditing();
     updateChangeSummary();
-    configurePreviewTypography();
+    publishPreviewContract(configurePreviewTypography());
   }
 
   async function loadSession() {
@@ -1776,7 +1937,9 @@
       awaitingFeedbackId = data.feedback_id;
       persistDraft();
       lockEditing();
-      showToast(action === "approve" ? "Richiesta di approvazione inviata." : "Correzioni inviate all'agente.");
+      showToast(action === "approve"
+        ? "Richiesta di approvazione inviata. Ti aggiorno qui appena viene elaborata."
+        : "Correzioni inviate. Ti aggiorno qui appena vengono elaborate.");
       updateChangeSummary();
     } catch (error) {
       showToast(error.message || "Invio non riuscito", true);
@@ -1912,6 +2075,7 @@
     const button = event.target.closest("[data-logo-mode]");
     if (button) setLogoMode(button.dataset.logoMode);
   });
+  elements.styleExportButton?.addEventListener("click", exportStyleProfile);
   elements.undoButton?.addEventListener("click", undoLastChange);
   elements.resetButton?.addEventListener("click", resetDraft);
   elements.sendButton?.addEventListener("click", () => submit("feedback"));
@@ -2001,5 +2165,5 @@
     elements.loading?.replaceChildren(create("p", "", error.message || "Impossibile aprire l'editor."));
     showToast(error.message || "Impossibile aprire l'editor", true);
   });
-  window.setInterval(pollStatus, 2000);
+  if (!productionRender) window.setInterval(pollStatus, 2000);
 })();
