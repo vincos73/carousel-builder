@@ -89,6 +89,7 @@ Se la distinzione è incerta e cambia sensibilmente il risultato, proporre la mo
 - Evitare che il corpo ripeta letteralmente il titolo senza aggiungere informazione.
 - Segnalare card senza titolo oltre 320 caratteri e riassunti con titolo oltre 180 caratteri.
 - Trattare le soglie in caratteri come avvisi preliminari; la decisione finale dipende dal fit reale sul master 1080×1350 e dalla prova a 480 px.
+- Prima di invitare l'utente nell'editor locale, verificare l'intera bozza in tutti e tre i sistemi visivi proposti. Se compare un avviso di soglia o il testo non entra dopo l'adattamento massimo dell'8%, riscrivere o dividere la slide e ripetere il controllo: l'utente deve ricevere una prima proposta già impaginabile, non un errore da risolvere.
 - Nel fallback conversazionale verificare gli asterischi bilanciati. Nel manifest e nell'editor proporre un grassetto nelle card interne con corpo, senza renderlo obbligatorio; verificare al massimo un trattamento tra corsivo, sottolineatura ed evidenziatore e nessuna sovrapposizione.
 - Trattare nomi propri composti come unità indivisibili.
 - Verificare che nessuna riga contenga due frasi compiute.

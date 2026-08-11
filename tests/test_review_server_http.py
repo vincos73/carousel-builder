@@ -144,6 +144,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
         for path in (
             "/assets/styles.css",
             "/assets/app.js",
+            "/assets/vincos-lockup-white.svg",
             "/styles.css",
             "/app.js",
             "/assets/fonts/Inter-Variable.ttf",

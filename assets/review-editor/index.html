@@ -18,16 +18,20 @@
       FINISH: this should feel authored, not assembled.
     -->
     <header class="topbar">
-      <div>
+      <div class="product-heading">
         <h1>
           <span class="product-title">
             <span class="product-title-primary">Carousel</span>
             <span class="product-title-secondary">Builder</span>
           </span>
         </h1>
+        <span class="product-byline">
+          <span>by</span>
+          <img src="/assets/vincos-lockup-white.svg" alt="Vincos">
+        </span>
       </div>
       <div class="topbar-meta">
-        <span id="workflow-badge" class="badge">Caricamento</span>
+        <span id="workflow-badge" class="workflow-status" role="status" aria-live="polite">Caricamento</span>
         <span id="revision-label" class="meta-label"></span>
       </div>
     </header>
@@ -44,7 +48,7 @@
             <div class="content-heading">
               <h2 id="slide-count">Slide</h2>
             </div>
-            <p id="font-status" class="font-status" aria-live="polite">L’anteprima verifica tipografia, palette, densità e safe area; non verifica immagini o crop finali.</p>
+            <p id="font-status" class="font-status" hidden aria-live="polite"></p>
           </div>
           <section class="visual-systems" aria-labelledby="visual-systems-title">
             <div class="visual-systems-copy">
@@ -57,15 +61,14 @@
           <div id="slides" class="slides"></div>
 
           <section class="panel overall-panel">
-            <label class="field-label" for="overall-note">Nota generale</label>
-            <textarea id="overall-note" rows="4" placeholder="Un'osservazione sull'intera sequenza"></textarea>
+            <label class="field-label" for="overall-note">Indicazione per l’intero carosello</label>
+            <textarea id="overall-note" rows="4" placeholder="Per esempio: accorcia tutte le slide, cambia il tono o rivedi l’ordine del racconto"></textarea>
           </section>
         </div>
 
         <aside class="sidebar" aria-label="Contesto di revisione">
           <section class="panel brand-panel">
             <h2 id="brand-name">Profilo del carosello</h2>
-            <dl id="brand-details" class="brand-details"></dl>
             <section class="logo-controls" aria-labelledby="logo-controls-title">
               <div class="panel-heading">
                 <h3 id="logo-controls-title" class="subpanel-title">Logo nelle anteprime</h3>
@@ -79,17 +82,18 @@
               <p id="logo-warning" class="inline-warning" hidden role="status" aria-live="polite"></p>
             </section>
             <div id="palette" class="palette" aria-label="Palette del profilo"></div>
-            <label class="field-label" for="brand-note">Commento sul profilo</label>
-            <textarea id="brand-note" rows="3" placeholder="Per esempio: usa un fondo più chiaro"></textarea>
+            <dl id="brand-typography" class="brand-typography" aria-label="Tipografia del profilo"></dl>
+            <label class="field-label" for="brand-note">Commenta lo stile</label>
+            <textarea id="brand-note" rows="3" placeholder="Per esempio: usa un fondo più chiaro o uno stile più essenziale"></textarea>
           </section>
 
           <section class="panel guidance-panel">
             <h2>Come revisionare</h2>
             <ol>
-              <li>Correggi direttamente i testi.</li>
-              <li>Seleziona una frase per commentarla.</li>
-              <li>Sposta o elimina le slide interne.</li>
-              <li>Invia tutto insieme oppure approva.</li>
+              <li>Correggi i testi nell’editor accanto all’anteprima.</li>
+              <li>Seleziona una parola o una frase per applicare uno stile o aggiungere un commento.</li>
+              <li>Sposta o elimina le slide interne con i comandi della slide.</li>
+              <li>Invia le correzioni oppure approva profilo e testi.</li>
             </ol>
           </section>
 

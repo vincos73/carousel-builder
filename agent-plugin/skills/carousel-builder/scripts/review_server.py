@@ -1304,6 +1304,10 @@ def main() -> int:
                 "/assets/app.js": (assets_dir / "app.js", "text/javascript; charset=utf-8"),
                 "/styles.css": (assets_dir / "styles.css", "text/css; charset=utf-8"),
                 "/app.js": (assets_dir / "app.js", "text/javascript; charset=utf-8"),
+                "/assets/vincos-lockup-white.svg": (
+                    assets_dir / "vincos-lockup-white.svg",
+                    "image/svg+xml; charset=utf-8",
+                ),
                 "/assets/fonts/Inter-Variable.ttf": (
                     BUNDLED_FONT_ASSETS["display"][1],
                     "font/ttf",

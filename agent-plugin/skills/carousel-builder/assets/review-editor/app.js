@@ -37,7 +37,7 @@
     workflowBadge: document.querySelector("#workflow-badge"),
     revisionLabel: document.querySelector("#revision-label"),
     brandName: document.querySelector("#brand-name"),
-    brandDetails: document.querySelector("#brand-details"),
+    brandTypography: document.querySelector("#brand-typography"),
     palette: document.querySelector("#palette"),
     logoPreference: document.querySelector("#logo-preference"),
     logoPreferenceStatus: document.querySelector("#logo-preference-status"),
@@ -587,9 +587,12 @@
     return Boolean(italicFontAsset());
   }
 
-  function setFontStatus(message, error = false) {
+  function setFontStatus(_message, error = false) {
     if (!elements.fontStatus) return;
-    elements.fontStatus.textContent = message;
+    elements.fontStatus.hidden = !error;
+    elements.fontStatus.textContent = error
+      ? "Un carattere non si è caricato: l’anteprima sta usando un’alternativa."
+      : "";
     elements.fontStatus.setAttribute("role", error ? "alert" : "status");
     elements.fontStatus.setAttribute("aria-live", error ? "assertive" : "polite");
   }
@@ -874,12 +877,6 @@
   function renderBrand() {
     const brand = previewBrand();
     elements.brandName.textContent = brand.name || "Profilo senza nome";
-    elements.brandDetails.replaceChildren();
-    const logoCount = ["on_light", "on_dark"].filter((role) => logoMetadata(role).available === true).length;
-    const italicFamily = italicFontAsset()?.family || brand.serif || "Non previsto";
-    const logoLabel = logoCount === 2 ? "2 varianti disponibili" : logoCount === 1 ? "1 variante disponibile" : "Varianti da verificare";
-    const rows = [["Sito", brand.website || "Non mostrato"], ["Firma", brand.signature || "Non mostrata"], ["Logo", logoLabel], ["Titoli", brand.display || brand.sans || "Non dichiarato"], ["Testi", brand.body || brand.sans || "Non dichiarato"], ["Corsivo", italicFamily]];
-    for (const [label, value] of rows) elements.brandDetails.append(create("dt", "", label), create("dd", "", value));
     renderLogoControls();
     elements.palette.replaceChildren();
     const palette = brand.palette || {};
@@ -892,6 +889,22 @@
       swatch.setAttribute("role", "img");
       swatch.setAttribute("aria-label", `${name}: ${value || "colore non dichiarato"}`);
       elements.palette.append(swatch);
+    }
+    if (elements.brandTypography) {
+      elements.brandTypography.replaceChildren();
+      const display = brand.display || brand.font_assets?.display?.family || brand.sans || "Non dichiarato";
+      const body = brand.body || brand.font_assets?.body?.family || brand.sans || "Non dichiarato";
+      const rows = display === body
+        ? [["Titoli e testi", display]]
+        : [["Titoli", display], ["Testi", body]];
+      const italic = italicFontAsset()?.family;
+      if (italic && italic !== display && italic !== body) rows.push(["Corsivo", italic]);
+      for (const [role, family] of rows) {
+        elements.brandTypography.append(
+          create("dt", "brand-typography-role", role),
+          create("dd", "brand-typography-family", family),
+        );
+      }
     }
     elements.brandNote.value = brandNote;
   }
@@ -994,21 +1007,98 @@
     else input.type = "text";
     const warning = create("p", "inline-warning emphasis-warning");
     warning.hidden = true;
+    const appliedStyles = create("section", "applied-styles");
+    appliedStyles.setAttribute("aria-label", "Formato applicato a questo testo");
+    const appliedStylesHeading = create("div", "applied-styles-heading");
+    appliedStylesHeading.append(
+      create("span", "applied-styles-title", "Formato nel testo"),
+      create("span", "applied-styles-hint", "Clicca una voce per rimuoverla"),
+    );
+    const appliedStylesList = create("div", "applied-styles-list");
+    appliedStyles.append(appliedStylesHeading, appliedStylesList);
+    const styleLabels = {
+      bold: "Grassetto",
+      italic: "Corsivo",
+      underline: "Sottolineato",
+      accent: "Evidenziato",
+    };
+    const styleMarks = { bold: "B", italic: "I", underline: "U", accent: "A" };
+    const selectionState = (kind, start, end) => {
+      let containing = "";
+      let overlapping = "";
+      for (const segment of emphasisSegments(slide, field, kind)) {
+        for (const range of textRanges(input.value, segment)) {
+          const overlaps = start < range.end && range.start < end;
+          if (!overlaps) continue;
+          if (!overlapping) overlapping = segment;
+          if (start >= range.start && end <= range.end && !containing) containing = segment;
+        }
+      }
+      return { containing, overlapping };
+    };
+    const firstStyleOverlap = (start, end) => {
+      for (const kind of ["bold", "italic", "underline", "accent"]) {
+        const state = selectionState(kind, start, end);
+        if (state.overlapping) return { kind, segment: state.overlapping };
+      }
+      return null;
+    };
+    const renderAppliedStyles = () => {
+      appliedStylesList.replaceChildren();
+      const entries = [];
+      for (const kind of ["bold", "italic", "underline", "accent"]) {
+        for (const segment of emphasisSegments(slide, field, kind)) entries.push({ kind, segment });
+      }
+      appliedStyles.hidden = entries.length === 0;
+      for (const { kind, segment } of entries) {
+        const remove = create("button", `applied-style-chip applied-style-${kind}`);
+        remove.type = "button";
+        remove.disabled = Boolean(awaitingFeedbackId);
+        remove.setAttribute("aria-label", `Rimuovi ${styleLabels[kind].toLowerCase()} da “${segment}”`);
+        remove.title = `Rimuovi ${styleLabels[kind].toLowerCase()} da “${segment}”`;
+        remove.append(
+          create("span", "applied-style-kind", styleMarks[kind]),
+          create("span", "applied-style-quote", `“${segment}”`),
+          create("span", "applied-style-remove", "×"),
+        );
+        remove.addEventListener("click", () => {
+          recordUndo("rimozione enfasi tipografica");
+          setEmphasisSegments(
+            slide,
+            field,
+            kind,
+            emphasisSegments(slide, field, kind).filter((value) => value !== segment),
+          );
+          onPreview(slide[field]);
+          refreshEmphasisUi();
+          renderAppliedStyles();
+          renderFieldWarning(warning, slide, field);
+          persistDraft();
+          input.focus();
+          window.requestAnimationFrame(measurePreviews);
+        });
+        appliedStylesList.append(remove);
+      }
+    };
     const refreshEmphasisUi = () => {
       const start = input.selectionStart ?? 0;
       const end = input.selectionEnd ?? 0;
       const quote = end > start ? input.value.slice(start, end) : "";
       const hasSelection = Boolean(quote) && !awaitingFeedbackId;
       const setButton = (button, kind, available = true) => {
-        const active = hasSelection && emphasisSegments(slide, field, kind).includes(quote);
+        const state = hasSelection ? selectionState(kind, start, end) : { containing: "", overlapping: "" };
+        const active = Boolean(state.containing);
+        const mixed = Boolean(!active && state.overlapping);
         button.disabled = !hasSelection || (!available && !active);
-        button.setAttribute("aria-pressed", String(active));
+        button.setAttribute("aria-pressed", active ? "true" : mixed ? "mixed" : "false");
+        button.classList.toggle("is-mixed", mixed);
+        button.dataset.appliedSegment = state.containing;
       };
       setButton(boldButton, "bold");
       setButton(italicButton, "italic", hasRealItalicFont());
       setButton(underlineButton, "underline");
       setButton(accentButton, "accent");
-      const italicActive = hasSelection && emphasisSegments(slide, field, "italic").includes(quote);
+      const italicActive = Boolean(italicButton.dataset.appliedSegment);
       italicButton.title = !hasRealItalicFont() && italicActive
         ? "Rimuovi il corsivo non disponibile dalla selezione"
         : `Applica o rimuovi il corsivo ${italicFontLabel()} dalla selezione${hasRealItalicFont() ? "" : " (non disponibile)"}`;
@@ -1033,6 +1123,7 @@
       refreshCharacterCounts();
       onPreview(input.value);
       refreshSelection();
+      renderAppliedStyles();
       renderFieldWarning(warning, slide, field);
       persistDraft();
       window.requestAnimationFrame(measurePreviews);
@@ -1043,14 +1134,29 @@
       if (end <= start) return;
       const quote = input.value.slice(start, end);
       const segments = emphasisSegments(slide, field, kind).slice();
-      const existingIndex = segments.indexOf(quote);
-      if (kind === "italic" && !hasRealItalicFont() && existingIndex < 0) return;
+      const state = selectionState(kind, start, end);
+      const removableSegment = state.containing;
+      if (kind === "italic" && !hasRealItalicFont() && !removableSegment) return;
+      if (!removableSegment) {
+        const conflict = firstStyleOverlap(start, end);
+        if (conflict) {
+          showToast(`La selezione include “${conflict.segment}”, già ${styleLabels[conflict.kind].toLowerCase()}. Rimuovi prima il formato dalla riga sotto il testo.`, true);
+          input.focus();
+          input.setSelectionRange(start, end);
+          return;
+        }
+      }
       recordUndo("enfasi tipografica");
-      if (existingIndex >= 0) segments.splice(existingIndex, 1);
-      else segments.push(quote);
+      if (removableSegment) {
+        const existingIndex = segments.indexOf(removableSegment);
+        if (existingIndex >= 0) segments.splice(existingIndex, 1);
+      } else {
+        segments.push(quote);
+      }
       setEmphasisSegments(slide, field, kind, segments);
       onPreview(slide[field]);
       refreshEmphasisUi();
+      renderAppliedStyles();
       renderFieldWarning(warning, slide, field);
       persistDraft();
       input.focus();
@@ -1084,9 +1190,9 @@
       elements.dialog.showModal();
       elements.commentFeedback.focus();
     });
-    group.append(input);
-    group.append(warning);
+    group.append(input, appliedStyles, warning);
     refreshEmphasisUi();
+    renderAppliedStyles();
     renderFieldWarning(warning, slide, field);
     return group;
   }
