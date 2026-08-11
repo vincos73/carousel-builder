@@ -101,6 +101,25 @@ assert.equal(JSON.parse(storage.get(keyB)).slides[0].id, "b");
         self.assertIn(".then(() => loadSession())", self.source)
         self.assertIn("productionRender ? Promise.resolve() : migrateLegacyStorage()", self.source)
 
+    @unittest.skipUnless(shutil.which("node"), "Node.js non disponibile")
+    def test_static_font_roles_expose_non_overlapping_weight_ranges(self) -> None:
+        script = r'''
+const assert = require("node:assert/strict");
+const { fontAssetDescriptors } = require(process.argv[1]);
+assert.deepEqual(fontAssetDescriptors("body"), { style: "normal", weight: "100 699" });
+assert.deepEqual(fontAssetDescriptors("display"), { style: "normal", weight: "700 900" });
+assert.deepEqual(fontAssetDescriptors("italic", "italic"), { style: "italic", weight: "100 900" });
+'''
+        result = subprocess.run(
+            ["node", "-e", script, str(EDITOR)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("new FontFace(", self.source)
+        self.assertIn("fontAssetDescriptors(kind, style)", self.source)
+
     def test_foreign_pending_locks_without_claiming_or_discarding_local_draft(self) -> None:
         poll = self.source.split("async function pollStatus()", 1)[1].split("function clearPendingSelection", 1)[0]
         self.assertIn("const ownPending", poll)
@@ -222,7 +241,10 @@ assert.equal(collectPaletteDeclarationIssues(provenOverride).length, 0);
         self.assertNotIn("requestAnimationFrame(measurePreviews", self.source)
 
     def test_real_italic_and_render_contract_are_fail_closed(self) -> None:
-        self.assertIn("loadedFontKeys.has(fontAssetKey(asset, \"italic\"))", self.source)
+        self.assertIn(
+            'loadedFontKeys.has(fontAssetKey(asset, fontAssetDescriptors("italic", "italic")))',
+            self.source,
+        )
         self.assertIn("il sottotitolo richiede una vera variante corsiva", self.source)
         self.assertIn("const realItalic = slide.kind === \"cover\" && hasRealItalicFont()", self.source)
         self.assertIn(".slide-preview.has-real-italic .preview-cover-subtitle", self.stylesheet)
