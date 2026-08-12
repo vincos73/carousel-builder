@@ -12,13 +12,36 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 def base_manifest() -> dict:
     return {
-        "schema_version": "1.1",
+        "schema_version": "1.3",
         "source_type": "article",
         "sequence_mode": "narrative",
         "workflow_state": "bozza",
         "revision": 1,
-        "proof": {"slide_ids": ["cover", "item-2", "outro"], "approved": False},
-        "format": {"ratio": "4:5", "master_width": 1080, "master_height": 1350},
+        "visual_style_system": "editorial-frame",
+        "production": {
+            "mode": "renderer",
+            "producer": "approved-preview-dom-v2",
+            "supported_style_systems": [
+                "editorial-frame",
+                "editorial-halftone",
+                "corporate-modular",
+            ],
+            "expected_outputs": ["png", "pdf"],
+        },
+        "proof": {
+            "slide_ids": ["cover", "item-2", "outro"],
+            "style_system_verified": False,
+            "approved": False,
+        },
+        "format": {
+            "ratio": "4:5",
+            "master_width": 1080,
+            "master_height": 1350,
+            "width": 1440,
+            "height": 1800,
+            "preview_width": 480,
+            "preview_height": 600,
+        },
         "cover_title": "La lezione e operativa",
         "cover_title_serif": ["e operativa"],
         "cover_alt_text": "Copertina con metafora",
@@ -52,6 +75,42 @@ def base_manifest() -> dict:
             "transcript": "Trascrizione precedente",
         },
     }
+
+
+def legacy_manifest(version: str | None = "1.1") -> dict:
+    manifest = base_manifest()
+    if version is None:
+        manifest.pop("schema_version", None)
+    else:
+        manifest["schema_version"] = version
+    manifest.pop("production", None)
+    manifest["proof"] = {
+        "slide_ids": ["cover", "item-2", "outro"],
+        "approved": False,
+    }
+    manifest["format"] = {
+        "ratio": "4:5",
+        "master_width": 1080,
+        "master_height": 1350,
+    }
+    return manifest
+
+
+def sync_derived_contract(manifest: dict) -> dict:
+    """Refresh current-schema order/proof fields after a fixture mutation."""
+    item_ids = [item["id"] for item in manifest.get("items", [])]
+    outro_enabled = isinstance(manifest.get("outro"), dict) and manifest["outro"].get("enabled") is True
+    order = ["cover", *item_ids] + (["outro"] if outro_enabled else [])
+    if isinstance(manifest.get("accessibility"), dict):
+        manifest["accessibility"]["reading_order"] = order
+    if item_ids and isinstance(manifest.get("proof"), dict):
+        dense = max(
+            manifest["items"],
+            key=lambda item: len(str(item.get("title", "")).strip())
+            + len(str(item.get("summary", "")).strip()),
+        )["id"]
+        manifest["proof"]["slide_ids"] = ["cover", dense] + (["outro"] if outro_enabled else [])
+    return manifest
 
 
 def slide(slide_id: str, kind: str, title: str = "", summary: str = "") -> dict:

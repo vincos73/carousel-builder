@@ -23,6 +23,7 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
   "proof": {
     "slide_ids": ["cover", "item-1", "outro"],
     "style_system_verified": false,
+    "browser": null,
     "approved": false
   },
   "format": {
@@ -109,13 +110,14 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
 - `workflow_state`: usare `bozza`, `testi_approvati`, `prova_visuale_approvata`, `rendering`, `qa` o `consegnato`.
 - `revision`: incrementare quando cambiano testi approvati, profilo, visuale o composizione.
 - `production.mode`: usare `renderer`, `adapter` o `layout` secondo il preflight.
-- `production.producer`: identificatore del renderer o adapter; può restare vuoto in modalità `layout`.
+- `production.producer`: identificatore del renderer o adapter; può restare vuoto in modalità `layout`. Nel percorso `local-editor` deve coincidere con il contratto corrente `approved-preview-dom-v2`; un identificatore diverso richiede il flusso di prova ed export del produttore esterno e non può riusare l'approvazione del renderer locale.
 - `production.supported_style_systems`: ID dei sistemi che il produttore implementa realmente. In modalità `renderer` o `adapter` deve contenere il `visual_style_system` risolto; la sola capacità di applicare palette e font non costituisce supporto.
 - `production.expected_outputs`: artefatti dichiarati prima della produzione.
-- `proof.slide_ids`: copertina, card più densa e chiusura quando prevista.
-- `proof.style_system_verified`: impostare `true` soltanto dopo aver verificato nella prova a 480 px l'assenza degli elementi strutturali sulla copertina e la firma obbligatoria del sistema sulle altre card campione.
+- `proof.slide_ids`: campione canonico nell'ordine della sequenza: copertina, card interna più densa e chiusura quando prevista. In caso di pari densità scegliere la prima card nell'ordine corrente; dopo eliminazioni, riordini o modifiche al copy ricalcolare il campione e richiedere una nuova prova.
+- `proof.style_system_verified`: impostare `true` soltanto dopo aver visualizzato tutte le card di `proof.slide_ids` nella prova a 480 px, verificando l'assenza degli elementi strutturali sulla copertina e la firma obbligatoria del sistema sulle altre card campione.
+- `proof.browser`: salvare `{ "engine": "chromium", "major": N }` soltanto insieme all'approvazione visuale, usando la major del browser in cui il campione è stato realmente visto. Il renderer locale esporta con Chromium e richiede la stessa major; una prova aperta in un altro motore deve essere riapprovata in Chromium.
 - `proof.approved`: impostare `true` soltanto dopo il via libera dell'utente sulla prova visuale; il primo checkpoint su profilo e testi non deve modificarlo. Aggiornare allora `workflow_state` a `prova_visuale_approvata`.
-- `proof.render_fingerprint`: salvare il fingerprint SHA-256 candidato calcolato dal server sul copy, sul sistema visivo, sulla modalità del logo e sui byte effettivi di cover, loghi e font. Una prova è approvata soltanto quando questo valore coincide con il fingerprint corrente. Riportare automaticamente `proof.approved` a `false` quando cambiano testi, ordine, profilo, sistema visivo, logo, asset o composizione della prova, registrando la necessità di una nuova approvazione.
+- `proof.render_fingerprint`: salvare il fingerprint SHA-256 candidato calcolato dal server sul copy, sul sistema visivo, sulla modalità del logo, sul contratto renderer e sui byte effettivi di HTML, JavaScript, CSS, cover, loghi e font. Una prova è approvata soltanto quando questo valore coincide con il fingerprint corrente. Riportare automaticamente `proof.approved` e `proof.style_system_verified` a `false` e rimuovere `proof.browser` quando cambiano testi, ordine, profilo, sistema visivo, logo, asset o composizione della prova.
 - `format`: usare il master 4:5 da 1080×1350, l'export 1440×1800 e la prova obbligatoria a 480 px di larghezza. I campi legacy `width` e `height` continuano a indicare l'export finale.
 - `typography`: registrare la scala sul master 1080×1350. I valori nominali sono copertina 112 px con peso 800, sottotitolo di copertina 56 px con peso 500 e interlinea 1.08, titoli sezionali 72 px con peso 800, corpo 64 px con peso 620, interlinea 1.12, spazio aggiuntivo fra frasi `sentence_gap_em: 0.6`, tracking -0.025 em e metadati 26 px. Applicare all'export 1440×1800 un fattore uniforme di 4/3.
 - `typography.min_auto_scale`: non usare valori inferiori a `0.92`, equivalenti a una riduzione massima dell'8%.
@@ -135,7 +137,7 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
 - `cover_mode`: usare `generated` solo quando l'immagine della copertina è stata generata, `provided` per un asset fornito dall'utente e `typographic` per una copertina senza immagine. Le slide interne non dipendono da questo campo. Accettare i valori legacy `cover_visual_mode: generative|technical` mappandoli rispettivamente a `generated|provided`.
 - `brand`: profilo risolto conforme a [brand-profile.md](brand-profile.md), con ruoli `fonts.display` e `fonts.body`; accettare `fonts.sans` come alias legacy di entrambi.
 - `items`: almeno un elemento.
-- `items[].id`: identificatore stabile e univoco, usato per prova, ordine di lettura e revisioni.
+- `items[].id`: identificatore stabile e univoco di 1-64 caratteri formato da lettere, numeri, trattino o underscore, usato per prova, ordine di lettura e revisioni. `cover` e `outro` sono riservati.
 - `items[].layout`: può essere `editorial`, `statement` o `split`; controlla la composizione, non genera etichette visibili.
 - `items[].title`: deve essere vuoto in modalità `narrative`; in modalità `sectional` può contenere un titolo breve.
 - `items[].summary`: può essere vuoto solo se esiste il titolo.

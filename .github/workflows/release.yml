@@ -53,9 +53,15 @@ jobs:
           fi
 
           skill_version=$(python -c 'import re; from pathlib import Path; text=Path("SKILL.md").read_text(encoding="utf-8"); match=re.search(r"^Versione: \*\*([^*]+)\*\*$", text, re.MULTILINE); assert match, "Versione skill mancante"; print(match.group(1))')
+          plugin_skill_version=$(python -c 'import re; from pathlib import Path; text=Path("agent-plugin/skills/carousel-builder/SKILL.md").read_text(encoding="utf-8"); match=re.search(r"^Versione: \*\*([^*]+)\*\*$", text, re.MULTILINE); assert match, "Versione skill plugin mancante"; print(match.group(1))')
           plugin_version=$(python -c 'import json; from pathlib import Path; print(json.loads(Path("agent-plugin/plugin.json").read_text(encoding="utf-8"))["version"])')
-          echo "SKILL.md=$skill_version plugin.json=$plugin_version tag=$tag commit=$tag_commit"
+          editor_version=$(python -c 'import re; from pathlib import Path; text=Path("scripts/review_server.py").read_text(encoding="utf-8"); match=re.search(r"^EDITOR_VERSION = \"([^\"]+)\"$", text, re.MULTILINE); assert match, "EDITOR_VERSION root mancante"; print(match.group(1))')
+          plugin_editor_version=$(python -c 'import re; from pathlib import Path; text=Path("agent-plugin/skills/carousel-builder/scripts/review_server.py").read_text(encoding="utf-8"); match=re.search(r"^EDITOR_VERSION = \"([^\"]+)\"$", text, re.MULTILINE); assert match, "EDITOR_VERSION plugin mancante"; print(match.group(1))')
+          echo "SKILL.md=$skill_version plugin-SKILL.md=$plugin_skill_version plugin.json=$plugin_version root-editor=$editor_version plugin-editor=$plugin_editor_version tag=$tag commit=$tag_commit"
+          test "$skill_version" = "$plugin_skill_version"
           test "$skill_version" = "$plugin_version"
+          test "$skill_version" = "$editor_version"
+          test "$skill_version" = "$plugin_editor_version"
           test "${tag#v}" = "$skill_version"
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -101,6 +107,10 @@ jobs:
 
           find "$root_stage" "$plugin_stage" -type f \( -name '*.pyc' -o -name '.DS_Store' \) -delete
           find "$root_stage" "$plugin_stage" -type d -name '__pycache__' -empty -delete
+          # Normalize every ZIP timestamp to the tagged commit so a safe draft
+          # resume rebuilds byte-identical packages on a fresh runner.
+          source_date_epoch=$(git show -s --format=%ct HEAD)
+          find "$root_stage" "$plugin_stage" -exec touch -h -d "@$source_date_epoch" {} +
           (cd "$(dirname "$root_stage")" && zip -X -qr "$GITHUB_WORKSPACE/dist/carousel-builder.zip" carousel-builder)
           (cd "$plugin_stage" && zip -X -qr "$GITHUB_WORKSPACE/dist/carousel-builder-agent-plugin.zip" .)
 
@@ -129,7 +139,17 @@ jobs:
               "$plugin_extract/skills/carousel-builder/$shared_path"
           done
 
-      - name: Pubblica una nuova release senza sovrascritture
+      - name: Genera checksum pubblici
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum \
+            carousel-builder.zip \
+            carousel-builder-agent-plugin.zip \
+            > SHA256SUMS)
+          (cd dist && sha256sum --check SHA256SUMS)
+
+      - name: Crea o riprende e verifica una release draft senza sovrascritture
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
@@ -137,16 +157,81 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::error::La release $TAG esiste già: gli asset non vengono sovrascritti."
+          expected_assets="SHA256SUMS,carousel-builder-agent-plugin.zip,carousel-builder.zip"
+          mapfile -t matching_release_ids < <(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$GITHUB_REPOSITORY/releases" \
+            --paginate \
+            --jq ".[] | select(.tag_name == \"$TAG\") | .id")
+          if [ "${#matching_release_ids[@]}" -gt 1 ]; then
+            echo "::error::Più release condividono il tag $TAG; pubblicazione interrotta."
             exit 1
           fi
-          gh release create "$TAG" \
-            --verify-tag \
-            --target "$TAG_COMMIT" \
-            --title "Carousel Builder ${TAG#v}" \
-            --generate-notes \
-            --latest \
-            dist/carousel-builder.zip \
-            dist/carousel-builder-agent-plugin.zip
-          gh release view "$TAG"
+          if [ "${#matching_release_ids[@]}" -eq 1 ]; then
+            release_id="${matching_release_ids[0]}"
+            resume_draft=true
+          else
+            gh release create "$TAG" \
+              --verify-tag \
+              --target "$TAG_COMMIT" \
+              --title "Carousel Builder ${TAG#v}" \
+              --generate-notes \
+              --draft \
+              dist/carousel-builder.zip \
+              dist/carousel-builder-agent-plugin.zip \
+              dist/SHA256SUMS
+            mapfile -t matching_release_ids < <(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$GITHUB_REPOSITORY/releases" \
+              --paginate \
+              --jq ".[] | select(.tag_name == \"$TAG\") | .id")
+            if [ "${#matching_release_ids[@]}" -ne 1 ]; then
+              echo "::error::La draft $TAG appena creata non è risolvibile in modo univoco."
+              exit 1
+            fi
+            release_id="${matching_release_ids[0]}"
+            resume_draft=false
+          fi
+
+          download_dir="$RUNNER_TEMP/release-download"
+          install -d "$download_dir"
+          release_json=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$GITHUB_REPOSITORY/releases/$release_id")
+          test -n "$release_json"
+          test "$(jq -r '.tag_name' <<<"$release_json")" = "$TAG"
+          if [ "$(jq -r '.draft' <<<"$release_json")" != "true" ]; then
+            echo "::error::La release pubblica $TAG esiste già: gli asset non vengono sovrascritti."
+            exit 1
+          fi
+          test "$(jq -r '.prerelease' <<<"$release_json")" = "false"
+          test "$(jq -r '.target_commitish' <<<"$release_json")" = "$TAG_COMMIT"
+          test "$(jq -r '[.assets[].name] | sort | join(",")' <<<"$release_json")" = "$expected_assets"
+          test "$(jq -r 'all(.assets[]; .state == "uploaded" and .size > 0)' <<<"$release_json")" = "true"
+          if [ "$resume_draft" = "true" ]; then
+            echo "Riprendo la release draft $TAG e ne riverifico integralmente gli asset."
+          fi
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api \
+              -H "Accept: application/octet-stream" \
+              "/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              > "$download_dir/$asset_name"
+          done < <(jq -r '.assets[] | [.id, .name] | @tsv' <<<"$release_json")
+          cmp dist/SHA256SUMS "$download_dir/SHA256SUMS"
+          (cd "$download_dir" && sha256sum --check SHA256SUMS)
+          unzip -t "$download_dir/carousel-builder.zip"
+          unzip -t "$download_dir/carousel-builder-agent-plugin.zip"
+
+      - name: Pubblica la release verificata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --draft=false --latest
+          release_json=$(gh release view "$TAG" --json isDraft,isPrerelease,assets,url)
+          test "$(jq -r '.isDraft' <<<"$release_json")" = "false"
+          test "$(jq -r '.isPrerelease' <<<"$release_json")" = "false"
+          test "$(jq -r '.assets | length' <<<"$release_json")" = "3"
+          jq -r '.url' <<<"$release_json"

@@ -2405,7 +2405,7 @@ input:focus {
 
 .slide-preview {
   top: 104px;
-  width: min(100%, 440px);
+  width: min(100%, 480px);
   margin: 0 auto;
   border: 10px solid var(--preview-bg, #172033);
   border-radius: 0;
@@ -2914,8 +2914,8 @@ html.production-render body,
 html[data-capture-target="true"],
 html[data-capture-target="true"] body {
   margin: 0;
-  width: 440px;
-  min-width: 440px;
+  width: 480px;
+  min-width: 480px;
   background: transparent;
 }
 
@@ -2949,7 +2949,7 @@ html[data-capture-target="true"] .editor,
 html[data-capture-target="true"] .content,
 html[data-capture-target="true"] .slides {
   display: block;
-  width: 440px;
+  width: 480px;
   margin: 0;
   padding: 0;
   background: transparent;
@@ -2958,7 +2958,7 @@ html[data-capture-target="true"] .slides {
 html.production-render .slide-row,
 html[data-capture-target="true"] .slide-row {
   display: block;
-  width: 440px;
+  width: 480px;
   margin: 0;
   padding: 0;
   border: 0;
@@ -2969,7 +2969,7 @@ html[data-capture-target="true"] .slide-row {
 html.production-render .slide-preview {
   position: relative;
   top: auto;
-  width: 440px;
+  width: 480px;
   min-height: 0;
   margin: 0;
   border: 10px solid var(--preview-bg, #172033);
@@ -2982,7 +2982,7 @@ html.production-render .slide-preview {
 html[data-capture-target="true"] .slide-preview {
   position: relative;
   top: auto;
-  width: 440px;
+  width: 480px;
   min-height: 0;
   margin: 0;
   border: 10px solid var(--preview-bg, #172033);

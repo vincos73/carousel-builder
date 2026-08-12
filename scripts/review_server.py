@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -52,7 +53,33 @@ MAX_BODY_BYTES = 1_000_000
 MAX_SLIDES = 50
 MAX_COMMENTS = 200
 MAX_TEXT = 20_000
-EDITOR_VERSION = "2.8.10"
+EDITOR_VERSION = "2.8.11"
+RENDER_CONTRACT = "approved-preview-dom-v2"
+CURRENT_SCHEMA_VERSION = (1, 3)
+SUPPORTED_SCHEMA_MAJOR = 1
+ITEM_ID_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_-]{0,63})\Z")
+RESERVED_SLIDE_IDS = {"cover", "outro"}
+SOURCE_TYPES = {"newsletter", "article", "notes", "verbatim", "rework", "social"}
+SEQUENCE_MODES = {"narrative", "sectional"}
+WORKFLOW_STATES = {
+    "bozza",
+    "testi_approvati",
+    "prova_visuale_approvata",
+    "rendering",
+    "qa",
+    "consegnato",
+    # Stati legacy documentati e già riconosciuti dal core.
+    "draft",
+    "in_revisione",
+    "in_revisione_editoriale",
+    "in_review",
+    "feedback",
+    "approvato",
+    "approved",
+    "pubblicato",
+    "published",
+}
+PRODUCTION_MODES = {"renderer", "adapter", "layout"}
 TYPOGRAPHY_DEFAULTS = {
     "cover_px": 112,
     "cover_subtitle_px": 56,
@@ -216,6 +243,25 @@ def validated_revision(manifest: dict) -> int:
     return revision
 
 
+def parsed_schema_version(value: object) -> tuple[int, int] | None:
+    """Parse supported manifest versions; a missing value is pre-version legacy."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"\d+\.\d+", value):
+        raise ValueError("schema_version deve usare il formato major.minor")
+    major, minor = (int(part) for part in value.split(".", 1))
+    if major != SUPPORTED_SCHEMA_MAJOR or (major, minor) > CURRENT_SCHEMA_VERSION:
+        raise ValueError(
+            f"schema_version {value!r} non supportata; la versione massima è "
+            f"{CURRENT_SCHEMA_VERSION[0]}.{CURRENT_SCHEMA_VERSION[1]}"
+        )
+    return major, minor
+
+
+def is_current_manifest(manifest: dict) -> bool:
+    return parsed_schema_version(manifest.get("schema_version")) == CURRENT_SCHEMA_VERSION
+
+
 def manifest_revision(manifest_path: Path) -> int:
     """Read only the durable revision; status polling must not hash visual assets."""
     return validated_revision(read_json(manifest_path))
@@ -261,6 +307,15 @@ def feedback_event(feedback_path: Path, feedback: dict) -> dict:
         "path": str(feedback_path),
         "archive_path": str(archive_path),
     }
+
+
+def emit_event(value: dict) -> bool:
+    """Best-effort event transport; durable session files remain authoritative."""
+    try:
+        print(json.dumps(value, ensure_ascii=False), flush=True)
+    except (BrokenPipeError, OSError, ValueError):
+        return False
+    return True
 
 
 def commit_feedback(
@@ -318,7 +373,13 @@ def recover_feedback_commit(
     if not journal_path.exists():
         return None
     journal = read_json(journal_path)
-    if journal.get("version") not in {1, 2} or not isinstance(journal.get("manifest"), str):
+    journal_version = journal.get("version")
+    if (
+        not isinstance(journal_version, int)
+        or isinstance(journal_version, bool)
+        or journal_version not in {1, 2}
+        or not isinstance(journal.get("manifest"), str)
+    ):
         raise ValueError("Journal feedback non valido")
     if not same_path(journal["manifest"], manifest_path):
         raise ValueError("Il journal feedback appartiene a un manifest diverso")
@@ -329,8 +390,10 @@ def recover_feedback_commit(
         raise ValueError("Journal feedback incompleto")
     feedback_id = safe_feedback_id(feedback.get("feedback_id"))
     archive_path = feedback_archive_path(feedback_path.parent, feedback_id)
+    feedback_action = feedback.get("action")
     if (
-        feedback.get("action") not in {"feedback", "approve"}
+        not isinstance(feedback_action, str)
+        or feedback_action not in {"feedback", "approve"}
         or not isinstance(feedback.get("submitted_at"), str)
         or state_patch.get("last_feedback_id") != feedback_id
         or state_patch.get("last_action", feedback.get("action")) != feedback.get("action")
@@ -391,21 +454,285 @@ def text(value: object, *, field: str, limit: int = MAX_TEXT) -> str:
     return value
 
 
-def stable_items(manifest: dict) -> list[dict]:
+def stable_items(manifest: dict, *, require_explicit_ids: bool = False) -> list[dict]:
     items = manifest.get("items")
     if not isinstance(items, list) or not items:
         raise ValueError("Il manifest deve contenere almeno una slide in items")
-    seen: set[str] = set()
+    seen: set[str] = set(RESERVED_SLIDE_IDS)
     result: list[dict] = []
     for index, item in enumerate(items, start=1):
         if not isinstance(item, dict):
             raise ValueError(f"items[{index - 1}] deve essere un oggetto")
-        item_id = item.get("id") or f"item-{index}"
-        if not isinstance(item_id, str) or not item_id or item_id in seen:
+        item_id = item.get("id")
+        if item_id is None and not require_explicit_ids:
+            item_id = f"item-{index}"
+        if not isinstance(item_id, str) or not ITEM_ID_RE.fullmatch(item_id):
+            raise ValueError(
+                "Ogni items[].id deve essere una stringa di 1-64 caratteri "
+                "composta da lettere, numeri, trattino o underscore"
+            )
+        if item_id in seen:
+            if item_id in RESERVED_SLIDE_IDS:
+                raise ValueError(f"items[].id {item_id!r} è riservato")
             raise ValueError("Ogni slide deve avere un ID stabile e univoco")
         seen.add(item_id)
         result.append({**item, "id": item_id})
     return result
+
+
+def densest_item_id(items: list[dict]) -> str:
+    """Select the proof sample deterministically, keeping current order on ties."""
+    return max(
+        items,
+        key=lambda item: len(item.get("title", "").strip())
+        + len(item.get("summary", "").strip()),
+    )["id"]
+
+
+def required_proof_ids_for_slides(slides: list[dict]) -> list[str]:
+    items = [slide for slide in slides if slide.get("kind") == "item"]
+    return ["cover", densest_item_id(items)] + (
+        ["outro"] if any(slide.get("kind") == "outro" for slide in slides) else []
+    )
+
+
+def required_proof_slide_ids(items: list[dict], *, outro_enabled: bool) -> list[str]:
+    return ["cover", densest_item_id(items)] + (["outro"] if outro_enabled else [])
+
+
+def normalized_proof_browser(value: object, *, required: bool = False) -> dict | None:
+    if value is None and not required:
+        return None
+    if not isinstance(value, dict) or set(value) != {"engine", "major"}:
+        raise ValueError("proof.browser deve contenere soltanto engine e major")
+    engine = value.get("engine")
+    major = value.get("major")
+    if engine != "chromium":
+        raise ValueError("proof.browser.engine deve essere chromium")
+    if (
+        not isinstance(major, int)
+        or isinstance(major, bool)
+        or not 1 <= major <= 999
+    ):
+        raise ValueError("proof.browser.major deve essere un intero tra 1 e 999")
+    return {"engine": engine, "major": major}
+
+
+def validate_manifest_contract(manifest: dict) -> dict:
+    """Validate structural and cross-field invariants before building a model.
+
+    Schema 1.3 is strict. Earlier and unversioned manifests keep documented
+    compatibility defaults, but unsafe/future versions and identity collisions
+    always fail closed.
+    """
+    version = parsed_schema_version(manifest.get("schema_version"))
+    current = version == CURRENT_SCHEMA_VERSION
+    validated_revision(manifest)
+
+    source_type = manifest.get("source_type", "notes")
+    if not isinstance(source_type, str) or source_type not in SOURCE_TYPES:
+        raise ValueError(f"source_type non valido: {source_type!r}")
+    sequence_mode = manifest.get("sequence_mode", "narrative")
+    if not isinstance(sequence_mode, str) or sequence_mode not in SEQUENCE_MODES:
+        if current:
+            raise ValueError(f"sequence_mode non valido: {sequence_mode!r}")
+        sequence_mode = "narrative"
+    workflow_state = manifest.get("workflow_state", "bozza")
+    if not isinstance(workflow_state, str) or workflow_state not in WORKFLOW_STATES:
+        raise ValueError(f"workflow_state non valido: {workflow_state!r}")
+
+    cover_title = text(manifest.get("cover_title"), field="cover_title")
+    if not cover_title.strip():
+        raise ValueError("cover_title non può essere vuoto")
+    items = stable_items(manifest, require_explicit_ids=current)
+    outro_value = manifest.get("outro")
+    if outro_value is not None and not isinstance(outro_value, dict):
+        raise ValueError("outro deve essere un oggetto")
+    outro = outro_value or {}
+    if current and "enabled" in outro and not isinstance(outro.get("enabled"), bool):
+        raise ValueError("outro.enabled deve essere booleano")
+    outro_enabled = outro.get("enabled", False) is True
+    total_slides = 1 + len(items) + int(outro_enabled)
+    if total_slides > MAX_SLIDES:
+        raise ValueError(f"Il manifest può contenere al massimo {MAX_SLIDES} slide")
+
+    for item in items:
+        if "kind" in item and item.get("kind") != "item":
+            raise ValueError(f"{item['id']}.kind deve essere item")
+        title_value = text(item.get("title"), field=f"{item['id']}.title")
+        summary_value = text(item.get("summary"), field=f"{item['id']}.summary")
+        if not title_value.strip() and not summary_value.strip():
+            raise ValueError(f"{item['id']} non può essere vuota")
+        if sequence_mode == "narrative" and title_value.strip():
+            if current:
+                raise ValueError(
+                    f"{item['id']}.title deve essere vuoto in modalità narrative"
+                )
+    if outro_enabled:
+        outro_title = text(outro.get("title"), field="outro.title")
+        outro_body = text(outro.get("body"), field="outro.body")
+        if not outro_title.strip() and not outro_body.strip():
+            raise ValueError("La chiusura non può essere vuota")
+
+    canonical_order = ["cover", *(item["id"] for item in items)]
+    if outro_enabled:
+        canonical_order.append("outro")
+    accessibility_value = manifest.get("accessibility")
+    if accessibility_value is not None and not isinstance(accessibility_value, dict):
+        raise ValueError("accessibility deve essere un oggetto")
+    reading_order = (accessibility_value or {}).get("reading_order")
+    if current and reading_order != canonical_order:
+        raise ValueError(
+            "accessibility.reading_order deve elencare tutte le slide nell'ordine canonico"
+        )
+    if reading_order is not None and (
+        not isinstance(reading_order, list)
+        or any(not isinstance(slide_id, str) for slide_id in reading_order)
+        or len(reading_order) != len(set(reading_order))
+    ):
+        raise ValueError("accessibility.reading_order non valido")
+
+    raw_selected_style = manifest.get("visual_style_system")
+    if current and raw_selected_style is not None and normalized_visual_style_system(raw_selected_style) is None:
+        raise ValueError("visual_style_system non valido")
+    raw_logo_mode = manifest.get("logo_mode")
+    if current and raw_logo_mode is not None and normalized_logo_mode(raw_logo_mode) is None:
+        raise ValueError("logo_mode deve essere auto oppure hidden")
+    raw_cover_mode = manifest.get("cover_mode")
+    if current and raw_cover_mode is not None and (
+        not isinstance(raw_cover_mode, str)
+        or raw_cover_mode not in {"generated", "provided", "typographic"}
+    ):
+        raise ValueError("cover_mode non valido")
+    for object_field in ("brand", "typography"):
+        value = manifest.get(object_field)
+        if current and value is not None and not isinstance(value, dict):
+            raise ValueError(f"{object_field} deve essere un oggetto")
+    selected_style = resolved_visual_style_system(manifest)
+    production_value = manifest.get("production")
+    if production_value is not None and not isinstance(production_value, dict):
+        raise ValueError("production deve essere un oggetto")
+    production = production_value or {}
+    production_mode = production.get("mode", "layout")
+    if not isinstance(production_mode, str) or production_mode not in PRODUCTION_MODES:
+        raise ValueError(f"production.mode non valido: {production_mode!r}")
+    producer = text(
+        production.get("producer"), field="production.producer", limit=500
+    )
+    if current and production_mode in {"renderer", "adapter"} and not producer.strip():
+        raise ValueError(
+            "production.producer è obbligatorio per renderer o adapter"
+        )
+    supported_value = production.get("supported_style_systems", [])
+    if not isinstance(supported_value, list):
+        raise ValueError("production.supported_style_systems deve essere una lista")
+    supported_styles: list[str] = []
+    for index, style in enumerate(supported_value):
+        normalized = normalized_visual_style_system(style)
+        if normalized is None:
+            raise ValueError(
+                f"production.supported_style_systems[{index}] non è un sistema valido"
+            )
+        if normalized not in supported_styles:
+            supported_styles.append(normalized)
+    expected_outputs = production.get("expected_outputs", [])
+    if expected_outputs is not None and (
+        not isinstance(expected_outputs, list)
+        or any(not isinstance(output, str) or not output.strip() for output in expected_outputs)
+        or len(expected_outputs) != len(set(expected_outputs))
+    ):
+        raise ValueError("production.expected_outputs deve essere una lista di stringhe univoche")
+    selected_style_supported = selected_style in supported_styles
+    if current and production_mode in {"renderer", "adapter"} and not selected_style_supported:
+        raise ValueError(
+            "production.supported_style_systems deve includere visual_style_system "
+            "per renderer o adapter"
+        )
+
+    proof_value = manifest.get("proof")
+    if proof_value is not None and not isinstance(proof_value, dict):
+        raise ValueError("proof deve essere un oggetto")
+    proof = proof_value or {}
+    required_ids = required_proof_slide_ids(items, outro_enabled=outro_enabled)
+    raw_proof_ids = proof.get("slide_ids", [])
+    if not isinstance(raw_proof_ids, list) or any(
+        not isinstance(slide_id, str) for slide_id in raw_proof_ids
+    ):
+        raise ValueError("proof.slide_ids deve essere una lista di ID")
+    if current and raw_proof_ids != required_ids:
+        raise ValueError(
+            "proof.slide_ids deve contenere copertina, card più densa e chiusura "
+            "nell'ordine canonico"
+        )
+    known_ids = {"cover", *(item["id"] for item in items)}
+    if outro_enabled:
+        known_ids.add("outro")
+    if len(raw_proof_ids) != len(set(raw_proof_ids)) or any(
+        slide_id not in known_ids for slide_id in raw_proof_ids
+    ):
+        raise ValueError("proof.slide_ids contiene ID sconosciuti o duplicati")
+    raw_style_verified = proof.get("style_system_verified", False)
+    style_verified = raw_style_verified is True
+    if current and not isinstance(raw_style_verified, bool):
+        raise ValueError("proof.style_system_verified deve essere booleano")
+    raw_proof_approved = proof.get("approved", False)
+    if current and not isinstance(raw_proof_approved, bool):
+        raise ValueError("proof.approved deve essere booleano")
+    raw_proof_fingerprint = proof.get("render_fingerprint")
+    if current and raw_proof_fingerprint is not None and valid_sha256(raw_proof_fingerprint) is None:
+        raise ValueError("proof.render_fingerprint deve essere uno SHA-256 valido")
+    proof_browser = normalized_proof_browser(proof.get("browser"))
+
+    format_value = manifest.get("format")
+    if format_value is not None and not isinstance(format_value, dict):
+        raise ValueError("format deve essere un oggetto")
+    format_data = format_value or {}
+    required_format = {
+        "ratio": "4:5",
+        "master_width": 1080,
+        "master_height": 1350,
+        "width": 1440,
+        "height": 1800,
+        "preview_width": 480,
+        "preview_height": 600,
+    }
+    if current:
+        for field, expected in required_format.items():
+            if format_data.get(field) != expected or (
+                isinstance(expected, int) and isinstance(format_data.get(field), bool)
+            ):
+                raise ValueError(
+                    f"format.{field} deve essere {expected!r} nello schema 1.3"
+                )
+    preview_width = format_data.get("preview_width", 480)
+    if not isinstance(preview_width, int) or isinstance(preview_width, bool) or preview_width != 480:
+        if current:
+            raise ValueError("format.preview_width deve essere 480")
+        preview_width = 480
+
+    return {
+        "schema_version": manifest.get("schema_version") or "legacy",
+        "legacy": not current,
+        "sequence_mode": sequence_mode,
+        "workflow_state": workflow_state,
+        "items": items,
+        "outro": outro,
+        "outro_enabled": outro_enabled,
+        "selected_style": selected_style,
+        "production": {
+            "mode": production_mode,
+            "producer": producer,
+            "supported_style_systems": supported_styles,
+            "selected_style_supported": selected_style_supported,
+        },
+        "proof": {
+            "slide_ids": raw_proof_ids,
+            "required_slide_ids": required_ids,
+            "style_system_verified": style_verified,
+            "browser": proof_browser,
+            "preview_width": preview_width,
+        },
+    }
 
 
 def _short_string(value: object, *, limit: int = 200) -> str:
@@ -976,7 +1303,7 @@ def render_slides(slides: list[dict]) -> list[dict]:
 
 
 def render_asset_digests(manifest: dict, manifest_path: Path) -> dict[str, str]:
-    """Hash the exact local cover, logo and font bytes used by the editor."""
+    """Hash the exact renderer bundle and local assets used by the editor."""
     _cover, cover_path = cover_image_asset(manifest, manifest_path)
     _logos, logo_paths = logo_assets(manifest, manifest_path)
     _fonts, font_paths = font_assets(manifest, manifest_path)
@@ -985,6 +1312,14 @@ def render_asset_digests(manifest: dict, manifest_path: Path) -> dict[str, str]:
         paths["cover"] = cover_path
     paths.update({f"logo:{role}": path for role, path in logo_paths.items()})
     paths.update({f"font:{role}": path for role, path in font_paths.items()})
+    editor_assets = Path(__file__).resolve().parent.parent / "assets" / "review-editor"
+    paths.update(
+        {
+            "renderer:index": editor_assets / "index.html",
+            "renderer:script": editor_assets / "app.js",
+            "renderer:styles": editor_assets / "styles.css",
+        }
+    )
     cached: dict[str, str] = {}
     result: dict[str, str] = {}
     for role, path in sorted(paths.items()):
@@ -1021,6 +1356,7 @@ def manifest_model(
     include_internal: bool = False,
 ) -> dict:
     manifest = read_json(manifest_path) if manifest is None else manifest
+    contract = validate_manifest_contract(manifest)
     revision = validated_revision(manifest)
 
     slides: list[dict] = [
@@ -1065,7 +1401,7 @@ def manifest_model(
             "deletable": False,
         }
     ]
-    for index, item in enumerate(stable_items(manifest), start=2):
+    for index, item in enumerate(contract["items"], start=2):
         slides.append(
             {
                 "id": item["id"],
@@ -1109,8 +1445,8 @@ def manifest_model(
             }
         )
 
-    outro = manifest.get("outro") if isinstance(manifest.get("outro"), dict) else {}
-    if outro.get("enabled", False):
+    outro = contract["outro"]
+    if contract["outro_enabled"]:
         slides.append(
             {
                 "id": "outro",
@@ -1154,19 +1490,20 @@ def manifest_model(
             }
         )
 
-    sequence_mode = manifest.get("sequence_mode", "narrative")
-    if sequence_mode not in {"narrative", "sectional"}:
-        sequence_mode = "narrative"
+    sequence_mode = contract["sequence_mode"]
     format_data = manifest.get("format") if isinstance(manifest.get("format"), dict) else {}
     cover_visual, _ = cover_image_asset(manifest, manifest_path)
     cover_visual["mode"] = normalized_cover_mode(manifest, cover_visual)
     typography = normalize_typography(manifest)
     brand = brand_summary(manifest, manifest_path)
     proof = manifest.get("proof") if isinstance(manifest.get("proof"), dict) else {}
-    workflow_state = manifest.get("workflow_state", "bozza")
+    workflow_state = contract["workflow_state"]
     approval_checkpoint = approval_stage_for_workflow(workflow_state)
     model = {
         "editor_version": EDITOR_VERSION,
+        "render_contract": RENDER_CONTRACT,
+        "schema_version": contract["schema_version"],
+        "legacy_manifest": contract["legacy"],
         "revision": revision,
         "workflow_state": workflow_state,
         "approval_checkpoint": approval_checkpoint,
@@ -1176,6 +1513,10 @@ def manifest_model(
             "ratio": format_data.get("ratio", "4:5"),
             "master_width": format_data.get("master_width", 1080),
             "master_height": format_data.get("master_height", 1350),
+            "width": format_data.get("width", 1440),
+            "height": format_data.get("height", 1800),
+            "preview_width": contract["proof"]["preview_width"],
+            "preview_height": format_data.get("preview_height", 600),
         },
         "typography": typography,
         "brand": brand,
@@ -1189,10 +1530,13 @@ def manifest_model(
             typography=typography,
             cover_visual=cover_visual,
         ),
+        "proof": contract["proof"],
+        "production": contract["production"],
         "slides": slides,
     }
     context = {
         "editor_version": EDITOR_VERSION,
+        "render_contract": RENDER_CONTRACT,
         "format": model["format"],
         "typography": model["typography"],
         "brand": model["brand"],
@@ -1213,17 +1557,28 @@ def manifest_model(
     model["proof_approved"] = bool(
         proof.get("approved") is True
         and proof.get("render_fingerprint") == model["render_fingerprint"]
+        and contract["proof"]["style_system_verified"]
+        and contract["proof"]["slide_ids"] == contract["proof"]["required_slide_ids"]
+        and contract["proof"]["browser"] is not None
+        and contract["production"]["mode"] in {"renderer", "adapter"}
+        and contract["production"]["producer"] == RENDER_CONTRACT
+        and contract["production"]["selected_style_supported"]
     )
     if include_internal:
         model["_render_context_fingerprint"] = context_fingerprint
     return model
 
 
-def validate_feedback(payload: object, model: dict) -> dict:
+def validate_feedback(
+    payload: object,
+    model: dict,
+    *,
+    request_fingerprint: str | None = None,
+) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Il batch deve essere un oggetto JSON")
     action = payload.get("action")
-    if action not in {"feedback", "approve"}:
+    if not isinstance(action, str) or action not in {"feedback", "approve"}:
         raise ValueError("action deve essere feedback oppure approve")
     base_revision = payload.get("base_revision")
     if not isinstance(base_revision, int) or isinstance(base_revision, bool):
@@ -1248,7 +1603,7 @@ def validate_feedback(payload: object, model: dict) -> dict:
         if not isinstance(slide, dict):
             raise ValueError("Ogni slide deve essere un oggetto")
         slide_id = slide.get("id")
-        if slide_id not in source_by_id or slide_id in seen:
+        if not isinstance(slide_id, str) or slide_id not in source_by_id or slide_id in seen:
             raise ValueError(f"ID slide non valido o duplicato: {slide_id}")
         seen.add(slide_id)
         source = source_by_id[slide_id]
@@ -1288,6 +1643,11 @@ def validate_feedback(payload: object, model: dict) -> dict:
             }
         )
 
+        if not title.strip() and not summary.strip():
+            raise ValueError(f"{slide_id} non può essere vuota")
+        if source["kind"] == "cover" and not title.strip():
+            raise ValueError("Il titolo della copertina non può essere vuoto")
+
     if normalized_slides[0]["id"] != "cover":
         raise ValueError("La copertina deve restare la prima slide")
     if "outro" in source_by_id and normalized_slides[-1]["id"] != "outro":
@@ -1296,6 +1656,12 @@ def validate_feedback(payload: object, model: dict) -> dict:
         raise ValueError("Deve restare almeno una slide interna")
 
     approval_issues = copy_limit_issues(normalized_slides)
+    if model.get("sequence_mode") == "narrative":
+        approval_issues.extend(
+            f"{slide['id']}.title deve essere vuoto in modalità narrative"
+            for slide in normalized_slides
+            if slide["kind"] == "item" and slide["title"].strip()
+        )
     if action == "approve" and approval_issues:
         raise ValueError("Approvazione bloccata: " + "; ".join(approval_issues))
     if action == "feedback":
@@ -1309,9 +1675,11 @@ def validate_feedback(payload: object, model: dict) -> dict:
         if not isinstance(comment, dict):
             raise ValueError(f"comments[{index}] deve essere un oggetto")
         kind = comment.get("kind")
-        if kind not in {"selection", "slide", "brand"}:
+        if not isinstance(kind, str) or kind not in {"selection", "slide", "brand"}:
             raise ValueError(f"Tipo di commento non valido: {kind}")
         slide_id = comment.get("slide_id", "")
+        if not isinstance(slide_id, str):
+            raise ValueError(f"comments[{index}].slide_id deve essere una stringa")
         if kind != "brand" and slide_id not in source_by_id:
             raise ValueError(f"Commento riferito a una slide sconosciuta: {slide_id}")
         normalized_comments.append(
@@ -1351,6 +1719,9 @@ def validate_feedback(payload: object, model: dict) -> dict:
     base_render_fingerprint = None
     approval_stage = None
     base_workflow_state = None
+    proof_slide_ids = None
+    style_system_verified = None
+    proof_browser = None
     if action == "approve":
         approval_stage = approval_stage_for_workflow(model.get("workflow_state"))
         if "approval_stage" in payload:
@@ -1382,10 +1753,41 @@ def validate_feedback(payload: object, model: dict) -> dict:
             visual_style_system=visual_style_system,
             logo_mode=logo_mode,
         )
+        if approval_stage == "visual_proof":
+            proof_slide_ids = payload.get("proof_slide_ids")
+            required_ids = required_proof_ids_for_slides(normalized_slides)
+            if proof_slide_ids != required_ids:
+                raise ValueError(
+                    "proof_slide_ids non coincide con il campione visuale richiesto"
+                )
+            if payload.get("style_system_verified") is not True:
+                raise ValueError(
+                    "style_system_verified=true è obbligatorio per approvare la prova visuale"
+                )
+            style_system_verified = True
+            proof_browser = normalized_proof_browser(
+                payload.get("proof_browser"), required=True
+            )
+            selected_style = visual_style_system or model["visual_proofs"][
+                "selected_style_system"
+            ]
+            production = model.get("production", {})
+            if production.get("mode") not in {"renderer", "adapter"}:
+                raise ValueError(
+                    "La prova visuale può essere approvata solo con un renderer o adapter"
+                )
+            if production.get("producer") != RENDER_CONTRACT:
+                raise ValueError(
+                    "Il produttore non implementa il contratto renderer locale corrente"
+                )
+            if selected_style not in production.get("supported_style_systems", []):
+                raise ValueError(
+                    "Il produttore non supporta il visual_style_system selezionato"
+                )
 
     result = {
         "feedback_id": client_feedback_id(payload.get("feedback_id")) or new_feedback_id(),
-        "request_fingerprint": feedback_request_fingerprint(payload),
+        "request_fingerprint": request_fingerprint or feedback_request_fingerprint(payload),
         "submitted_at": now_iso(),
         "action": action,
         "base_revision": base_revision,
@@ -1404,6 +1806,10 @@ def validate_feedback(payload: object, model: dict) -> dict:
         result["base_workflow_state"] = base_workflow_state
         result["base_render_fingerprint"] = base_render_fingerprint
         result["render_fingerprint"] = approved_render_fingerprint
+    if proof_slide_ids is not None:
+        result["proof_slide_ids"] = proof_slide_ids
+        result["style_system_verified"] = style_system_verified
+        result["proof_browser"] = proof_browser
     return result
 
 
@@ -1464,6 +1870,17 @@ def main() -> int:
             else:
                 token = secrets.token_urlsafe(24)
                 state = {"manifest": str(manifest_path)}
+            # Recovery must observe exactly the pre-commit state recorded in the
+            # journal. Updating revision/start metadata first can make a valid
+            # interrupted commit look like unrelated state corruption.
+            if state_path.exists():
+                recovered_event = recover_feedback_commit(
+                    journal_path=journal_path,
+                    feedback_path=feedback_path,
+                    state_path=state_path,
+                    manifest_path=manifest_path,
+                )
+                state = read_json(state_path)
             state.update(
                 {
                     "token": token,
@@ -1473,12 +1890,6 @@ def main() -> int:
                 }
             )
             atomic_write_json(state_path, state)
-            recovered_event = recover_feedback_commit(
-                journal_path=journal_path,
-                feedback_path=feedback_path,
-                state_path=state_path,
-                manifest_path=manifest_path,
-            )
             if recovered_event is None:
                 current_state = read_json(state_path)
                 last_feedback_id = current_state.get("last_feedback_id")
@@ -1496,7 +1907,11 @@ def main() -> int:
                             break
                     if persisted_feedback is None:
                         raise ValueError("Il batch indicato dallo stato della sessione non è disponibile")
-                    if persisted_feedback.get("action") not in {"feedback", "approve"}:
+                    persisted_action = persisted_feedback.get("action")
+                    if (
+                        not isinstance(persisted_action, str)
+                        or persisted_action not in {"feedback", "approve"}
+                    ):
                         raise ValueError("Il feedback persistito contiene un'azione non valida")
                     append_only_json(archive_path, persisted_feedback)
                     state_changed = False
@@ -1513,8 +1928,10 @@ def main() -> int:
                         )
                     if state_changed:
                         atomic_write_json(state_path, current_state)
+                    # feedback.json is the durable alias consumed by retries
+                    # and tools. Restore it even for an already-applied batch.
+                    atomic_write_json(feedback_path, persisted_feedback)
                     if last_feedback_id != applied_feedback_id:
-                        atomic_write_json(feedback_path, persisted_feedback)
                         recovered_event = feedback_event(feedback_path, persisted_feedback)
         finally:
             for lock in reversed(locals().get("startup_locks", [])):
@@ -1531,11 +1948,28 @@ def main() -> int:
         def log_message(self, _format: str, *_args: object) -> None:
             return
 
-        def send_bytes(self, status: int, body: bytes, content_type: str) -> None:
+        def send_bytes(
+            self,
+            status: int,
+            body: bytes,
+            content_type: str,
+            *,
+            cache_control: str = "no-store",
+            etag: str | None = None,
+        ) -> None:
+            if etag is not None and self.headers.get("If-None-Match") == etag:
+                self.send_response(HTTPStatus.NOT_MODIFIED)
+                self.send_header("Cache-Control", cache_control)
+                self.send_header("ETag", etag)
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                return
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache_control)
+            if etag is not None:
+                self.send_header("ETag", etag)
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Referrer-Policy", "no-referrer")
@@ -1649,7 +2083,14 @@ def main() -> int:
                         HTTPStatus.NOT_FOUND, {"error": f"Asset mancante: {asset_name}"}
                     )
                     return
-                self.send_bytes(HTTPStatus.OK, body, content_type)
+                digest = hashlib.sha256(body).hexdigest()
+                self.send_bytes(
+                    HTTPStatus.OK,
+                    body,
+                    content_type,
+                    cache_control="private, no-cache",
+                    etag=f'"sha256-{digest}"',
+                )
                 return
             font_key = {
                 "/api/font/display": "display",
@@ -1742,6 +2183,12 @@ def main() -> int:
                 except ValueError as exc:
                     self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
                     return
+                except OSError as exc:
+                    self.send_json(
+                        HTTPStatus.INTERNAL_SERVER_ERROR,
+                        {"error": f"Impossibile leggere la sessione: {exc}"},
+                    )
+                    return
                 self.send_json(HTTPStatus.OK, model)
                 return
             if parsed.path == "/api/status":
@@ -1754,10 +2201,22 @@ def main() -> int:
                 except ValueError as exc:
                     self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
                     return
+                except OSError as exc:
+                    self.send_json(
+                        HTTPStatus.INTERNAL_SERVER_ERROR,
+                        {"error": f"Impossibile leggere lo stato della sessione: {exc}"},
+                    )
+                    return
                 try:
                     current_manifest_status = manifest_status(manifest_path)
                 except ValueError as exc:
                     self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
+                    return
+                except OSError as exc:
+                    self.send_json(
+                        HTTPStatus.INTERNAL_SERVER_ERROR,
+                        {"error": f"Impossibile leggere il manifest: {exc}"},
+                    )
                     return
                 last_id = current_state.get("last_feedback_id")
                 applied_id = current_state.get("applied_feedback_id")
@@ -1851,7 +2310,11 @@ def main() -> int:
                             current_model = manifest_model(
                                 manifest_path, include_internal=True
                             )
-                            feedback = validate_feedback(payload, current_model)
+                            feedback = validate_feedback(
+                                payload,
+                                current_model,
+                                request_fingerprint=request_fingerprint,
+                            )
                             event = commit_feedback(
                                 journal_path=journal_path,
                                 feedback_path=feedback_path,
@@ -1877,7 +2340,7 @@ def main() -> int:
                     )
                     return
                 if pending_event is not None:
-                    print(json.dumps(pending_event, ensure_ascii=False), flush=True)
+                    emit_event(pending_event)
                     try:
                         journal_path.unlink(missing_ok=True)
                     except OSError:
@@ -1898,7 +2361,7 @@ def main() -> int:
                     )
                     return
                 if not idempotent_replay:
-                    print(json.dumps(event, ensure_ascii=False), flush=True)
+                    emit_event(event)
                 try:
                     journal_path.unlink(missing_ok=True)
                 except OSError:
@@ -1919,20 +2382,16 @@ def main() -> int:
         return 2
     port = server.server_address[1]
     url = f"http://127.0.0.1:{port}/?token={token}"
-    print(
-        json.dumps(
-            {
-                "status": "ready",
-                "url": url,
-                "session_dir": str(session_dir),
-                "manifest": str(manifest_path),
-            },
-            ensure_ascii=False,
-        ),
-        flush=True,
+    emit_event(
+        {
+            "status": "ready",
+            "url": url,
+            "session_dir": str(session_dir),
+            "manifest": str(manifest_path),
+        }
     )
     if recovered_event is not None:
-        print(json.dumps(recovered_event, ensure_ascii=False), flush=True)
+        emit_event(recovered_event)
         try:
             journal_path.unlink(missing_ok=True)
         except OSError:

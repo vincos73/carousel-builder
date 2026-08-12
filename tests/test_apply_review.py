@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -12,6 +13,13 @@ import uuid
 from pathlib import Path
 
 from support import SCRIPTS, base_feedback, base_manifest, run_apply, slide, write_json
+
+APPLY_SPEC = importlib.util.spec_from_file_location(
+    "apply_review", SCRIPTS / "apply_review.py"
+)
+apply_review = importlib.util.module_from_spec(APPLY_SPEC)
+assert APPLY_SPEC.loader is not None
+APPLY_SPEC.loader.exec_module(apply_review)
 
 
 class ApplyReviewTest(unittest.TestCase):
@@ -79,6 +87,15 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_bytes(), original_bytes)
 
+    def test_rejects_a_non_string_action_without_a_traceback(self) -> None:
+        result = self.apply(
+            base_manifest(),
+            base_feedback(self.full_batch(), action=["feedback"]),
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Azione del batch non valida", json.loads(result.stderr)["error"])
+        self.assertNotIn("Traceback", result.stderr)
+
     def test_applies_cover_subtitle_and_marks_accessibility_copy_stale(self) -> None:
         result = self.apply(
             base_manifest(),
@@ -140,7 +157,10 @@ class ApplyReviewTest(unittest.TestCase):
     def test_recovers_state_when_the_manifest_commit_already_succeeded(self) -> None:
         manifest = base_manifest()
         manifest["revision"] = 2
-        manifest["review"] = {"last_feedback_id": "feedback-test"}
+        manifest["review"] = {
+            "last_feedback_id": "feedback-test",
+            "last_action": "feedback",
+        }
         result = self.apply(
             manifest,
             base_feedback(self.full_batch(), base_revision=1),
@@ -155,6 +175,10 @@ class ApplyReviewTest(unittest.TestCase):
             )
         )
         self.assertEqual(state["applied_feedback_id"], "feedback-test")
+        self.assertEqual(state["applied_feedback_action"], "feedback")
+        self.assertEqual(len(state["applied_feedback_sha256"]), 64)
+        self.assertEqual(state["applied_manifest_revision"], 2)
+        self.assertEqual(len(state["applied_manifest_sha256"]), 64)
         self.assertEqual(self.manifest()["revision"], 2)
 
     def test_rejects_feedback_not_matching_session(self) -> None:
@@ -166,7 +190,7 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(self.manifest()["revision"], 1)
 
-    def test_is_idempotent_for_an_already_applied_batch(self) -> None:
+    def test_rejects_a_false_already_applied_state_without_a_manifest_receipt(self) -> None:
         result = self.apply(
             base_manifest(),
             base_feedback(self.full_batch()),
@@ -176,9 +200,32 @@ class ApplyReviewTest(unittest.TestCase):
                 "applied_feedback_id": "feedback-test",
             },
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)["status"], "already_applied")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("ricevuta review", json.loads(result.stderr)["error"])
         self.assertEqual(self.manifest()["revision"], 1)
+
+    def test_modern_receipt_is_idempotent_and_detects_later_manifest_tampering(self) -> None:
+        feedback = base_feedback(
+            self.full_batch(**{"item-1": "Prima frase aggiornata."})
+        )
+        first = self.apply(base_manifest(), feedback)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        manifest = self.manifest()
+        state = json.loads(
+            (self.workdir / "session" / "session-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        replay = self.apply(manifest, feedback, state=state)
+        self.assertEqual(replay.returncode, 0, replay.stderr)
+        self.assertEqual(json.loads(replay.stdout)["status"], "already_applied")
+
+        tampered = self.manifest()
+        tampered["items"][0]["summary"] = "Alterazione successiva."
+        rejected = self.apply(tampered, feedback, state=state)
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("cambiato", json.loads(rejected.stderr)["error"])
 
     def test_backfills_a_missing_last_action_and_rejects_a_conflict(self) -> None:
         result = self.apply(base_manifest(), base_feedback(self.full_batch()))
@@ -214,6 +261,48 @@ class ApplyReviewTest(unittest.TestCase):
         result = self.apply(base_manifest(), base_feedback(batch))
         self.assertEqual(result.returncode, 2)
         self.assertIn("chiusura", json.loads(result.stderr)["error"].lower())
+
+    def test_rejects_kind_changes_unknown_ids_duplicates_and_invalid_order(self) -> None:
+        cases: list[tuple[list[dict], str]] = []
+        wrong_kind = self.full_batch()
+        wrong_kind[1]["kind"] = "cover"
+        cases.append((wrong_kind, "Tipo non valido"))
+
+        unknown = self.full_batch()
+        unknown.insert(2, slide("item-unknown", "item", summary="Intrusa"))
+        cases.append((unknown, "sconosciuto"))
+
+        duplicate_cover = self.full_batch()
+        duplicate_cover.insert(1, slide("cover", "cover", title="Duplicata"))
+        cases.append((duplicate_cover, "duplicato"))
+
+        duplicate_outro = self.full_batch()
+        duplicate_outro.append(slide("outro", "outro", title="Duplicata"))
+        cases.append((duplicate_outro, "duplicato"))
+
+        cover_not_first = self.full_batch()
+        cover_not_first[0], cover_not_first[1] = cover_not_first[1], cover_not_first[0]
+        cases.append((cover_not_first, "prima slide"))
+
+        outro_not_last = self.full_batch()
+        outro_not_last[-1], outro_not_last[-2] = outro_not_last[-2], outro_not_last[-1]
+        cases.append((outro_not_last, "ultima slide"))
+
+        for batch, message in cases:
+            with self.subTest(message=message):
+                result = self.apply(base_manifest(), base_feedback(batch))
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(message, json.loads(result.stderr)["error"])
+                self.assertEqual(self.manifest()["revision"], 1)
+
+    def test_rejects_reserved_ids_in_manifest_items(self) -> None:
+        for reserved in ("cover", "outro"):
+            with self.subTest(reserved=reserved):
+                manifest = base_manifest()
+                manifest["items"][0]["id"] = reserved
+                result = self.apply(manifest, base_feedback(self.full_batch()))
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("riservato", json.loads(result.stderr)["error"])
 
     def test_malformed_slide_and_non_finite_json_return_structured_errors(self) -> None:
         feedback = base_feedback(self.full_batch())
@@ -439,9 +528,48 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertEqual(
             manifest["accessibility"]["reading_order"], ["cover", "item-1", "outro"]
         )
-        self.assertEqual(manifest["proof"]["slide_ids"], ["cover", "outro"])
+        self.assertEqual(manifest["proof"]["slide_ids"], ["cover", "item-1", "outro"])
         self.assertEqual(
             json.loads(result.stdout)["proof_slide_ids_pruned"], ["item-2"]
+        )
+
+    def test_proof_uses_the_densest_remaining_item_with_stable_order_ties(self) -> None:
+        manifest = base_manifest()
+        manifest["proof"]["slide_ids"] = ["cover", "item-1", "outro"]
+        batch = self.full_batch(
+            **{
+                "item-1": "breve",
+                "item-2": "Questa è la card più densa della prova.",
+            }
+        )
+        result = self.apply(manifest, base_feedback(batch))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.manifest()["proof"]["slide_ids"],
+            ["cover", "item-2", "outro"],
+        )
+
+        tied_manifest = self.manifest()
+        tied_feedback = base_feedback(
+            [
+                slide("cover", "cover", title="La lezione e operativa"),
+                slide("item-2", "item", summary="12345"),
+                slide("item-1", "item", summary="abcde"),
+                slide(
+                    "outro",
+                    "outro",
+                    title="Chiusura",
+                    summary="Corpo della chiusura.",
+                ),
+            ],
+            feedback_id="feedback-tie",
+            base_revision=tied_manifest["revision"],
+        )
+        tied = self.apply(tied_manifest, tied_feedback)
+        self.assertEqual(tied.returncode, 0, tied.stderr)
+        self.assertEqual(
+            self.manifest()["proof"]["slide_ids"],
+            ["cover", "item-2", "outro"],
         )
 
     def test_realigns_reading_order_after_a_reorder(self) -> None:
@@ -480,13 +608,112 @@ class ApplyReviewTest(unittest.TestCase):
     def test_warns_when_an_approved_proof_is_invalidated(self) -> None:
         manifest = base_manifest()
         manifest["proof"]["approved"] = True
+        manifest["proof"]["style_system_verified"] = True
+        manifest["proof"]["browser"] = {"engine": "chromium", "major": 140}
         result = self.apply(
             manifest, base_feedback(self.full_batch(cover="Nuovo titolo"))
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         written = self.manifest()
         self.assertFalse(written["proof"]["approved"])
+        self.assertFalse(written["proof"]["style_system_verified"])
+        self.assertNotIn("browser", written["proof"])
         self.assertIn("proof.approved", json.loads(result.stdout)["changed"])
+        self.assertIn(
+            "proof.style_system_verified", json.loads(result.stdout)["changed"]
+        )
+
+    def test_profile_text_cannot_persist_visual_proof_metadata(self) -> None:
+        result = self.apply(
+            base_manifest(),
+            base_feedback(
+                self.full_batch(),
+                action="approve",
+                proof_slide_ids=["cover", "item-2", "outro"],
+                style_system_verified=True,
+                proof_browser={"engine": "chromium", "major": 140},
+            ),
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("metadati della prova", json.loads(result.stderr)["error"])
+
+    def test_proof_browser_contract_is_chromium_only(self) -> None:
+        self.assertEqual(
+            apply_review.validated_proof_browser(
+                {"engine": "chromium", "major": 140}
+            ),
+            {"engine": "chromium", "major": 140},
+        )
+        for engine in ("firefox", "webkit"):
+            with self.subTest(engine=engine), self.assertRaisesRegex(
+                ValueError, "proof_browser.engine"
+            ):
+                apply_review.validated_proof_browser(
+                    {"engine": engine, "major": 140}
+                )
+
+    def test_visual_approval_rejects_a_non_chromium_browser_without_writing(self) -> None:
+        manifest = base_manifest()
+        manifest["workflow_state"] = "testi_approvati"
+        manifest_path = self.workdir / "manifest-for-fingerprint.json"
+        write_json(manifest_path, manifest)
+        fingerprint = apply_review.server_manifest_model(manifest_path)[
+            "render_fingerprint"
+        ]
+        feedback = base_feedback(
+            self.full_batch(),
+            action="approve",
+            approval_stage="visual_proof",
+            base_workflow_state="testi_approvati",
+            base_render_fingerprint=fingerprint,
+            render_fingerprint=fingerprint,
+            proof_slide_ids=["cover", "item-2", "outro"],
+            style_system_verified=True,
+            proof_browser={"engine": "firefox", "major": 140},
+        )
+
+        result = self.apply(manifest, feedback)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("proof_browser.engine", json.loads(result.stderr)["error"])
+        written = self.manifest()
+        self.assertEqual(written["revision"], 1)
+        self.assertFalse(written["proof"]["approved"])
+        state = json.loads(
+            (self.workdir / "session" / "session-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertNotIn("applied_feedback_id", state)
+
+    def test_visual_approval_rejects_an_incompatible_local_producer_without_writing(self) -> None:
+        manifest = base_manifest()
+        manifest["workflow_state"] = "testi_approvati"
+        manifest["production"]["producer"] = "unrelated-renderer"
+        manifest_path = self.workdir / "manifest-for-fingerprint.json"
+        write_json(manifest_path, manifest)
+        fingerprint = apply_review.server_manifest_model(manifest_path)[
+            "render_fingerprint"
+        ]
+        feedback = base_feedback(
+            self.full_batch(),
+            action="approve",
+            approval_stage="visual_proof",
+            base_workflow_state="testi_approvati",
+            base_render_fingerprint=fingerprint,
+            render_fingerprint=fingerprint,
+            proof_slide_ids=["cover", "item-2", "outro"],
+            style_system_verified=True,
+            proof_browser={"engine": "chromium", "major": 140},
+        )
+
+        result = self.apply(manifest, feedback)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("contratto renderer locale", json.loads(result.stderr)["error"])
+        written = self.manifest()
+        self.assertEqual(written["revision"], 1)
+        self.assertFalse(written["proof"]["approved"])
 
     def test_never_changes_the_workflow_state(self) -> None:
         batch = self.full_batch(cover="Nuovo titolo")

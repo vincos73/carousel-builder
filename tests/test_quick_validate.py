@@ -29,6 +29,20 @@ class QuickValidateTests(unittest.TestCase):
         self.assertTrue(any("kebab-case" in error for error in errors))
         self.assertTrue(any("1024" in error for error in errors))
 
+    def test_rejects_a_missing_packaged_reference(self):
+        root = self.write_skill(
+            "---\nname: valid-skill\ndescription: Valida.\n---\n"
+            "Leggi [il contratto](references/missing.md).\n"
+        )
+        self.assertTrue(any("link locale mancante" in error for error in validate_skill(root)))
+
+    def test_rejects_a_link_that_escapes_the_skill(self):
+        root = self.write_skill(
+            "---\nname: valid-skill\ndescription: Valida.\n---\n"
+            "Leggi [un file esterno](../outside.md).\n"
+        )
+        self.assertTrue(any("fuori dalla skill" in error for error in validate_skill(root)))
+
 
 if __name__ == "__main__":
     unittest.main()
