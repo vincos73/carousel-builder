@@ -67,14 +67,16 @@ class QuickValidateTests(unittest.TestCase):
 
     def test_current_manifest_schema_is_bound_across_runtime_and_docs(self):
         root = Path(__file__).resolve().parents[1]
-        server = (root / "scripts" / "review_server.py").read_text(encoding="utf-8")
+        contract = (root / "scripts" / "manifest_contract.py").read_text(
+            encoding="utf-8"
+        )
         exporter = (root / "scripts" / "export_review_pdf.cjs").read_text(
             encoding="utf-8"
         )
         schema = (root / "references" / "carousel-schema.md").read_text(
             encoding="utf-8"
         )
-        self.assertRegex(server, r"(?m)^CURRENT_SCHEMA_VERSION = \(1, 4\)$")
+        self.assertRegex(contract, r"(?m)^CURRENT_SCHEMA_VERSION = \(1, 4\)$")
         self.assertRegex(
             exporter,
             r'(?m)^const CURRENT_SCHEMA_VERSION = "1\.4";$',

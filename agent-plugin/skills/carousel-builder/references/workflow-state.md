@@ -10,6 +10,17 @@ bozza -> testi_approvati -> prova_visuale_approvata -> rendering -> qa -> conseg
 
 Non saltare stati e non modificare direttamente `workflow_state` o `workflow_receipts`. Ogni invocazione usa stato e revisione attesi come controllo compare-and-swap, richiede la stessa cartella di sessione dell'editor, acquisisce nell'ordine il lock del manifest e quello della transazione, rifiuta feedback durevoli ancora pendenti, rivalida l'evidenza e scrive manifest e ricevuta atomicamente. Se il comando fallisce, correggere il gate segnalato e ripetere con i valori ancora correnti.
 
+## Diagnosi read-only
+
+Prima di una transizione, dopo un batch o dopo un'interruzione, ottenere una fotografia coerente senza leggere a mano manifest e file di sessione:
+
+```bash
+<python> <skill>/scripts/carousel_status.py "<manifest.json>" \
+  --session-dir "<session-dir>"
+```
+
+Il JSON espone schema, revisione, stato, checkpoint, proof corrente, fingerprint, feedback pendente, output attesi e `next_action`. Se `next_action.command` è presente può essere eseguito dopo aver verificato gli eventuali file evidenza richiesti; l'esito dello status non sostituisce i gate fail-closed di apply, advance o export. Senza `--session-dir` la validazione è soltanto statica e `feedback_pending` resta `null`.
+
 ## Transizioni
 
 Usare percorsi assoluti e sostituire `N` con la `revision` corrente:

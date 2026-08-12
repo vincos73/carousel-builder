@@ -94,6 +94,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
             json.loads(
                 (ROOT / "agent-plugin/plugin.json").read_text(encoding="utf-8")
             )["version"],
+            json.loads((ROOT / "package.json").read_text(encoding="utf-8"))[
+                "version"
+            ],
         }
         self.assertEqual(len(versions), 1, versions)
 
@@ -116,6 +119,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn('test "$skill_version" = "$plugin_skill_version"', RELEASE)
         self.assertIn('test "$skill_version" = "$plugin_version"', RELEASE)
+        self.assertIn('test "$skill_version" = "$ci_package_version"', RELEASE)
         self.assertIn('test "$skill_version" = "$editor_version"', RELEASE)
         self.assertIn('test "$skill_version" = "$plugin_editor_version"', RELEASE)
         self.assertIn('test "${tag#v}" = "$skill_version"', RELEASE)
@@ -215,6 +219,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "node --check scripts/export_review_pdf.cjs",
             "node --test tests/test_export_review_pdf.cjs",
             "node --test tests/test_browser_smoke.cjs",
+            "npm ci --ignore-scripts",
+            "npm audit --audit-level=high",
+            "node --test tests/test_export_review_pdf_e2e.cjs",
             "Verifica il mirror Agent Plugin",
             "unzip -t dist/carousel-builder.zip",
             "unzip -t dist/carousel-builder-agent-plugin.zip",
@@ -307,6 +314,31 @@ class TestsWorkflowTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, browser_job)
 
+    def test_real_export_e2e_uses_pinned_dependencies_and_hosted_chrome(self):
+        export_job = self.jobs["export-e2e"]
+        steps = workflow_steps(export_job)
+        self.assertIn("runs-on: ubuntu-24.04", export_job)
+        self.assertIn("timeout-minutes: 5", export_job)
+        self.assertIn("CHROME_PATH: /usr/bin/google-chrome", export_job)
+        self.assertIn('node-version: "22.23.1"', export_job)
+        self.assertIn("cache: npm", export_job)
+        self.assertIn("Install pinned exporter dependencies", steps)
+        self.assertIn(
+            "npm ci --ignore-scripts",
+            steps["Install pinned exporter dependencies"],
+        )
+        self.assertIn("Verify hosted export runtimes", steps)
+        self.assertIn(
+            "npm audit --audit-level=high",
+            steps["Verify hosted export runtimes"],
+        )
+        self.assertIn("Run mandatory real export E2E", steps)
+        self.assertIn(
+            "node --test tests/test_export_review_pdf_e2e.cjs",
+            steps["Run mandatory real export E2E"],
+        )
+        self.assertNotIn("continue-on-error", export_job)
+
     def test_every_ci_job_has_a_timeout_and_checkout(self):
         for name, job in self.jobs.items():
             with self.subTest(job=name):
@@ -323,10 +355,12 @@ class TestsWorkflowTests(unittest.TestCase):
         package_sync = self.jobs["package-sync"]
         self.assertIn("plugin_skill_version", package_sync)
         self.assertIn("plugin_version", package_sync)
+        self.assertIn("ci_package_version", package_sync)
         self.assertIn("editor_version", package_sync)
         self.assertIn("plugin_editor_version", package_sync)
         self.assertIn('test "$skill_version" = "$plugin_skill_version"', package_sync)
         self.assertIn('test "$skill_version" = "$plugin_version"', package_sync)
+        self.assertIn('test "$skill_version" = "$ci_package_version"', package_sync)
         self.assertIn('test "$skill_version" = "$editor_version"', package_sync)
         self.assertIn('test "$skill_version" = "$plugin_editor_version"', package_sync)
 
