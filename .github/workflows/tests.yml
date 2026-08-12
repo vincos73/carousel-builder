@@ -50,8 +50,27 @@ jobs:
           python-version: "3.13"
       - name: Compile scripts
         run: python -m compileall -q scripts tests
-      - name: Run tests
-        run: python -B -m unittest discover -s tests -t tests -v
+      # macos-26-arm64 hosted runners can spend about 35 seconds on every
+      # fresh durable server session. The full 44-case HTTP suite already runs
+      # on Linux (four Python versions) and Windows; keep one real macOS
+      # submit smoke while still running every platform-independent test here.
+      - name: Run platform tests
+        env:
+          PYTHONPATH: tests
+        run: |
+          python -B -m unittest -v \
+            test_apply_review \
+            test_quick_validate \
+            test_review_core \
+            test_review_editor_assets \
+            test_review_server \
+            test_workflows
+      - name: Run durable HTTP smoke
+        env:
+          PYTHONPATH: tests
+        run: >-
+          python -B -m unittest -v
+          test_review_server_http.ReviewServerHTTPTest.test_accepts_a_batch_and_writes_the_session_files
 
   node-export:
     runs-on: ubuntu-latest

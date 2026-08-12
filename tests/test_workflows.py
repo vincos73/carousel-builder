@@ -190,6 +190,26 @@ class TestsWorkflowTests(unittest.TestCase):
         self.assertIn("macos-unittest:", TESTS)
         self.assertIn("runs-on: macos-latest", TESTS)
 
+    def test_macos_runs_all_unit_modules_and_one_real_http_smoke(self):
+        macos_job = TESTS.split("  macos-unittest:", 1)[1].split(
+            "  node-export:", 1
+        )[0]
+        for module in (
+            "test_apply_review",
+            "test_quick_validate",
+            "test_review_core",
+            "test_review_editor_assets",
+            "test_review_server",
+            "test_workflows",
+        ):
+            self.assertIn(module, macos_job)
+        self.assertIn(
+            "test_review_server_http.ReviewServerHTTPTest."
+            "test_accepts_a_batch_and_writes_the_session_files",
+            macos_job,
+        )
+        self.assertNotIn("unittest discover", macos_job)
+
     def test_ci_validates_both_skill_copies(self):
         self.assertIn("tests/quick_validate.py .", TESTS)
         self.assertIn("tests/quick_validate.py agent-plugin/skills/carousel-builder", TESTS)
