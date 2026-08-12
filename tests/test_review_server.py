@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import importlib.util
 import io
 import json
@@ -14,7 +15,14 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-from support import base_manifest, legacy_manifest, slide, sync_derived_contract, write_json
+from support import (
+    base_manifest,
+    legacy_manifest,
+    set_workflow_state,
+    slide,
+    sync_derived_contract,
+    write_json,
+)
 
 SPEC = importlib.util.spec_from_file_location(
     "review_server", Path(__file__).resolve().parent.parent / "scripts" / "review_server.py"
@@ -32,7 +40,7 @@ class ManifestModelTest(unittest.TestCase):
 
     def model(self, manifest: dict | None = None) -> dict:
         value = manifest if manifest is not None else base_manifest()
-        if value.get("schema_version") == "1.3":
+        if value.get("schema_version") == "1.4":
             sync_derived_contract(value)
         path = self.workdir / "manifest.json"
         path.write_text(
@@ -52,7 +60,7 @@ class ManifestModelTest(unittest.TestCase):
         self.assertFalse(model["slides"][-1]["deletable"])
 
     def test_accepts_supported_legacy_versions_and_rejects_future_schema(self) -> None:
-        for version in (None, "1.0", "1.1", "1.2"):
+        for version in (None, "1.0", "1.1", "1.2", "1.3"):
             with self.subTest(version=version):
                 model = self.model(legacy_manifest(version))
                 self.assertTrue(model["legacy_manifest"])
@@ -62,8 +70,47 @@ class ManifestModelTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non supportata"):
             self.model(manifest)
 
+    def test_current_schema_rejects_legacy_workflow_states_only(self) -> None:
+        for workflow_state in ("approved", "published", "draft"):
+            current = base_manifest()
+            current["workflow_state"] = workflow_state
+            with self.subTest(schema="1.4", workflow_state=workflow_state):
+                with self.assertRaisesRegex(ValueError, "workflow_state"):
+                    self.model(current)
+
+            for version in (None, "1.0", "1.1", "1.2", "1.3"):
+                legacy = legacy_manifest(version)
+                legacy["workflow_state"] = workflow_state
+                with self.subTest(schema=version, workflow_state=workflow_state):
+                    self.assertEqual(
+                        self.model(legacy)["workflow_state"], workflow_state
+                    )
+
+    def test_current_schema_requires_a_complete_ledger_from_draft(self) -> None:
+        for workflow_state in (
+            "testi_approvati",
+            "prova_visuale_approvata",
+            "rendering",
+            "qa",
+            "consegnato",
+        ):
+            missing = base_manifest()
+            missing["workflow_state"] = workflow_state
+            with self.subTest(state=workflow_state, case="missing"), self.assertRaisesRegex(
+                ValueError, "intera catena"
+            ):
+                review_server.validate_manifest_contract(missing)
+
+            truncated = base_manifest()
+            set_workflow_state(truncated, workflow_state)
+            truncated["workflow_receipts"] = truncated["workflow_receipts"][1:]
+            with self.subTest(state=workflow_state, case="truncated"), self.assertRaisesRegex(
+                ValueError, "intera catena"
+            ):
+                review_server.validate_manifest_contract(truncated)
+
     def test_legacy_missing_item_id_gets_stable_fallback_but_current_rejects(self) -> None:
-        for version in (None, "1.0", "1.1", "1.2"):
+        for version in (None, "1.0", "1.1", "1.2", "1.3"):
             manifest = legacy_manifest(version)
             manifest["items"][0].pop("id")
             manifest["proof"]["slide_ids"] = ["cover", "item-1", "outro"]
@@ -145,6 +192,49 @@ class ManifestModelTest(unittest.TestCase):
             mutate(manifest)
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
                 review_server.validate_manifest_contract(manifest)
+
+        manifest = base_manifest()
+        manifest["workflow_receipts"] = [{"from": "bozza", "to": "qa"}]
+        with self.assertRaisesRegex(ValueError, "workflow_receipts"):
+            review_server.validate_manifest_contract(manifest)
+
+    def test_normalizes_and_exposes_expected_outputs(self) -> None:
+        manifest = base_manifest()
+        manifest["production"]["expected_outputs"] = [
+            "pdf",
+            "png",
+            "contact-sheet",
+        ]
+        contract = review_server.validate_manifest_contract(manifest)
+        self.assertEqual(
+            contract["production"]["expected_outputs"],
+            ["pdf", "png", "contact_sheet"],
+        )
+        self.assertEqual(
+            self.model(manifest)["production"]["expected_outputs"],
+            ["pdf", "png", "contact_sheet"],
+        )
+
+    def test_current_renderer_requires_supported_unique_expected_outputs(self) -> None:
+        cases = (
+            ([], "includere almeno pdf"),
+            (["png"], "includere almeno pdf"),
+            (["pdf", "svg"], "non è un output supportato"),
+            (["pdf", "contact-sheet", "contact_sheet"], "duplicati"),
+        )
+        for outputs, message in cases:
+            manifest = base_manifest()
+            manifest["production"]["expected_outputs"] = outputs
+            with self.subTest(outputs=outputs), self.assertRaisesRegex(
+                ValueError, message
+            ):
+                review_server.validate_manifest_contract(manifest)
+
+    def test_expected_outputs_are_bound_to_the_render_fingerprint(self) -> None:
+        manifest = base_manifest()
+        baseline = self.model(copy.deepcopy(manifest))["render_fingerprint"]
+        manifest["production"]["expected_outputs"].append("contact_sheet")
+        self.assertNotEqual(self.model(manifest)["render_fingerprint"], baseline)
 
     def test_current_schema_requires_explicit_480px_proof_width(self) -> None:
         for value in (None, 479, "480"):
@@ -239,12 +329,15 @@ class ManifestModelTest(unittest.TestCase):
             "in_review",
             "feedback",
         ):
-            manifest["workflow_state"] = workflow_state
-            legacy_profile = self.model(manifest)
+            legacy_manifest_value = copy.deepcopy(manifest)
+            legacy_manifest_value["schema_version"] = "1.2"
+            legacy_manifest_value["workflow_state"] = workflow_state
+            legacy_manifest_value.pop("workflow_receipts", None)
+            legacy_profile = self.model(legacy_manifest_value)
             self.assertEqual(legacy_profile["approval_checkpoint"], "profile_text")
             self.assertEqual(legacy_profile["render_fingerprint"], profile["render_fingerprint"])
 
-        manifest["workflow_state"] = "testi_approvati"
+        set_workflow_state(manifest, "testi_approvati")
         visual = self.model(manifest)
         self.assertEqual(visual["approval_checkpoint"], "visual_proof")
         self.assertNotEqual(visual["render_fingerprint"], profile["render_fingerprint"])
@@ -262,13 +355,23 @@ class ManifestModelTest(unittest.TestCase):
             "rendering",
             "qa",
             "consegnato",
+        ):
+            set_workflow_state(manifest, workflow_state)
+            later = self.model(manifest)
+            self.assertEqual(later["approval_checkpoint"], "visual_proof")
+            self.assertEqual(later["render_fingerprint"], visual["render_fingerprint"])
+
+        for workflow_state in (
             "approvato",
             "approved",
             "pubblicato",
             "published",
         ):
-            manifest["workflow_state"] = workflow_state
-            later = self.model(manifest)
+            legacy_manifest_value = copy.deepcopy(manifest)
+            legacy_manifest_value["schema_version"] = "1.2"
+            legacy_manifest_value["workflow_state"] = workflow_state
+            legacy_manifest_value.pop("workflow_receipts", None)
+            later = self.model(legacy_manifest_value)
             self.assertEqual(later["approval_checkpoint"], "visual_proof")
             self.assertEqual(later["render_fingerprint"], visual["render_fingerprint"])
             self.assertTrue(later["proof_approved"])
@@ -554,7 +657,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.8.11")
+        self.assertEqual(model["editor_version"], "2.8.12")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
@@ -921,6 +1024,55 @@ class ValidateFeedbackTest(unittest.TestCase):
         feedback = review_server.validate_feedback(self.payload(slides), self.model)
         self.assertTrue(any("massimo 320" in warning for warning in feedback["warnings"]))
 
+    def test_visual_approval_rejects_editorial_changes_but_accepts_visual_selection(self) -> None:
+        manifest = base_manifest()
+        set_workflow_state(manifest, "testi_approvati")
+        manifest.pop("cover_title_serif", None)
+        manifest["items"][0].pop("summary_serif", None)
+        path = self.workdir / "visual-current.json"
+        write_json(path, manifest)
+        model = review_server.manifest_model(path, include_internal=True)
+        baseline = [
+            {
+                "id": value["id"],
+                "kind": value["kind"],
+                "title": value.get("title", ""),
+                "summary": value.get("summary", ""),
+                **{
+                    f"{field}_{role}": value.get(f"{field}_{role}", [])
+                    for field in ("title", "summary")
+                    for role in review_server.EMPHASIS_ROLES
+                },
+            }
+            for value in model["slides"]
+        ]
+        common = {
+            "action": "approve",
+            "base_workflow_state": "testi_approvati",
+            "render_fingerprint": model["render_fingerprint"],
+            "proof_slide_ids": model["proof"]["required_slide_ids"],
+            "style_system_verified": True,
+            "proof_browser": {"engine": "chromium", "major": 140},
+        }
+        changed_copy = copy.deepcopy(baseline)
+        changed_copy[1]["summary"] = "Prima frase corretta."
+        with self.assertRaisesRegex(ValueError, "modifiche editoriali"):
+            review_server.validate_feedback(
+                self.payload(changed_copy, **common), model
+            )
+
+        selected = review_server.validate_feedback(
+            self.payload(
+                baseline,
+                visual_style_system="corporate-modular",
+                logo_mode="hidden",
+                **common,
+            ),
+            model,
+        )
+        self.assertEqual(selected["visual_style_system"], "corporate-modular")
+        self.assertEqual(selected["logo_mode"], "hidden")
+
     def test_transports_all_emphasis_roles_and_preserves_legacy_serif(self) -> None:
         slides = self.payload()["slides"]
         slides[1]["summary"] = "Prima frase utile."
@@ -989,7 +1141,9 @@ class ValidateFeedbackTest(unittest.TestCase):
         slides[0]["title_serif"] = []
         slides[1]["summary_serif"] = []
         manifest = base_manifest()
-        manifest["workflow_state"] = "testi_approvati"
+        set_workflow_state(manifest, "testi_approvati")
+        manifest.pop("cover_title_serif", None)
+        manifest["items"][0].pop("summary_serif", None)
         manifest_path = self.workdir / "visual-manifest.json"
         write_json(manifest_path, manifest)
         visual_model = review_server.manifest_model(
@@ -1014,7 +1168,7 @@ class ValidateFeedbackTest(unittest.TestCase):
             "qa",
             "consegnato",
         ):
-            manifest["workflow_state"] = workflow_state
+            set_workflow_state(manifest, workflow_state)
             write_json(manifest_path, manifest)
             reapproval_model = review_server.manifest_model(
                 manifest_path, include_internal=True
@@ -1068,7 +1222,9 @@ class ValidateFeedbackTest(unittest.TestCase):
 
     def test_visual_approval_requires_proof_attestation_and_supported_producer(self) -> None:
         manifest = base_manifest()
-        manifest["workflow_state"] = "testi_approvati"
+        set_workflow_state(manifest, "testi_approvati")
+        manifest.pop("cover_title_serif", None)
+        manifest["items"][0].pop("summary_serif", None)
         path = self.workdir / "proof-contract.json"
         write_json(path, manifest)
         model = review_server.manifest_model(path, include_internal=True)
@@ -1104,7 +1260,9 @@ class ValidateFeedbackTest(unittest.TestCase):
             review_server.validate_feedback(invalid_browser, model)
 
         incompatible_manifest = base_manifest()
-        incompatible_manifest["workflow_state"] = "testi_approvati"
+        set_workflow_state(incompatible_manifest, "testi_approvati")
+        incompatible_manifest.pop("cover_title_serif", None)
+        incompatible_manifest["items"][0].pop("summary_serif", None)
         incompatible_manifest["production"]["producer"] = "unrelated-renderer"
         incompatible_path = self.workdir / "incompatible-renderer.json"
         write_json(incompatible_path, incompatible_manifest)
@@ -1362,6 +1520,127 @@ class StartupLockingTest(unittest.TestCase):
                 stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
                 stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
                 self.assertEqual(review_server.main(), 0)
+
+    @unittest.skipIf(os.name == "nt", "symlink non sempre disponibile su Windows")
+    def test_rejects_a_symlinked_session_directory_without_touching_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workdir = Path(temporary)
+            manifest_path = workdir / "manifest.json"
+            write_json(manifest_path, base_manifest())
+            target = workdir / "session-target"
+            target.mkdir()
+            sentinel = target / "sentinel.txt"
+            sentinel.write_text("immutato", encoding="utf-8")
+            target.chmod(0o755)
+            before_mode = stat.S_IMODE(target.stat().st_mode)
+            before_entries = sorted(path.name for path in target.iterdir())
+            session_link = workdir / "session"
+            session_link.symlink_to(target, target_is_directory=True)
+            stderr = io.StringIO()
+
+            argv = [
+                "review_server.py",
+                str(manifest_path),
+                "--session-dir",
+                str(session_link),
+                "--port",
+                "0",
+            ]
+            with mock.patch("sys.argv", argv), contextlib.redirect_stderr(stderr):
+                self.assertEqual(review_server.main(), 2)
+
+            self.assertIn("collegamento simbolico", json.loads(stderr.getvalue())["error"])
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "immutato")
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), before_mode)
+            self.assertEqual(sorted(path.name for path in target.iterdir()), before_entries)
+
+    @unittest.skipIf(os.name == "nt", "symlink non sempre disponibile su Windows")
+    def test_rejects_symlinked_parent_components_before_creating_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workdir = Path(temporary)
+            manifest_path = workdir / "manifest.json"
+            write_json(manifest_path, base_manifest())
+            target_parent = workdir / "target-parent"
+            target_parent.mkdir()
+            sentinel = target_parent / "sentinel.txt"
+            sentinel.write_text("immutato", encoding="utf-8")
+            target_parent.chmod(0o755)
+            before_mode = stat.S_IMODE(target_parent.stat().st_mode)
+            alias = workdir / "alias"
+            alias.symlink_to(target_parent, target_is_directory=True)
+            stderr = io.StringIO()
+
+            argv = [
+                "review_server.py",
+                str(manifest_path),
+                "--session-dir",
+                str(alias / "session"),
+                "--port",
+                "0",
+            ]
+            with mock.patch("sys.argv", argv), contextlib.redirect_stderr(stderr):
+                self.assertEqual(review_server.main(), 2)
+
+            self.assertIn("collegamento simbolico", json.loads(stderr.getvalue())["error"])
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "immutato")
+            self.assertEqual(stat.S_IMODE(target_parent.stat().st_mode), before_mode)
+            self.assertFalse((target_parent / "session").exists())
+
+            manifest_target_dir = workdir / "manifest-target-parent"
+            manifest_target = manifest_target_dir / "manifest.json"
+            write_json(manifest_target, base_manifest())
+            manifest_before = manifest_target.read_bytes()
+            manifest_alias = workdir / "manifest-alias"
+            manifest_alias.symlink_to(manifest_target_dir, target_is_directory=True)
+            clean_session = workdir / "clean-session"
+            stderr = io.StringIO()
+            argv[1] = str(manifest_alias / "manifest.json")
+            argv[3] = str(clean_session)
+
+            with mock.patch("sys.argv", argv), contextlib.redirect_stderr(stderr):
+                self.assertEqual(review_server.main(), 2)
+
+            self.assertIn("collegamento simbolico", json.loads(stderr.getvalue())["error"])
+            self.assertEqual(manifest_target.read_bytes(), manifest_before)
+            self.assertFalse(clean_session.exists())
+
+    @unittest.skipIf(os.name == "nt", "hard link non sempre disponibile su Windows")
+    def test_rejects_a_hardlinked_session_state_without_touching_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workdir = Path(temporary)
+            manifest_path = workdir / "manifest.json"
+            session_dir = workdir / "session"
+            write_json(manifest_path, base_manifest())
+            victim = workdir / "state-victim.json"
+            write_json(
+                victim,
+                {
+                    "manifest": str(manifest_path.resolve()),
+                    "manifest_revision": 1,
+                },
+            )
+            victim.chmod(0o644)
+            state_path = session_dir / "session-state.json"
+            state_path.parent.mkdir(parents=True)
+            os.link(victim, state_path)
+            before = victim.read_bytes()
+            before_mode = stat.S_IMODE(victim.stat().st_mode)
+            stderr = io.StringIO()
+
+            argv = [
+                "review_server.py",
+                str(manifest_path),
+                "--session-dir",
+                str(session_dir),
+                "--port",
+                "0",
+            ]
+            with mock.patch("sys.argv", argv), contextlib.redirect_stderr(stderr):
+                self.assertEqual(review_server.main(), 2)
+
+            self.assertIn("hard link", json.loads(stderr.getvalue())["error"])
+            self.assertEqual(victim.read_bytes(), before)
+            self.assertEqual(stat.S_IMODE(victim.stat().st_mode), before_mode)
 
 
 class LockFileSecurityTest(unittest.TestCase):

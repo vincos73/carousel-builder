@@ -43,6 +43,44 @@ class QuickValidateTests(unittest.TestCase):
         )
         self.assertTrue(any("fuori dalla skill" in error for error in validate_skill(root)))
 
+    def test_project_skill_keeps_heavy_guidance_progressive(self):
+        root = Path(__file__).resolve().parents[1]
+        skill = (root / "SKILL.md").read_text(encoding="utf-8")
+        visual_review = (root / "references" / "visual-review.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertLessEqual(len(skill.split()), 1_800)
+        self.assertLessEqual(len(visual_review.split()), 1_400)
+        self.assertIn("Caricare solo ciò che serve alla fase corrente", skill)
+        self.assertIn(
+            "soltanto dopo un'interruzione o conflitto",
+            skill,
+        )
+        self.assertIn("editor-capabilities.md", visual_review)
+        self.assertIn("review-recovery.md", visual_review)
+        workflow = (root / "references" / "workflow-state.md").read_text(
+            encoding="utf-8"
+        )
+        delivery = workflow.split("--expected-state qa", 1)[1].split("```", 1)[0]
+        self.assertIn("--render-result", delivery)
+        self.assertIn("--qa-report", delivery)
+
+    def test_current_manifest_schema_is_bound_across_runtime_and_docs(self):
+        root = Path(__file__).resolve().parents[1]
+        server = (root / "scripts" / "review_server.py").read_text(encoding="utf-8")
+        exporter = (root / "scripts" / "export_review_pdf.cjs").read_text(
+            encoding="utf-8"
+        )
+        schema = (root / "references" / "carousel-schema.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertRegex(server, r"(?m)^CURRENT_SCHEMA_VERSION = \(1, 4\)$")
+        self.assertRegex(
+            exporter,
+            r'(?m)^const CURRENT_SCHEMA_VERSION = "1\.4";$',
+        )
+        self.assertRegex(schema, r'"schema_version": "1\.4"')
+
 
 if __name__ == "__main__":
     unittest.main()

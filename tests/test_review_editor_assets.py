@@ -105,10 +105,13 @@ assert.equal(JSON.parse(storage.get(keyB)).slides[0].id, "b");
     def test_static_font_roles_expose_non_overlapping_weight_ranges(self) -> None:
         script = r'''
 const assert = require("node:assert/strict");
-const { fontAssetDescriptors } = require(process.argv[1]);
+const { fontAssetDescriptors, fontAssetRequiresVerifiedLoad } = require(process.argv[1]);
 assert.deepEqual(fontAssetDescriptors("body"), { style: "normal", weight: "100 699" });
 assert.deepEqual(fontAssetDescriptors("display"), { style: "normal", weight: "700 900" });
 assert.deepEqual(fontAssetDescriptors("italic", "italic"), { style: "italic", weight: "100 900" });
+assert.equal(fontAssetRequiresVerifiedLoad(), false);
+assert.equal(fontAssetRequiresVerifiedLoad({ available: false, family: "Fallback" }), false);
+assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
 '''
         result = subprocess.run(
             ["node", "-e", script, str(EDITOR)],
@@ -119,6 +122,7 @@ assert.deepEqual(fontAssetDescriptors("italic", "italic"), { style: "italic", we
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("new FontFace(", self.source)
         self.assertIn("fontAssetDescriptors(kind, style)", self.source)
+        self.assertIn("fontLoadCache.get(key) === pending", self.source)
 
     def test_foreign_pending_locks_without_claiming_or_discarding_local_draft(self) -> None:
         poll = self.source.split("async function pollStatus()", 1)[1].split("function clearPendingSelection", 1)[0]
@@ -142,7 +146,7 @@ assert.deepEqual(fontAssetDescriptors("italic", "italic"), { style: "italic", we
 
     def test_visual_approval_binds_viewed_proof_sample_and_browser(self) -> None:
         submit = self.source.split("async function submit(action)", 1)[1].split("function schedulePoll", 1)[0]
-        gate = self.source.split("function collectApprovalIssues()", 1)[1].split("function validationTarget", 1)[0]
+        gate = self.source.split("function collectApprovalIssues(", 1)[1].split("function validationTarget", 1)[0]
         snapshot = self.source.split("function canonicalContentSnapshot()", 1)[1].split("function getRenderContract", 1)[0]
         self.assertIn("requiredProofSlideIds()", gate)
         self.assertIn("viewedSlideIds.has(slideId)", gate)
@@ -161,6 +165,73 @@ assert.deepEqual(fontAssetDescriptors("italic", "italic"), { style: "italic", we
         self.assertIn('engine, major', self.source)
         self.assertNotIn('["firefox",', self.source)
         self.assertNotIn('["webkit",', self.source)
+
+    def test_slide_is_seen_only_after_half_of_the_preview_is_observed(self) -> None:
+        jump = self.source.split("function jumpToSlide(slideId)", 1)[1].split(
+            "function renderSequenceNav", 1
+        )[0]
+        observer = self.source.split("function setupObserver()", 1)[1].split(
+            "function measurePreviews", 1
+        )[0]
+        self.assertNotIn("markSlideSeen", jump)
+        self.assertIn('row.scrollIntoView({ behavior: "smooth", block: "start" })', jump)
+        self.assertIn("entry.intersectionRatio < 0.5", observer)
+        self.assertIn('entry.target.closest(".slide-row")?.dataset.slideId', observer)
+        self.assertIn('.querySelectorAll(".slide-row > .slide-preview")', observer)
+        self.assertIn("observer.observe(preview)", observer)
+        self.assertIn("{ threshold: [0.5] }", observer)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js non disponibile")
+    def test_approval_is_fail_closed_until_the_current_preview_is_ready(self) -> None:
+        script = r'''
+const assert = require("node:assert/strict");
+const { previewReadyForApproval } = require(process.argv[1]);
+assert.equal(previewReadyForApproval({}), false);
+assert.equal(previewReadyForApproval({ previewReady: "true" }), true);
+assert.equal(previewReadyForApproval({ previewReady: "true", productionError: "errore" }), false);
+assert.equal(previewReadyForApproval({ previewReady: "false" }), false);
+'''
+        result = subprocess.run(
+            ["node", "-e", script, str(EDITOR)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        gate = self.source.split("function collectApprovalIssues(", 1)[1].split(
+            "function validationTarget", 1
+        )[0]
+        publisher = self.source.split("async function publishPreviewContract", 1)[1].split(
+            "function renderComments", 1
+        )[0]
+        typography = self.source.split("async function configurePreviewTypography(run)", 1)[1].split(
+            "function typography", 1
+        )[0]
+        renderer = self.source.split("function renderSlides(", 1)[1].split(
+            "function roundedMetric", 1
+        )[0]
+        self.assertIn('key: "preview-not-ready"', gate)
+        self.assertIn("previewReadyForApproval(document.documentElement.dataset)", gate)
+        self.assertIn("includeProofInteraction: false", publisher)
+        self.assertIn("requirePreviewReady: false", publisher)
+        self.assertIn("if (!(await configurePreviewTypography(run))) return;", publisher)
+        self.assertIn("if (!fontAssetRequiresVerifiedLoad(asset))", typography)
+        self.assertIn('failure.code = "FONT_ASSET_LOAD_FAILED"', typography)
+        self.assertNotIn("fallback dichiarato (caricamento non riuscito)", typography)
+        self.assertLess(
+            typography.index("if (run !== previewContractRun) return false;"),
+            typography.index('document.documentElement.style.setProperty("--preview-display"'),
+        )
+        self.assertLess(
+            typography.index("if (run !== previewContractRun) return false;"),
+            typography.index("renderSlides({ publishContract: false })"),
+        )
+        self.assertIn("invalidatePreviewContract({ cancelPending: publishContract })", renderer)
+        self.assertIn("if (publishContract) publishPreviewContract()", renderer)
+        self.assertIn(
+            "!previewReadyForApproval(document.documentElement.dataset)",
+            self.source.split("function updateChangeSummary()", 1)[1].split("function lockEditing", 1)[0],
+        )
 
     def test_viewed_proof_state_is_bound_to_checkpoint_fingerprint_and_style(self) -> None:
         key = self.source.split("function viewedStorageKey()", 1)[1].split("function visualSystemStorageKey", 1)[0]
@@ -205,7 +276,7 @@ assert.deepEqual(fontAssetDescriptors("italic", "italic"), { style: "italic", we
         self.assertIn('id="validation-list"', self.html)
 
     def test_palette_gate_uses_backend_provenance_before_contrast(self) -> None:
-        gate = self.source.split("function collectPaletteContrastIssues()", 1)[1].split("function collectApprovalIssues()", 1)[0]
+        gate = self.source.split("function collectPaletteContrastIssues()", 1)[1].split("function collectApprovalIssues(", 1)[0]
         self.assertIn("collectPaletteDeclarationIssues(brand)", gate)
         self.assertIn("const palette = brand.palette || {}", gate)
 
@@ -359,7 +430,8 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         stylesheet = (EDITOR_DIR / "styles.css").read_text(encoding="utf-8")
         exporter = EXPORTER.read_text(encoding="utf-8")
         self.assertIn("productionRender", self.source)
-        self.assertIn("approved-preview-dom-v2", self.source)
+        self.assertIn("model?.render_contract", self.source)
+        self.assertIn('if (!renderContractId()) throw new Error("Contratto renderer non disponibile.")', self.source)
         self.assertIn("getSlideFrames", self.source)
         self.assertIn("getSlideGeometry", self.source)
         self.assertIn('preview.dataset.productionSource = "approved-preview"', self.source)

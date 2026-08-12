@@ -1,10 +1,17 @@
 # Schema del manifest
 
+## Indice
+
+- [Esempio completo](#esempio-completo)
+- [Campi principali](#campi-principali)
+
+## Esempio completo
+
 Salvare il manifest del singolo carosello come JSON UTF-8:
 
 ```json
 {
-  "schema_version": "1.3",
+  "schema_version": "1.4",
   "source_type": "article",
   "sequence_mode": "narrative",
   "visual_style_system": "editorial-frame",
@@ -12,13 +19,14 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
   "source_url": "https://example.com/article",
   "target_channels": ["instagram_feed", "linkedin_document"],
   "channel_variants": [],
-  "workflow_state": "testi_approvati",
+  "workflow_state": "bozza",
   "revision": 1,
+  "workflow_receipts": [],
   "production": {
     "mode": "layout",
     "producer": "",
     "supported_style_systems": [],
-    "expected_outputs": ["layout"]
+    "expected_outputs": []
   },
   "proof": {
     "slide_ids": ["cover", "item-1", "outro"],
@@ -100,24 +108,25 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
 
 ## Campi principali
 
-- `schema_version`: usare `1.3` per i nuovi manifest; accettare `1.2`, `1.1` e versioni precedenti come legacy.
+- `schema_version`: usare `1.4` per i nuovi manifest locali. Accettare `1.3`, `1.2`, `1.1` e versioni precedenti in sola compatibilità legacy; non inventare ricevute per promuoverli. Per usare il workflow attestato, creare o migrare esplicitamente un manifest 1.4 e ripetere i checkpoint reali.
 - `source_type`: usare `newsletter`, `article`, `notes` o `verbatim`; accettare `rework` e `social` come alias legacy.
 - `sequence_mode`: usare `narrative` per una progressione dipendente dall'ordine o `sectional` per slide autonome.
 - `visual_style_system`: selezione opzionale per il singolo carosello. Risolvere nell'ordine: questo campo, `brand.visual_signature.style_system`, `editorial-frame`. Usare solo gli ID di [visual-systems.md](visual-systems.md).
 - `logo_mode`: usare `auto` per mostrare la variante approvata adatta al fondo oppure `hidden` per omettere il logo nell'intero carosello. Non controllarlo slide per slide.
 - `target_channels`: dichiarare i canali e placement previsti prima della produzione.
 - `channel_variants`: registrare soltanto le varianti con rapporto o densità diversi dal master; ciascuna richiede una prova visuale dedicata.
-- `workflow_state`: usare `bozza`, `testi_approvati`, `prova_visuale_approvata`, `rendering`, `qa` o `consegnato`.
-- `revision`: incrementare quando cambiano testi approvati, profilo, visuale o composizione.
+- `workflow_state`: usare `bozza`, `testi_approvati`, `prova_visuale_approvata`, `rendering`, `qa` o `consegnato`. Nel percorso `local-editor` iniziare da `bozza` e avanzare soltanto con `scripts/advance_workflow.py` secondo [workflow-state.md](workflow-state.md); non modificare il campo a mano. Adapter e `layout` usano il contratto del proprio produttore e non devono simulare le attestazioni locali.
+- `revision`: incrementare quando cambiano testi approvati, profilo, visuale o composizione. Una transizione di stato valida non incrementa da sola la revisione.
+- `workflow_receipts`: nello schema 1.4 inizializzare come lista vuota in `bozza`. La CLI aggiunge una ricevuta per ogni passaggio; in qualunque stato successivo la lista deve coprire senza salti l'intera catena da `bozza` allo stato corrente, con `from`, `to`, `revision`, `render_fingerprint`, `evidence_sha256` e `advanced_at`. Non crearla o correggerla manualmente. I manifest legacy possono non avere il campo ma non possono essere avanzati dalla CLI 1.4.
 - `production.mode`: usare `renderer`, `adapter` o `layout` secondo il preflight.
 - `production.producer`: identificatore del renderer o adapter; può restare vuoto in modalità `layout`. Nel percorso `local-editor` deve coincidere con il contratto corrente `approved-preview-dom-v2`; un identificatore diverso richiede il flusso di prova ed export del produttore esterno e non può riusare l'approvazione del renderer locale.
 - `production.supported_style_systems`: ID dei sistemi che il produttore implementa realmente. In modalità `renderer` o `adapter` deve contenere il `visual_style_system` risolto; la sola capacità di applicare palette e font non costituisce supporto.
-- `production.expected_outputs`: artefatti dichiarati prima della produzione.
+- `production.expected_outputs`: artefatti dichiarati prima della produzione. Per il renderer locale usare una combinazione di `pdf`, `png` e `contact_sheet` (`contact-sheet` resta alias); `pdf` è obbligatorio e il risultato di export deve attestare esattamente il set dichiarato.
 - `proof.slide_ids`: campione canonico nell'ordine della sequenza: copertina, card interna più densa e chiusura quando prevista. In caso di pari densità scegliere la prima card nell'ordine corrente; dopo eliminazioni, riordini o modifiche al copy ricalcolare il campione e richiedere una nuova prova.
 - `proof.style_system_verified`: impostare `true` soltanto dopo aver visualizzato tutte le card di `proof.slide_ids` nella prova a 480 px, verificando l'assenza degli elementi strutturali sulla copertina e la firma obbligatoria del sistema sulle altre card campione.
 - `proof.browser`: salvare `{ "engine": "chromium", "major": N }` soltanto insieme all'approvazione visuale, usando la major del browser in cui il campione è stato realmente visto. Il renderer locale esporta con Chromium e richiede la stessa major; una prova aperta in un altro motore deve essere riapprovata in Chromium.
-- `proof.approved`: impostare `true` soltanto dopo il via libera dell'utente sulla prova visuale; il primo checkpoint su profilo e testi non deve modificarlo. Aggiornare allora `workflow_state` a `prova_visuale_approvata`.
-- `proof.render_fingerprint`: salvare il fingerprint SHA-256 candidato calcolato dal server sul copy, sul sistema visivo, sulla modalità del logo, sul contratto renderer e sui byte effettivi di HTML, JavaScript, CSS, cover, loghi e font. Una prova è approvata soltanto quando questo valore coincide con il fingerprint corrente. Riportare automaticamente `proof.approved` e `proof.style_system_verified` a `false` e rimuovere `proof.browser` quando cambiano testi, ordine, profilo, sistema visivo, logo, asset o composizione della prova.
+- `proof.approved`: impostare `true` soltanto tramite l'applicazione del batch visuale dopo il via libera dell'utente; il primo checkpoint su profilo e testi non deve modificarlo. Nel percorso locale lasciare poi che `advance_workflow.py` verifichi la proof e avanzi a `prova_visuale_approvata`: non cambiare lo stato a mano.
+- `proof.render_fingerprint`: salvare il fingerprint SHA-256 candidato calcolato dal server sul copy, sul sistema visivo, sulla modalità del logo, sul contratto di produzione/output e sui byte effettivi di HTML, JavaScript, CSS, cover, loghi e font. Una prova è approvata soltanto quando questo valore coincide con il fingerprint corrente. Riportare automaticamente `proof.approved` e `proof.style_system_verified` a `false` e rimuovere `proof.browser` quando cambiano testi, ordine, profilo, sistema visivo, logo, output attesi, asset o composizione della prova.
 - `format`: usare il master 4:5 da 1080×1350, l'export 1440×1800 e la prova obbligatoria a 480 px di larghezza. I campi legacy `width` e `height` continuano a indicare l'export finale.
 - `typography`: registrare la scala sul master 1080×1350. I valori nominali sono copertina 112 px con peso 800, sottotitolo di copertina 56 px con peso 500 e interlinea 1.08, titoli sezionali 72 px con peso 800, corpo 64 px con peso 620, interlinea 1.12, spazio aggiuntivo fra frasi `sentence_gap_em: 0.6`, tracking -0.025 em e metadati 26 px. Applicare all'export 1440×1800 un fattore uniforme di 4/3.
 - `typography.min_auto_scale`: non usare valori inferiori a `0.92`, equivalenti a una riduzione massima dell'8%.

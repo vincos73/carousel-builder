@@ -10,27 +10,40 @@ const test = require("node:test");
 const {
   APPROVED_WORKFLOW_STATES,
   CONTRACT,
+  acquireExportClaims,
+  assertExportPreflight,
   browserDescriptor,
   browserCandidates,
   buildContactSheet,
   buildPdf,
+  buildExportResult,
   createExclusiveTemporaryOutput,
+  exportClaimBinding,
+  exportArtifactDigests,
+  fetchLiveSession,
   fsyncDirectory,
   launchBrowser,
+  main,
   parseArgs,
+  pathContains,
+  readStableSidecar,
+  recoverDurablePublishTwin,
   resolveOutputTargets,
   safeLocalUrl,
+  sameCanonicalTarget,
+  samePath,
   slidePngFilename,
   validateContract,
   validateStableContract,
   writeExportArtifactsAtomically,
+  writeDurableBytesExclusive,
   writePdfAtomically,
 } = require("../scripts/export_review_pdf.cjs");
 
 function sampleContract({
   production = false,
   revision = 9,
-  workflowState = "prova_visuale_approvata",
+  workflowState = "rendering",
   proofApproved = true,
   styleSystem = "editorial-frame",
   renderFingerprint = "a".repeat(64),
@@ -76,10 +89,11 @@ function sampleContract({
         browser: { engine: "chromium", major: 123 },
       },
       production: {
-        mode: "adapter",
+        mode: "renderer",
         producer: CONTRACT,
         supported_style_systems: [styleSystem],
         selected_style_supported: true,
+        expected_outputs: ["pdf"],
       },
       render_fingerprint: renderFingerprint,
       ...snapshotOverrides,
@@ -149,6 +163,7 @@ function mockExportRuntime({
   productionPixels = referencePixels,
   liveSessions,
 } = {}) {
+  const sharpStats = { resizeCalls: 0 };
   const reference = sampleContract();
   const production = sampleContract({ production: true });
   const referencePage = mockPage([reference, reference, reference], referencePixels);
@@ -175,6 +190,7 @@ function mockExportRuntime({
     let mode = "encoded";
     const pipeline = {
       resize() {
+        sharpStats.resizeCalls += 1;
         return pipeline;
       },
       ensureAlpha() {
@@ -203,8 +219,11 @@ function mockExportRuntime({
   };
   sharp.kernel = { lanczos3: "lanczos3" };
   const pdf = {
-    setTitle() {},
-    setProducer() {},
+    metadata: {},
+    setTitle(value) { this.metadata.title = value; },
+    setProducer(value) { this.metadata.producer = value; },
+    setCreationDate(value) { this.metadata.creationDate = value; },
+    setModificationDate(value) { this.metadata.modificationDate = value; },
     async embedPng() {
       return {};
     },
@@ -217,7 +236,9 @@ function mockExportRuntime({
   };
   const PDFDocument = { async create() { return pdf; } };
   const liveQueue = [...(liveSessions || [{
+    schema_version: "1.4",
     proof_approved: true,
+    feedback_pending: false,
     workflow_state: production.workflowState,
     revision: production.revision,
     render_fingerprint: production.contentSnapshot.render_fingerprint,
@@ -227,12 +248,18 @@ function mockExportRuntime({
   const liveRequests = [];
   const fetchImpl = async (url, options) => {
     liveRequests.push({ url: String(url), options });
-    const value = liveQueue.length > 1 ? liveQueue.shift() : liveQueue[0];
+    const requestIndex = Math.floor((liveRequests.length - 1) / 2);
+    const value = liveQueue[Math.min(requestIndex, liveQueue.length - 1)];
+    const isStatus = new URL(url).pathname === "/api/status";
     return {
       ok: true,
       status: 200,
       async json() {
-        return structuredClone(value);
+        return structuredClone(isStatus ? {
+          manifest_revision: value.revision,
+          workflow_state: value.workflow_state,
+          feedback_pending: value.feedback_pending,
+        } : value);
       },
     };
   };
@@ -243,23 +270,35 @@ function mockExportRuntime({
     fetchImpl,
     liveRequests,
     pagesForAssertions: [referencePage, productionPage],
+    sharpStats,
+    pdf,
   };
 }
 
-test("parseArgs richiede i tre argomenti obbligatori", () => {
+test("parseArgs richiede URL, output, dipendenze e result JSON", () => {
   assert.deepEqual(
     parseArgs([
       "--url", "http://127.0.0.1:8765/?token=secret",
       "--output", "review.pdf",
       "--node-modules", "/tmp/node_modules",
+      "--result-json", "result.json",
     ]),
     {
       url: "http://127.0.0.1:8765/?token=secret",
       output: "review.pdf",
       "node-modules": "/tmp/node_modules",
+      "result-json": "result.json",
     },
   );
   assert.throws(() => parseArgs(["--url", "http://localhost/?token=x"]), /--output/);
+  assert.throws(
+    () => parseArgs([
+      "--url", "http://localhost/?token=x",
+      "--output", "review.pdf",
+      "--node-modules", "/tmp/node_modules",
+    ]),
+    /--result-json/,
+  );
   assert.throws(() => parseArgs(["unexpected"]), /Argomento inatteso/);
   assert.throws(
     () => parseArgs([
@@ -289,11 +328,13 @@ test("resolveOutputTargets mantiene separati PDF, PNG e contact sheet da directo
       output: "output/carousel.pdf",
       "png-dir": "output/png",
       "contact-sheet": "output/contact-sheet.png",
+      "result-json": "output/result.json",
     }, { cwd, home, platform: "linux" }),
     {
       output: path.join(cwd, "output", "carousel.pdf"),
       pngDir: path.join(cwd, "output", "png"),
       contactSheet: path.join(cwd, "output", "contact-sheet.png"),
+      resultJson: path.join(cwd, "output", "result.json"),
     },
   );
   assert.throws(
@@ -305,12 +346,20 @@ test("resolveOutputTargets mantiene separati PDF, PNG e contact sheet da directo
     /terminare con .png/,
   );
   assert.throws(
+    () => resolveOutputTargets({ output: "review.pdf", "result-json": "result.txt" }, { cwd, home, platform: "linux" }),
+    /terminare con .json/,
+  );
+  assert.throws(
+    () => resolveOutputTargets({ output: "review.pdf", "result-json": "review.pdf/result.json" }, { cwd, home, platform: "linux" }),
+    /distinti e non annidati/,
+  );
+  assert.throws(
     () => resolveOutputTargets({ output: "review.pdf", "png-dir": cwd }, { cwd, home, platform: "linux" }),
-    /directory di lavoro corrente/,
+    /directory di lavoro corrente|sidecar riservati/,
   );
   assert.throws(
     () => resolveOutputTargets({ output: "png/review.pdf", "png-dir": "png" }, { cwd, home, platform: "linux" }),
-    /separati e non annidati/,
+    /separati e non annidati|sidecar riservati/,
   );
   assert.throws(
     () => resolveOutputTargets({ output: "review.pdf", "png-dir": "review.pdf/png" }, { cwd, home, platform: "linux" }),
@@ -318,13 +367,72 @@ test("resolveOutputTargets mantiene separati PDF, PNG e contact sheet da directo
   );
   assert.throws(
     () => resolveOutputTargets({ output: "review.pdf", "contact-sheet": "review.pdf/sheet.png" }, { cwd, home, platform: "linux" }),
-    /contenersi reciprocamente/,
+    /contenersi reciprocamente|distinti e non annidati/,
   );
+  for (const target of [
+    ".review.pdf.export-staging.json",
+    ".review.pdf.export-transaction.json",
+    ".review.pdf.export-transaction.json.committed",
+    ".review.pdf.export-claim.json",
+    ".other.pdf.export-staging.json",
+    ".other.pdf.export-transaction.json",
+    ".other.pdf.export-claim.json",
+  ]) {
+    assert.throws(
+      () => resolveOutputTargets(
+        { output: "review.pdf", "result-json": target },
+        { cwd, home, platform: "linux" },
+      ),
+      /sidecar riservati|namespace globale|terminare con \.json/,
+    );
+    assert.throws(
+      () => resolveOutputTargets(
+        { output: "review.pdf", "png-dir": target },
+        { cwd, home, platform: "linux" },
+      ),
+      /sidecar riservati|namespace globale/,
+    );
+  }
 });
 
 test("slidePngFilename produce nomi ordinati, portabili e confinati", () => {
   assert.equal(slidePngFilename({ id: "Còver / Estate" }, 0, 12), "01-cover-estate.png");
   assert.equal(slidePngFilename({ id: "../" }, 1, 12), "02-slide.png");
+});
+
+test("il risultato machine-readable include schema, fingerprint e digest degli artefatti", () => {
+  const contract = sampleContract({ production: true });
+  const digests = exportArtifactDigests({
+    output: "/tmp/carousel.pdf",
+    pdfBytes: Buffer.from("pdf"),
+    pngDir: "/tmp/png",
+    pngSlides: [{ filename: "01-cover.png", bytes: Buffer.from("png") }],
+    contactSheet: "/tmp/sheet.png",
+    contactSheetBytes: Buffer.from("sheet"),
+  });
+  const result = buildExportResult({
+    output: "/tmp/carousel.pdf",
+    pngDir: "/tmp/png",
+    contactSheet: "/tmp/sheet.png",
+    resultJson: "/tmp/result.json",
+    contract,
+    browserLabel: "Chrome",
+    browser: { engine: "chromium", major: 123 },
+    artifactSha256: digests,
+  });
+  assert.equal(result.result_schema, "carousel-builder-export-v1");
+  assert.equal(result.render_fingerprint, "a".repeat(64));
+  assert.deepEqual(
+    result.artifact_sha256.map(({ kind, path: artifactPath }) => ({ kind, path: artifactPath })),
+    [
+      { kind: "pdf", path: "/tmp/carousel.pdf" },
+      { kind: "png", path: "/tmp/png/01-cover.png" },
+      { kind: "contact_sheet", path: "/tmp/sheet.png" },
+    ],
+  );
+  assert.ok(result.artifact_sha256.every(({ sha256: digest }) => /^[a-f0-9]{64}$/.test(digest)));
+  assert.equal(result.png_files, 1);
+  assert.equal(result.result_json, "/tmp/result.json");
 });
 
 test("safeLocalUrl accetta solo editor loopback con token e senza credenziali", () => {
@@ -336,19 +444,195 @@ test("safeLocalUrl accetta solo editor loopback con token e senza credenziali", 
   assert.throws(() => safeLocalUrl("http://user@localhost/?token=abc"), /credenziali/);
 });
 
-test("tutti e soli gli stati post-prova sono esportabili con proofApproved", () => {
+test("fetchLiveSession applica un timeout totale anche al body JSON", async () => {
+  const baseUrl = new URL("http://127.0.0.1:8765/?token=secret");
+  let requestSignal;
+  await assert.rejects(
+    fetchLiveSession(
+      baseUrl,
+      async (_url, options) => {
+        requestSignal = options.signal;
+        return new Promise(() => {});
+      },
+      { timeoutMs: 20 },
+    ),
+    /scaduta.*richiesta e body JSON/,
+  );
+  assert.equal(requestSignal.aborted, true);
+
+  let bodySignal;
+  await assert.rejects(
+    fetchLiveSession(
+      baseUrl,
+      async (_url, options) => {
+        bodySignal = options.signal;
+        return { ok: true, status: 200, json: async () => new Promise(() => {}) };
+      },
+      { timeoutMs: 20 },
+    ),
+    /scaduta.*richiesta e body JSON/,
+  );
+  assert.equal(bodySignal.aborted, true);
+});
+
+test("preflight 1.4 blocca feedback pending e output dichiarati divergenti", () => {
+  const production = sampleContract({ production: true }).contentSnapshot.production;
+  const live = {
+    schema_version: "1.4",
+    workflow_state: "rendering",
+    feedback_pending: false,
+    proof_approved: true,
+    production,
+  };
+  assert.doesNotThrow(() => assertExportPreflight(live, {
+    output: "/tmp/review.pdf",
+    pngDir: null,
+    contactSheet: null,
+    resultJson: "/tmp/result.json",
+  }));
+  assert.throws(
+    () => assertExportPreflight({ ...live, feedback_pending: true }, {}),
+    /feedback_pending=false/,
+  );
+  assert.throws(
+    () => assertExportPreflight({
+      ...live,
+      production: { ...production, expected_outputs: ["pdf", "png"] },
+    }, { pngDir: null, contactSheet: null }),
+    /expected_outputs/,
+  );
+  assert.doesNotThrow(() => assertExportPreflight({
+    ...live,
+    production: { ...production, expected_outputs: ["contact_sheet", "png", "pdf"] },
+  }, { pngDir: "/tmp/png", contactSheet: "/tmp/contact.png" }));
+});
+
+test("main esegue il preflight prima di caricare browser e dipendenze", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-main-preflight-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const session = {
+    schema_version: "1.4",
+    workflow_state: "rendering",
+    revision: 9,
+    feedback_pending: true,
+    proof_approved: true,
+    proof: sampleContract().contentSnapshot.proof,
+    production: sampleContract().contentSnapshot.production,
+  };
+  let dependenciesLoaded = false;
+  const fetchImpl = async (url) => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return new URL(url).pathname === "/api/status" ? {
+        manifest_revision: session.revision,
+        workflow_state: session.workflow_state,
+        feedback_pending: true,
+      } : session;
+    },
+  });
+  await assert.rejects(main({
+    argv: [
+      "--url", "http://127.0.0.1:8765/?token=secret",
+      "--output", path.join(directory, "review.pdf"),
+      "--result-json", path.join(directory, "result.json"),
+      "--node-modules", path.join(directory, "missing-node-modules"),
+    ],
+    fetchImpl,
+    loadDependenciesImpl() {
+      dependenciesLoaded = true;
+      throw new Error("non deve essere chiamato");
+    },
+  }), /feedback_pending=false/);
+  assert.equal(dependenciesLoaded, false);
+});
+
+test("samePath e pathContains normalizzano case e Unicode su Darwin e Windows", () => {
+  const nfc = "/tmp/Caf\u00e9/Output.PDF";
+  const nfd = "/tmp/cafe\u0301/output.pdf";
+  assert.equal(samePath(nfc, nfd, "darwin"), true);
+  assert.equal(samePath("/tmp/Stra\u00dfe.pdf", "/tmp/STRASSE.PDF", "darwin"), true);
+  assert.equal(pathContains("/tmp/CAF\u00c9", "/tmp/cafe\u0301/Sub/one.pdf", "darwin"), true);
+  assert.equal(samePath("C:\\OUT\\FILE.PDF", "c:\\out\\file.pdf", "win32"), true);
+  assert.equal(pathContains("C:\\OUT", "c:\\out\\sub\\file.pdf", "win32"), true);
+});
+
+test("resolveOutputTargets canonicalizza un parent symlink prima dei confronti", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-canonical-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const realParent = path.join(directory, "real");
+  const alias = path.join(directory, "alias");
+  await fs.mkdir(realParent);
+  await fs.symlink(realParent, alias, "dir");
+  const targets = resolveOutputTargets({
+    output: path.join(alias, "review.pdf"),
+    "result-json": path.join(realParent, "result.json"),
+  }, { cwd: directory, home: path.join(directory, "home"), platform: process.platform });
+  const canonicalParent = await fs.realpath(realParent);
+  assert.equal(path.dirname(targets.output), canonicalParent);
+  assert.equal(path.dirname(targets.resultJson), canonicalParent);
+});
+
+test("Darwin identifica alias esistenti Unicode tramite realpath e inode", async (context) => {
+  if (process.platform !== "darwin") {
+    context.skip("richiede un volume Darwin");
+    return;
+  }
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-darwin-alias-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const canonical = path.join(directory, "Caf\u00e9.PDF");
+  const alias = path.join(directory, "cafe\u0301.pdf");
+  await fs.writeFile(canonical, "pdf");
+  let aliasStat;
+  try {
+    aliasStat = await fs.stat(alias);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      context.skip("il volume Darwin è case-sensitive e non espone l'alias Unicode");
+      return;
+    }
+    throw error;
+  }
+  const canonicalStat = await fs.stat(canonical);
+  if (canonicalStat.dev !== aliasStat.dev || canonicalStat.ino !== aliasStat.ino) {
+    context.skip("il volume non tratta i nomi come alias dello stesso inode");
+    return;
+  }
+  assert.equal(sameCanonicalTarget(canonical, alias, "darwin"), true);
+  assert.equal(await fs.realpath(alias), await fs.realpath(canonical));
+});
+
+test("Darwin rifiuta collisioni case-fold conservative per target non esistenti", async (context) => {
+  if (process.platform !== "darwin") {
+    context.skip("richiede un volume Darwin");
+    return;
+  }
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-darwin-probe-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const existing = path.join(directory, "Stra\u00dfe.pdf");
+  const candidate = path.join(directory, "STRASSE.PDF");
+  await fs.writeFile(existing, "pdf");
+  try {
+    const [existingStat, candidateStat] = await Promise.all([fs.stat(existing), fs.stat(candidate)]);
+    assert.equal(existingStat.dev, candidateStat.dev);
+    assert.equal(existingStat.ino, candidateStat.ino);
+    assert.equal(sameCanonicalTarget(existing, candidate, "darwin"), true);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    assert.throws(
+      () => resolveOutputTargets({
+        output: candidate,
+        "result-json": path.join(directory, "result.json"),
+      }, { cwd: directory, home: path.join(directory, "home"), platform: "darwin" }),
+      /Target Darwin ambiguo.*Stra\u00dfe\.pdf/i,
+    );
+  }
+});
+
+test("solo rendering è esportabile nel contratto attestante 1.4", () => {
   assert.deepEqual(
     [...APPROVED_WORKFLOW_STATES],
-    [
-      "prova_visuale_approvata",
-      "rendering",
-      "qa",
-      "consegnato",
-      "approvato",
-      "approved",
-      "pubblicato",
-      "published",
-    ],
+    ["rendering"],
   );
   for (const workflowState of APPROVED_WORKFLOW_STATES) {
     assert.doesNotThrow(() => validateContract(
@@ -356,13 +640,22 @@ test("tutti e soli gli stati post-prova sono esportabili con proofApproved", () 
       sampleContract({ production: true, workflowState }),
     ));
   }
+  for (const workflowState of ["prova_visuale_approvata", "qa", "consegnato", "approved"] ) {
+    assert.throws(
+      () => validateContract(
+        sampleContract({ workflowState }),
+        sampleContract({ production: true, workflowState }),
+      ),
+      /workflow_state=rendering/,
+    );
+  }
   for (const workflowState of ["bozza", "testi_approvati"]) {
     assert.throws(
       () => validateContract(
         sampleContract({ workflowState }),
         sampleContract({ production: true, workflowState }),
       ),
-      /prova visuale approvata/,
+    /workflow_state=rendering/,
     );
   }
   assert.throws(
@@ -519,6 +812,11 @@ test("la cattura usa il proof 480×600 a scala nativa 3×", async () => {
     fetchImpl: runtime.fetchImpl,
   });
   assert.equal(contexts[0].deviceScaleFactor, 3);
+  assert.equal(runtime.sharpStats.resizeCalls, 0, "i raster già 1440×1800 non vanno ricampionati");
+  assert.equal(runtime.pdf.metadata.creationDate.toISOString(), "2000-01-01T00:00:00.000Z");
+  assert.equal(runtime.pdf.metadata.modificationDate.toISOString(), "2000-01-01T00:00:00.000Z");
+  assert.equal(runtime.pdf.metadata.title, "Carousel Builder export");
+  assert.equal(runtime.pdf.metadata.producer, `Carousel Builder ${CONTRACT}`);
 });
 
 test("la cattura rifiuta un box 4:5 che non sia la prova esatta 480×600", async () => {
@@ -565,7 +863,7 @@ test("buildPdf ricontrolla preview e production anche dopo la serializzazione", 
     ...runtime,
   });
   assert.equal(result.bytes.toString(), "mock-pdf");
-  assert.equal(result.contract.workflowState, "prova_visuale_approvata");
+  assert.equal(result.contract.workflowState, "rendering");
   const referenceUrl = new URL(runtime.pagesForAssertions[0].visitedUrls[0]);
   const productionUrl = new URL(runtime.pagesForAssertions[1].visitedUrls[0]);
   assert.equal(referenceUrl.searchParams.get("capture"), "parity");
@@ -575,6 +873,7 @@ test("buildPdf ricontrolla preview e production anche dopo la serializzazione", 
   assert.equal(runtime.pagesForAssertions[0].gotoOptions[0].waitUntil, "domcontentloaded");
   assert.equal(runtime.pagesForAssertions[1].gotoOptions[0].waitUntil, "domcontentloaded");
   assert.equal(runtime.liveRequests[0].url, "http://127.0.0.1:8765/api/session?token=secret");
+  assert.equal(runtime.liveRequests[1].url, "http://127.0.0.1:8765/api/status?token=secret");
   assert.equal(runtime.liveRequests[0].options.cache, "no-store");
   assert.equal(runtime.liveRequests[0].options.headers["Cache-Control"], "no-store");
 
@@ -646,6 +945,7 @@ test("writeExportArtifactsAtomically pubblica insieme PDF, PNG e contact sheet",
   const output = path.join(directory, "carousel.pdf");
   const pngDir = path.join(directory, "png");
   const contactSheet = path.join(directory, "contact-sheet.png");
+  const resultJson = path.join(directory, "result.json");
   await fs.writeFile(output, "old-pdf");
   await fs.mkdir(pngDir);
   await fs.writeFile(path.join(pngDir, "stale.png"), "stale");
@@ -661,14 +961,17 @@ test("writeExportArtifactsAtomically pubblica insieme PDF, PNG e contact sheet",
     ],
     contactSheet,
     contactSheetBytes: Buffer.from("new-sheet"),
+    resultJson,
+    resultJsonBytes: Buffer.from('{"status":"ok"}\n'),
     beforeReplace: async () => {},
   });
 
   assert.equal(await fs.readFile(output, "utf8"), "new-pdf");
   assert.equal(await fs.readFile(contactSheet, "utf8"), "new-sheet");
+  assert.equal(await fs.readFile(resultJson, "utf8"), '{"status":"ok"}\n');
   assert.deepEqual(await fs.readdir(pngDir), ["01-cover.png", "02-slide.png"]);
   assert.equal(await fs.readFile(path.join(pngDir, "01-cover.png"), "utf8"), "cover");
-  assert.deepEqual((await fs.readdir(directory)).sort(), ["carousel.pdf", "contact-sheet.png", "png"]);
+  assert.deepEqual((await fs.readdir(directory)).sort(), ["carousel.pdf", "contact-sheet.png", "png", "result.json"]);
 });
 
 test("writeExportArtifactsAtomically sincronizza directory di staging e publish su POSIX", async (context) => {
@@ -760,7 +1063,7 @@ test("writeExportArtifactsAtomically ripristina tutti gli output se una rename d
         return typeof value === "function" ? value.bind(target) : value;
       }
       return async (source, destination) => {
-        if (!injected && destination === pngDir && source.includes(".tmp")) {
+        if (!injected && path.basename(destination) === path.basename(pngDir) && source.includes(".tmp")) {
           injected = true;
           const error = new Error("rename simulata fallita");
           error.code = "EIO";
@@ -788,6 +1091,46 @@ test("writeExportArtifactsAtomically ripristina tutti gli output se una rename d
   assert.equal(await fs.readFile(contactSheet, "utf8"), "old-sheet");
   assert.equal(await fs.readFile(path.join(pngDir, "old.png"), "utf8"), "old-png");
   assert.deepEqual((await fs.readdir(directory)).sort(), ["carousel.pdf", "contact-sheet.png", "png"]);
+});
+
+test("PDF e result JSON fanno rollback insieme se la pubblicazione del risultato fallisce", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-result-rollback-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const output = path.join(directory, "carousel.pdf");
+  const resultJson = path.join(directory, "result.json");
+  await fs.writeFile(output, "old-pdf");
+  await fs.writeFile(resultJson, "old-result");
+  let injected = false;
+  const fsApi = new Proxy(fs, {
+    get(target, property) {
+      if (property !== "rename") {
+        const value = target[property];
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return async (source, destination) => {
+        if (!injected && path.basename(destination) === path.basename(resultJson) && path.basename(source).endsWith(".tmp")) {
+          injected = true;
+          const error = new Error("rename result simulata fallita");
+          error.code = "EIO";
+          throw error;
+        }
+        return target.rename(source, destination);
+      };
+    },
+  });
+  await assert.rejects(
+    writeExportArtifactsAtomically({
+      output,
+      pdfBytes: Buffer.from("new-pdf"),
+      resultJson,
+      resultJsonBytes: Buffer.from("new-result"),
+      fsApi,
+    }),
+    /rename result simulata fallita/,
+  );
+  assert.equal(await fs.readFile(output, "utf8"), "old-pdf");
+  assert.equal(await fs.readFile(resultJson, "utf8"), "old-result");
+  assert.deepEqual((await fs.readdir(directory)).sort(), ["carousel.pdf", "result.json"]);
 });
 
 test("writeExportArtifactsAtomically recupera una pubblicazione interrotta da un process kill", async (context) => {
@@ -818,7 +1161,7 @@ test("writeExportArtifactsAtomically recupera una pubblicazione interrotta da un
           return typeof value === "function" ? value.bind(target) : value;
         }
         return async (source, destination) => {
-          if (!killed && destination === pngDir && path.basename(source).endsWith(".tmp")) {
+          if (!killed && path.basename(destination) === path.basename(pngDir) && path.basename(source).endsWith(".tmp")) {
             killed = true;
             process.exit(77);
           }
@@ -872,6 +1215,120 @@ test("writeExportArtifactsAtomically recupera una pubblicazione interrotta da un
   assert.deepEqual((await fs.readdir(directory)).sort(), ["carousel.pdf", "contact-sheet.png", "png"]);
 });
 
+test("un crash pre-journal lascia ownership recuperabile e non cancella staging estranei", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-prejournal-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const output = path.join(directory, "carousel.pdf");
+  const foreign = path.join(directory, ".carousel.pdf.999.foreign.0.tmp");
+  await fs.writeFile(foreign, "preserve");
+  const exporterPath = path.resolve(__dirname, "../scripts/export_review_pdf.cjs");
+  const childScript = String.raw`
+    const { writeExportArtifactsAtomically } = require(process.argv[1]);
+    writeExportArtifactsAtomically({
+      output: process.argv[2],
+      pdfBytes: Buffer.from("interrupted"),
+      beforeReplace: async () => process.exit(78),
+    }).catch(() => process.exit(2));
+  `;
+  const crashed = spawnSync(process.execPath, ["-e", childScript, exporterPath, output], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(crashed.status, 78, crashed.stderr);
+  const interruptedEntries = await fs.readdir(directory);
+  assert.ok(interruptedEntries.includes(".carousel.pdf.export-staging.json"));
+  assert.ok(interruptedEntries.some((name) => name.endsWith(".tmp") && name !== path.basename(foreign)));
+
+  await writeExportArtifactsAtomically({
+    output,
+    pdfBytes: Buffer.from("recovered"),
+    beforeReplace: async () => {},
+  });
+
+  assert.equal(await fs.readFile(output, "utf8"), "recovered");
+  assert.equal(await fs.readFile(foreign, "utf8"), "preserve");
+  assert.deepEqual((await fs.readdir(directory)).sort(), [path.basename(foreign), "carousel.pdf"].sort());
+});
+
+test("un marker di staging appartenente a un processo attivo blocca senza cancellare", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-active-staging-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const output = path.join(directory, "carousel.pdf");
+  const runId = "active";
+  const temporaryPath = path.join(directory, `.carousel.pdf.${process.pid}.${runId}.0.tmp`);
+  const markerPath = path.join(directory, ".carousel.pdf.export-staging.json");
+  await fs.writeFile(temporaryPath, "owned");
+  await fs.writeFile(markerPath, `${JSON.stringify({
+    version: 1,
+    pid: process.pid,
+    run_id: runId,
+    primary_output: output,
+    artifacts: [{ kind: "file", finalPath: output, temporaryPath }],
+  })}\n`);
+
+  await assert.rejects(
+    writeExportArtifactsAtomically({ output, pdfBytes: Buffer.from("new") }),
+    /export è ancora attivo/,
+  );
+  assert.equal(await fs.readFile(temporaryPath, "utf8"), "owned");
+  assert.ok((await fs.readdir(directory)).includes(path.basename(markerPath)));
+});
+
+test("il publish atomico del marker non lascia un JSON parziale se il link fallisce", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-marker-fault-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const output = path.join(directory, "carousel.pdf");
+  const fsApi = new Proxy(fs, {
+    get(target, property) {
+      if (property !== "link") {
+        const value = target[property];
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return async () => {
+        const error = new Error("link marker fallito");
+        error.code = "EIO";
+        throw error;
+      };
+    },
+  });
+  await assert.rejects(
+    writeExportArtifactsAtomically({ output, pdfBytes: Buffer.from("new"), fsApi }),
+    /link marker fallito/,
+  );
+  assert.deepEqual(await fs.readdir(directory), []);
+});
+
+test("il publish atomico del commit marker fa rollback senza lasciare marker parziali", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-commit-fault-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const output = path.join(directory, "carousel.pdf");
+  await fs.writeFile(output, "old");
+  let links = 0;
+  const fsApi = new Proxy(fs, {
+    get(target, property) {
+      if (property !== "link") {
+        const value = target[property];
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return async (...args) => {
+        links += 1;
+        if (links === 3) {
+          const error = new Error("link commit fallito");
+          error.code = "EIO";
+          throw error;
+        }
+        return target.link(...args);
+      };
+    },
+  });
+  await assert.rejects(
+    writeExportArtifactsAtomically({ output, pdfBytes: Buffer.from("new"), fsApi }),
+    /link commit fallito/,
+  );
+  assert.equal(await fs.readFile(output, "utf8"), "old");
+  assert.deepEqual(await fs.readdir(directory), ["carousel.pdf"]);
+});
+
 test("due export concorrenti non possono sovrascrivere lo stesso journal", async (context) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-concurrent-"));
   context.after(async () => fs.rm(directory, { recursive: true, force: true }));
@@ -907,6 +1364,555 @@ test("due export concorrenti non possono sovrascrivere lo stesso journal", async
   assert.match(String(results.find(({ status }) => status === "rejected").reason), /EEXIST|exist/i);
   assert.ok(["first", "second"].includes(await fs.readFile(output, "utf8")));
   assert.deepEqual(await fs.readdir(directory), ["carousel.pdf"]);
+});
+
+test("claim per-target blocca due export con un target secondario condiviso", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-shared-secondary-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const sharedResult = path.join(directory, "shared-result.json");
+  let arrived = 0;
+  let releaseClaims;
+  const claimsReady = new Promise((resolve) => { releaseClaims = resolve; });
+  const fsApi = new Proxy(fs, {
+    get(target, property) {
+      if (property !== "link") {
+        const value = target[property];
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return async (source, destination) => {
+        if (path.basename(destination).endsWith(".export-claim.json")) {
+          arrived += 1;
+          if (arrived === 2) releaseClaims();
+          await claimsReady;
+        }
+        return target.link(source, destination);
+      };
+    },
+  });
+  const run = (name) => writeExportArtifactsAtomically({
+    output: path.join(directory, `${name}.pdf`),
+    pdfBytes: Buffer.from(name),
+    resultJson: sharedResult,
+    resultJsonBytes: Buffer.from(`{"run":"${name}"}\n`),
+    fsApi,
+  });
+
+  const results = await Promise.allSettled([run("first"), run("second")]);
+  assert.equal(results.filter(({ status }) => status === "fulfilled").length, 1);
+  assert.equal(results.filter(({ status }) => status === "rejected").length, 1);
+  assert.match(String(results.find(({ status }) => status === "rejected").reason), /EEXIST|in uso|exist/i);
+  assert.equal((await fs.readdir(directory)).some((name) => name.endsWith(".export-claim.json")), false);
+});
+
+test("un recovery pending conserva l'intero claim-set e blocca un primary concorrente", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-claim-lifecycle-v2-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const outputA = path.join(directory, "a.pdf");
+  const outputB = path.join(directory, "b.pdf");
+  const sharedResult = path.join(directory, "shared-result.json");
+  await fs.writeFile(outputA, "old-a");
+  await fs.writeFile(sharedResult, "old-shared");
+  let publishFailed = false;
+  let rollbackFailed = false;
+  const faultingFs = new Proxy(fs, {
+    get(target, property) {
+      if (property !== "rename") {
+        const value = target[property];
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return async (source, destination) => {
+        if (
+          !publishFailed
+          && sameCanonicalTarget(destination, sharedResult)
+          && path.basename(source).endsWith(".tmp")
+        ) {
+          publishFailed = true;
+          const error = new Error("publish A fault");
+          error.code = "EIO";
+          throw error;
+        }
+        if (
+          publishFailed
+          && !rollbackFailed
+          && sameCanonicalTarget(destination, sharedResult)
+          && path.basename(source).endsWith(".previous")
+        ) {
+          rollbackFailed = true;
+          const error = new Error("rollback A fault");
+          error.code = "EIO";
+          throw error;
+        }
+        return target.rename(source, destination);
+      };
+    },
+  });
+
+  await assert.rejects(
+    writeExportArtifactsAtomically({
+      output: outputA,
+      pdfBytes: Buffer.from("broken-a"),
+      resultJson: sharedResult,
+      resultJsonBytes: Buffer.from("broken-shared"),
+      fsApi: faultingFs,
+    }),
+    /anche il ripristino ha fallito.*rollback A fault/i,
+  );
+  assert.equal(publishFailed, true);
+  assert.equal(rollbackFailed, true);
+  const retainedClaimPath = path.join(directory, ".shared-result.json.export-claim.json");
+  const retainedClaim = JSON.parse(await fs.readFile(retainedClaimPath, "utf8"));
+  assert.equal(retainedClaim.version, 2);
+  assert.equal(retainedClaim.primary_output, await fs.realpath(outputA));
+  assert.deepEqual(
+    retainedClaim.artifacts.map(({ kind, final_path: finalPath }) => [kind, finalPath]),
+    [
+      ["file", await fs.realpath(outputA)],
+      ["file", await fs.realpath(path.dirname(sharedResult)).then((parent) => path.join(parent, path.basename(sharedResult)))],
+    ],
+  );
+  assert.match(retainedClaim.artifact_set_sha256, /^[0-9a-f]{64}$/);
+
+  await assert.rejects(
+    writeExportArtifactsAtomically({
+      output: outputB,
+      pdfBytes: Buffer.from("blocked-b"),
+      resultJson: sharedResult,
+      resultJsonBytes: Buffer.from("blocked-shared"),
+    }),
+    /recovery pending.*shared-result\.json/i,
+  );
+  await assert.rejects(fs.lstat(outputB), { code: "ENOENT" });
+
+  await writeExportArtifactsAtomically({
+    output: outputA,
+    pdfBytes: Buffer.from("recovered-a"),
+    resultJson: sharedResult,
+    resultJsonBytes: Buffer.from("recovered-shared"),
+  });
+  assert.equal(await fs.readFile(outputA, "utf8"), "recovered-a");
+  assert.equal(await fs.readFile(sharedResult, "utf8"), "recovered-shared");
+
+  await writeExportArtifactsAtomically({
+    output: outputB,
+    pdfBytes: Buffer.from("final-b"),
+    resultJson: sharedResult,
+    resultJsonBytes: Buffer.from("final-shared"),
+  });
+  assert.equal(await fs.readFile(outputA, "utf8"), "recovered-a");
+  assert.equal(await fs.readFile(outputB, "utf8"), "final-b");
+  assert.equal(await fs.readFile(sharedResult, "utf8"), "final-shared");
+  assert.equal((await fs.readdir(directory)).some((name) => name.endsWith(".export-claim.json")), false);
+});
+
+test("un marker staging pending conserva i claim e consente il retry dello stesso set", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-staging-claim-retry-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const output = path.join(directory, "review.pdf");
+  const stagingPath = path.join(directory, ".review.pdf.export-staging.json");
+  const claimPath = path.join(directory, ".review.pdf.export-claim.json");
+  const faultingFs = new Proxy(fs, {
+    get(target, property) {
+      if (property !== "rm") {
+        const value = target[property];
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return async (targetPath, options) => {
+        if (sameCanonicalTarget(targetPath, stagingPath)) {
+          const error = new Error("staging cleanup fault");
+          error.code = "EIO";
+          throw error;
+        }
+        return target.rm(targetPath, options);
+      };
+    },
+  });
+  await assert.rejects(
+    writeExportArtifactsAtomically({
+      output,
+      pdfBytes: Buffer.from("first"),
+      fsApi: faultingFs,
+    }),
+    /staging cleanup fault/,
+  );
+  assert.equal(await fs.readFile(output, "utf8"), "first");
+  assert.ok((await fs.readdir(directory)).includes(path.basename(stagingPath)));
+  assert.ok((await fs.readdir(directory)).includes(path.basename(claimPath)));
+
+  await writeExportArtifactsAtomically({
+    output,
+    pdfBytes: Buffer.from("retry"),
+  });
+  assert.equal(await fs.readFile(output, "utf8"), "retry");
+  assert.deepEqual(await fs.readdir(directory), ["review.pdf"]);
+});
+
+test("i claim sono acquisiti in ordine canonico e rilasciati in ordine inverso", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-claim-order-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const output = path.join(directory, "z-review.pdf");
+  const resultJson = path.join(directory, "a-result.json");
+  const events = [];
+  const fsApi = new Proxy(fs, {
+    get(target, property) {
+      if (property === "link") {
+        return async (source, destination) => {
+          if (path.basename(destination).endsWith(".export-claim.json")) {
+            events.push(["acquire", path.basename(destination)]);
+          }
+          return target.link(source, destination);
+        };
+      }
+      if (property === "rm") {
+        return async (targetPath, options) => {
+          if (path.basename(targetPath).endsWith(".export-claim.json")) {
+            events.push(["release", path.basename(targetPath)]);
+          }
+          return target.rm(targetPath, options);
+        };
+      }
+      const value = target[property];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+  await writeExportArtifactsAtomically({
+    output,
+    pdfBytes: Buffer.from("pdf"),
+    resultJson,
+    resultJsonBytes: Buffer.from("{}\n"),
+    fsApi,
+  });
+
+  assert.deepEqual(events, [
+    ["acquire", ".a-result.json.export-claim.json"],
+    ["acquire", ".z-review.pdf.export-claim.json"],
+    ["release", ".z-review.pdf.export-claim.json"],
+    ["release", ".a-result.json.export-claim.json"],
+  ]);
+});
+
+test("il recupero di un claim stale è fenced contro una sostituzione concorrente", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-claim-fence-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const finalTarget = path.join(directory, "review.pdf");
+  const claimPath = path.join(directory, ".review.pdf.export-claim.json");
+  const oldClaimPath = `${claimPath}.old`;
+  const binding = exportClaimBinding(
+    finalTarget,
+    [{ kind: "file", finalPath: finalTarget }],
+  );
+  const claim = (runId, pid) => ({
+    version: 2,
+    pid,
+    run_id: runId,
+    target: finalTarget,
+    primary_output: binding.primaryOutput,
+    artifact_set_sha256: binding.digest,
+    artifacts: binding.artifacts.map((artifact) => ({
+      kind: artifact.kind,
+      final_path: artifact.finalPath,
+    })),
+  });
+  const staleClaim = claim("stale", 12345);
+  const attackerClaim = claim("attacker", process.pid);
+  await fs.writeFile(claimPath, `${JSON.stringify(staleClaim)}\n`);
+  let swapped = false;
+  const fsApi = new Proxy(fs, {
+    get(target, property) {
+      if (property !== "link") {
+        const value = target[property];
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return async (source, destination) => {
+        if (
+          !swapped
+          && sameCanonicalTarget(source, claimPath)
+          && String(destination).endsWith(".reap")
+        ) {
+          swapped = true;
+          await target.rename(claimPath, oldClaimPath);
+          await target.writeFile(claimPath, `${JSON.stringify(attackerClaim)}\n`);
+        }
+        return target.link(source, destination);
+      };
+    },
+  });
+
+  await assert.rejects(
+    acquireExportClaims(
+      [{ kind: "file", finalPath: finalTarget }],
+      {
+        fsApi,
+        randomId: () => "challenger",
+        isProcessRunning: () => false,
+      },
+    ),
+    /claim export è cambiato durante il recupero/i,
+  );
+  assert.equal(swapped, true);
+  assert.deepEqual(JSON.parse(await fs.readFile(claimPath, "utf8")), attackerClaim);
+  assert.equal((await fs.readdir(directory)).some((name) => name.endsWith(".reap")), false);
+});
+
+test("il publish durevole mantiene il fd aperto e verifica il twin prima dell'unlink", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-durable-fd-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const targetPath = path.join(directory, ".review.pdf.export-staging.json");
+  const bytes = Buffer.from('{"run_id":"durable"}\n');
+  let temporaryHandleClosed = false;
+  let chmodCalled = false;
+  let syncCalled = false;
+  let temporaryPath = null;
+  const fsApi = new Proxy(fs, {
+    get(target, property) {
+      if (property === "open") {
+        return async (filePath, flags, mode) => {
+          const handle = await target.open(filePath, flags, mode);
+          if (flags !== "wx") return handle;
+          temporaryPath = filePath;
+          return new Proxy(handle, {
+            get(handleTarget, handleProperty) {
+              if (handleProperty === "chmod") {
+                return async (...args) => {
+                  chmodCalled = true;
+                  return handleTarget.chmod(...args);
+                };
+              }
+              if (handleProperty === "sync") {
+                return async (...args) => {
+                  syncCalled = true;
+                  return handleTarget.sync(...args);
+                };
+              }
+              if (handleProperty === "close") {
+                return async (...args) => {
+                  temporaryHandleClosed = true;
+                  return handleTarget.close(...args);
+                };
+              }
+              const value = handleTarget[handleProperty];
+              return typeof value === "function" ? value.bind(handleTarget) : value;
+            },
+          });
+        };
+      }
+      if (property === "link" || property === "unlink") {
+        return async (...args) => {
+          assert.equal(temporaryHandleClosed, false, `fd chiuso prima di ${property}`);
+          return target[property](...args);
+        };
+      }
+      const value = target[property];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+  await writeDurableBytesExclusive(targetPath, bytes, {
+    fsApi,
+    ownershipId: "durable",
+  });
+  assert.equal(chmodCalled, true);
+  assert.equal(syncCalled, true);
+  assert.equal(temporaryHandleClosed, true);
+  assert.equal(await fs.readFile(targetPath, "utf8"), bytes.toString("utf8"));
+  assert.equal((await fs.lstat(targetPath)).nlink, 1);
+  await assert.rejects(fs.lstat(temporaryPath), { code: "ENOENT" });
+});
+
+test("crash child tra link e unlink recupera i twin owned di claim, staging, journal e commit", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-durable-twins-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const exporterPath = path.resolve(__dirname, "../scripts/export_review_pdf.cjs");
+  const childScript = String.raw`
+    const fs = require("node:fs/promises");
+    const { writeDurableBytesExclusive } = require(process.argv[1]);
+    const targetPath = process.argv[2];
+    const runId = process.argv[3];
+    const bytes = Buffer.from(process.argv[4], "base64");
+    let killed = false;
+    const fsApi = new Proxy(fs, {
+      get(target, property) {
+        if (property !== "link") {
+          const value = target[property];
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+        return async (source, destination) => {
+          await target.link(source, destination);
+          if (!killed && destination === targetPath) {
+            killed = true;
+            process.exit(80);
+          }
+        };
+      },
+    });
+    writeDurableBytesExclusive(targetPath, bytes, {
+      fsApi,
+      ownershipId: runId,
+    }).then(() => process.exit(0), () => process.exit(2));
+  `;
+  const cases = [
+    [".review.pdf.export-claim.json", "claimrun", Buffer.from('{"run_id":"claimrun"}\n')],
+    [".review.pdf.export-staging.json", "stagingrun", Buffer.from('{"run_id":"stagingrun"}\n')],
+    [".review.pdf.export-transaction.json", "txrun", Buffer.from('{"transaction_id":"txrun"}\n')],
+    [".review.pdf.export-transaction.json.committed", "txrun", Buffer.from("txrun\n")],
+  ];
+  for (const [name, runId, bytes] of cases) {
+    const targetPath = path.join(directory, name);
+    const crashed = spawnSync(
+      process.execPath,
+      ["-e", childScript, exporterPath, targetPath, runId, bytes.toString("base64")],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    assert.equal(crashed.error, undefined);
+    assert.equal(crashed.status, 80, crashed.stderr);
+    const twinName = (await fs.readdir(directory)).find(
+      (entry) => entry.startsWith(`${name}.`) && entry.endsWith(`.${runId}.tmp`),
+    );
+    assert.ok(twinName, `twin owned mancante per ${name}`);
+    const twinPath = path.join(directory, twinName);
+    assert.equal((await fs.lstat(targetPath)).nlink, 2);
+    assert.equal(
+      (await readStableSidecar(targetPath, { label: `Twin ${name}` })).toString("utf8"),
+      bytes.toString("utf8"),
+    );
+    assert.equal((await fs.lstat(targetPath)).nlink, 1);
+    await assert.rejects(fs.lstat(twinPath), { code: "ENOENT" });
+  }
+});
+
+test("un crash tra link e unlink del claim lascia un twin recuperabile dal retry", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-durable-child-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const output = path.join(directory, "review.pdf");
+  const exporterPath = path.resolve(__dirname, "../scripts/export_review_pdf.cjs");
+  const childScript = String.raw`
+    const fs = require("node:fs/promises");
+    const path = require("node:path");
+    const { acquireExportClaims } = require(process.argv[1]);
+    const output = process.argv[2];
+    let killed = false;
+    const fsApi = new Proxy(fs, {
+      get(target, property) {
+        if (property !== "link") {
+          const value = target[property];
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+        return async (source, destination) => {
+          await target.link(source, destination);
+          if (!killed && path.basename(destination).endsWith(".export-claim.json")) {
+            killed = true;
+            process.exit(79);
+          }
+        };
+      },
+    });
+    acquireExportClaims(
+      [{ kind: "file", finalPath: output }],
+      { fsApi, randomId: () => "crashrun" },
+    ).then(() => process.exit(0), () => process.exit(2));
+  `;
+  const crashed = spawnSync(process.execPath, ["-e", childScript, exporterPath, output], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(crashed.error, undefined);
+  assert.equal(crashed.status, 79, crashed.stderr);
+  const claimPath = path.join(directory, ".review.pdf.export-claim.json");
+  assert.equal((await fs.lstat(claimPath)).nlink, 2);
+  assert.ok((await fs.readdir(directory)).some((name) => name.endsWith(".crashrun.tmp")));
+
+  await writeExportArtifactsAtomically({
+    output,
+    pdfBytes: Buffer.from("recovered"),
+  });
+  assert.equal(await fs.readFile(output, "utf8"), "recovered");
+  assert.deepEqual(await fs.readdir(directory), ["review.pdf"]);
+});
+
+test("sidecar JSON e commit marker rifiutano hardlink e formato non canonico", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-sidecar-secure-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const victim = path.join(directory, "victim.json");
+  const sidecar = path.join(directory, ".review.pdf.export-staging.json");
+  await fs.writeFile(victim, "{}\n");
+  await fs.link(victim, sidecar);
+  await assert.rejects(
+    readStableSidecar(sidecar, { label: "Sidecar test" }),
+    /non sicuro/,
+  );
+  assert.equal(await fs.readFile(victim, "utf8"), "{}\n");
+
+  const output = path.join(directory, "review.pdf");
+  const journalPath = path.join(directory, ".review.pdf.export-transaction.json");
+  const commitPath = `${journalPath}.committed`;
+  const transactionId = "tx";
+  const temporaryPath = path.join(directory, ".review.pdf.tx.tmp");
+  await fs.rm(sidecar);
+  await fs.writeFile(output, "new");
+  await fs.writeFile(journalPath, `${JSON.stringify({
+    version: 1,
+    transaction_id: transactionId,
+    primary_output: output,
+    artifacts: [{
+      kind: "file",
+      finalPath: output,
+      temporaryPath,
+      backupPath: null,
+      hadOriginal: false,
+    }],
+  })}\n`);
+  await fs.writeFile(commitPath, "tx");
+  await assert.rejects(
+    writeExportArtifactsAtomically({ output, pdfBytes: Buffer.from("other") }),
+    /marker di commit export.*formato/i,
+  );
+  assert.equal(await fs.readFile(output, "utf8"), "new");
+});
+
+test("recovery è idempotente dopo un secondo fault di pulizia", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-double-fault-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const output = path.join(directory, "review.pdf");
+  await fs.writeFile(output, "old");
+  let publishFailed = false;
+  let cleanupFailed = false;
+  const fsApi = new Proxy(fs, {
+    get(target, property) {
+      if (property === "rename") {
+        return async (source, destination) => {
+          if (!publishFailed && path.basename(destination) === path.basename(output) && path.basename(source).endsWith(".tmp")) {
+            publishFailed = true;
+            const error = new Error("publish fault");
+            error.code = "EIO";
+            throw error;
+          }
+          return target.rename(source, destination);
+        };
+      }
+      if (property === "rm") {
+        return async (targetPath, options) => {
+          if (!cleanupFailed && String(targetPath).endsWith(".export-transaction.json")) {
+            cleanupFailed = true;
+            const error = new Error("cleanup fault");
+            error.code = "EIO";
+            throw error;
+          }
+          return target.rm(targetPath, options);
+        };
+      }
+      const value = target[property];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  await assert.rejects(
+    writeExportArtifactsAtomically({ output, pdfBytes: Buffer.from("new"), fsApi }),
+    /publish fault|cleanup fault/,
+  );
+  assert.equal(await fs.readFile(output, "utf8"), "old");
+  await assert.doesNotReject(
+    writeExportArtifactsAtomically({ output, pdfBytes: Buffer.from("recovered") }),
+  );
+  assert.equal(await fs.readFile(output, "utf8"), "recovered");
 });
 
 test("un journal preesistente non può indirizzare il recovery verso target secondari arbitrari", async (context) => {
@@ -1010,8 +2016,10 @@ test("un render_fingerprint live divergente blocca il replace atomico", async (c
   const output = path.join(directory, "review.pdf");
   await fs.writeFile(output, "previous-pdf");
   const approvedLive = {
+    schema_version: "1.4",
     proof_approved: true,
-    workflow_state: "prova_visuale_approvata",
+    feedback_pending: false,
+    workflow_state: "rendering",
     revision: 9,
     render_fingerprint: "a".repeat(64),
     proof: sampleContract().contentSnapshot.proof,
@@ -1034,7 +2042,35 @@ test("un render_fingerprint live divergente blocca il replace atomico", async (c
   );
   assert.equal(await fs.readFile(output, "utf8"), "previous-pdf");
   assert.deepEqual(await fs.readdir(directory), ["review.pdf"]);
-  assert.equal(runtime.liveRequests.length, 2);
+  assert.equal(runtime.liveRequests.length, 4);
+});
+
+test("feedback pending apparso al gate finale blocca il replace atomico", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-export-live-pending-"));
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const output = path.join(directory, "review.pdf");
+  await fs.writeFile(output, "previous-pdf");
+  const contract = sampleContract({ production: true });
+  const clean = {
+    schema_version: "1.4",
+    proof_approved: true,
+    feedback_pending: false,
+    workflow_state: contract.workflowState,
+    revision: contract.revision,
+    render_fingerprint: contract.contentSnapshot.render_fingerprint,
+    proof: contract.contentSnapshot.proof,
+    production: contract.contentSnapshot.production,
+  };
+  const runtime = mockExportRuntime({ liveSessions: [clean, { ...clean, feedback_pending: true }] });
+  await assert.rejects(
+    buildPdf({
+      baseUrl: new URL("http://127.0.0.1:8765/?token=secret"),
+      ...runtime,
+      commitPdf: (bytes, beforeReplace) => writePdfAtomically(output, bytes, { beforeReplace }),
+    }),
+    /feedback_pending=false/,
+  );
+  assert.equal(await fs.readFile(output, "utf8"), "previous-pdf");
 });
 
 test("un proof.browser live divergente blocca il replace atomico", async (context) => {
@@ -1044,7 +2080,9 @@ test("un proof.browser live divergente blocca il replace atomico", async (contex
   await fs.writeFile(output, "previous-pdf");
   const contract = sampleContract();
   const approvedLive = {
+    schema_version: "1.4",
     proof_approved: true,
+    feedback_pending: false,
     workflow_state: contract.workflowState,
     revision: contract.revision,
     render_fingerprint: contract.contentSnapshot.render_fingerprint,

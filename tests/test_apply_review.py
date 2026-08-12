@@ -2,17 +2,28 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from unittest import mock
 
-from support import SCRIPTS, base_feedback, base_manifest, run_apply, slide, write_json
+from support import (
+    SCRIPTS,
+    base_feedback,
+    base_manifest,
+    run_apply,
+    set_workflow_state,
+    slide,
+    write_json,
+)
 
 APPLY_SPEC = importlib.util.spec_from_file_location(
     "apply_review", SCRIPTS / "apply_review.py"
@@ -36,14 +47,23 @@ class ApplyReviewTest(unittest.TestCase):
         return result
 
     def apply_path(self, feedback_path: Path) -> subprocess.CompletedProcess:
+        return self.apply_cli(
+            self.workdir / "manifest.json",
+            feedback_path,
+            self.workdir / "session",
+        )
+
+    def apply_cli(
+        self, manifest_path: Path, feedback_path: Path, session_dir: Path
+    ) -> subprocess.CompletedProcess:
         return subprocess.run(
             [
                 sys.executable,
                 str(SCRIPTS / "apply_review.py"),
-                str(self.workdir / "manifest.json"),
+                str(manifest_path),
                 str(feedback_path),
                 "--session-dir",
-                str(self.workdir / "session"),
+                str(session_dir),
             ],
             capture_output=True,
             text=True,
@@ -67,6 +87,39 @@ class ApplyReviewTest(unittest.TestCase):
                 summary=changes.get("outro", "Corpo della chiusura."),
             ),
         ]
+
+    @unittest.skipUnless(
+        hasattr(os, "fchmod") and os.name != "nt",
+        "fchmod e symlink POSIX richiesti",
+    )
+    def test_atomic_copy_rejects_a_swapped_temporary_symlink(self) -> None:
+        source = self.workdir / "source.json"
+        source.write_bytes(b"backup-content")
+        destination = self.workdir / "backups" / "backup.json"
+        victim = self.workdir / "victim.json"
+        victim.write_bytes(b"external-content")
+        victim.chmod(0o644)
+        before_content = victim.read_bytes()
+        before_mode = stat.S_IMODE(victim.stat().st_mode)
+        displaced = self.workdir / "displaced.tmp"
+        real_fchmod = apply_review.os.fchmod
+
+        def inject_symlink(descriptor: int, mode: int) -> None:
+            real_fchmod(descriptor, mode)
+            generated = next(destination.parent.glob(".backup.json.*.tmp"))
+            generated.rename(displaced)
+            generated.symlink_to(victim)
+
+        with mock.patch.object(
+            apply_review.os, "fchmod", side_effect=inject_symlink
+        ), self.assertRaisesRegex(ValueError, "temporanea non sicura"):
+            apply_review.atomic_copy(source, destination)
+
+        self.assertFalse(destination.exists())
+        self.assertFalse(destination.is_symlink())
+        self.assertEqual(victim.read_bytes(), before_content)
+        self.assertEqual(stat.S_IMODE(victim.stat().st_mode), before_mode)
+        self.assertEqual(displaced.read_bytes(), source.read_bytes())
 
     def test_applies_edits_and_bumps_revision(self) -> None:
         original_manifest = base_manifest()
@@ -411,6 +464,144 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertIn("non valido o non sicuro", json.loads(result.stderr)["error"])
 
     @unittest.skipIf(os.name == "nt", "symlink non sempre disponibile su Windows")
+    def test_cli_rejects_manifest_and_session_symlinks_without_touching_targets(self) -> None:
+        manifest_target = self.workdir / "manifest-target.json"
+        write_json(manifest_target, base_manifest())
+        manifest_target.chmod(0o644)
+        manifest_before = manifest_target.read_bytes()
+        manifest_mode = stat.S_IMODE(manifest_target.stat().st_mode)
+        manifest_link = self.workdir / "manifest.json"
+        manifest_link.symlink_to(manifest_target)
+
+        result = self.apply_cli(
+            manifest_link,
+            self.workdir / "session" / "feedback.json",
+            self.workdir / "session",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("collegamento simbolico", json.loads(result.stderr)["error"])
+        self.assertEqual(manifest_target.read_bytes(), manifest_before)
+        self.assertEqual(stat.S_IMODE(manifest_target.stat().st_mode), manifest_mode)
+        self.assertFalse((self.workdir / "session").exists())
+
+        manifest_link.unlink()
+        write_json(manifest_link, base_manifest())
+        session_target = self.workdir / "session-target"
+        session_target.mkdir()
+        sentinel = session_target / "sentinel.txt"
+        sentinel.write_text("immutato", encoding="utf-8")
+        session_target.chmod(0o755)
+        target_mode = stat.S_IMODE(session_target.stat().st_mode)
+        target_entries = sorted(path.name for path in session_target.iterdir())
+        session_link = self.workdir / "session"
+        session_link.symlink_to(session_target, target_is_directory=True)
+
+        result = self.apply_cli(
+            manifest_link,
+            session_link / "feedback.json",
+            session_link,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("collegamento simbolico", json.loads(result.stderr)["error"])
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "immutato")
+        self.assertEqual(stat.S_IMODE(session_target.stat().st_mode), target_mode)
+        self.assertEqual(
+            sorted(path.name for path in session_target.iterdir()), target_entries
+        )
+
+    @unittest.skipIf(os.name == "nt", "symlink non sempre disponibile su Windows")
+    def test_cli_rejects_symlinked_parent_components_before_creating_session(self) -> None:
+        manifest_path = self.workdir / "manifest.json"
+        write_json(manifest_path, base_manifest())
+        target_parent = self.workdir / "target-parent"
+        target_parent.mkdir()
+        sentinel = target_parent / "sentinel.txt"
+        sentinel.write_text("immutato", encoding="utf-8")
+        target_parent.chmod(0o755)
+        before_mode = stat.S_IMODE(target_parent.stat().st_mode)
+        alias = self.workdir / "alias"
+        alias.symlink_to(target_parent, target_is_directory=True)
+
+        result = self.apply_cli(
+            manifest_path,
+            alias / "session" / "feedback.json",
+            alias / "session",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("collegamento simbolico", json.loads(result.stderr)["error"])
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "immutato")
+        self.assertEqual(stat.S_IMODE(target_parent.stat().st_mode), before_mode)
+        self.assertFalse((target_parent / "session").exists())
+
+        manifest_target_dir = self.workdir / "manifest-target-parent"
+        manifest_target = manifest_target_dir / "manifest.json"
+        write_json(manifest_target, base_manifest())
+        manifest_target.chmod(0o644)
+        manifest_before = manifest_target.read_bytes()
+        manifest_mode = stat.S_IMODE(manifest_target.stat().st_mode)
+        manifest_alias = self.workdir / "manifest-alias"
+        manifest_alias.symlink_to(manifest_target_dir, target_is_directory=True)
+        clean_session = self.workdir / "clean-session"
+
+        result = self.apply_cli(
+            manifest_alias / "manifest.json",
+            clean_session / "feedback.json",
+            clean_session,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("collegamento simbolico", json.loads(result.stderr)["error"])
+        self.assertEqual(manifest_target.read_bytes(), manifest_before)
+        self.assertEqual(stat.S_IMODE(manifest_target.stat().st_mode), manifest_mode)
+        self.assertFalse(clean_session.exists())
+
+    @unittest.skipIf(os.name == "nt", "hard link non sempre disponibile su Windows")
+    def test_private_json_hardlinks_never_touch_their_targets(self) -> None:
+        for private_name in ("feedback", "state", "archive"):
+            with self.subTest(private_name=private_name):
+                case_root = self.workdir / private_name
+                manifest_path = case_root / "manifest.json"
+                session_dir = case_root / "session"
+                feedback_path = session_dir / "feedback.json"
+                state_path = session_dir / "session-state.json"
+                feedback_id = str(uuid.uuid4())
+                archive_path = session_dir / "feedback-batches" / f"{feedback_id}.json"
+                feedback = base_feedback(self.full_batch(), feedback_id=feedback_id)
+                state = {
+                    "manifest": str(manifest_path.resolve()),
+                    "last_feedback_id": feedback_id,
+                    "last_feedback_path": str(archive_path.resolve()),
+                    "last_action": "feedback",
+                }
+                write_json(manifest_path, base_manifest())
+
+                victim = case_root / f"{private_name}-victim.json"
+                if private_name == "feedback":
+                    write_json(state_path, state)
+                    write_json(victim, feedback)
+                    feedback_path.parent.mkdir(parents=True, exist_ok=True)
+                    os.link(victim, feedback_path)
+                elif private_name == "state":
+                    write_json(feedback_path, feedback)
+                    write_json(victim, state)
+                    os.link(victim, state_path)
+                else:
+                    write_json(feedback_path, feedback)
+                    write_json(state_path, state)
+                    write_json(victim, feedback)
+                    archive_path.parent.mkdir(parents=True, exist_ok=True)
+                    os.link(victim, archive_path)
+
+                victim.chmod(0o644)
+                before = victim.read_bytes()
+                before_mode = stat.S_IMODE(victim.stat().st_mode)
+                result = self.apply_cli(manifest_path, feedback_path, session_dir)
+
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("hard link", json.loads(result.stderr)["error"])
+                self.assertEqual(victim.read_bytes(), before)
+                self.assertEqual(stat.S_IMODE(victim.stat().st_mode), before_mode)
+
+    @unittest.skipIf(os.name == "nt", "symlink non sempre disponibile su Windows")
     def test_transaction_lock_symlink_never_touches_its_target(self) -> None:
         manifest_path = self.workdir / "manifest.json"
         session_dir = self.workdir / "session"
@@ -594,6 +785,7 @@ class ApplyReviewTest(unittest.TestCase):
 
     def test_leaves_a_manifest_without_optional_sections_untouched(self) -> None:
         manifest = base_manifest()
+        manifest["schema_version"] = "1.3"
         del manifest["accessibility"]
         del manifest["proof"]
         result = self.apply(
@@ -654,7 +846,7 @@ class ApplyReviewTest(unittest.TestCase):
 
     def test_visual_approval_rejects_a_non_chromium_browser_without_writing(self) -> None:
         manifest = base_manifest()
-        manifest["workflow_state"] = "testi_approvati"
+        set_workflow_state(manifest, "testi_approvati")
         manifest_path = self.workdir / "manifest-for-fingerprint.json"
         write_json(manifest_path, manifest)
         fingerprint = apply_review.server_manifest_model(manifest_path)[
@@ -688,7 +880,7 @@ class ApplyReviewTest(unittest.TestCase):
 
     def test_visual_approval_rejects_an_incompatible_local_producer_without_writing(self) -> None:
         manifest = base_manifest()
-        manifest["workflow_state"] = "testi_approvati"
+        set_workflow_state(manifest, "testi_approvati")
         manifest["production"]["producer"] = "unrelated-renderer"
         manifest_path = self.workdir / "manifest-for-fingerprint.json"
         write_json(manifest_path, manifest)
@@ -715,7 +907,7 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertEqual(written["revision"], 1)
         self.assertFalse(written["proof"]["approved"])
 
-    def test_never_changes_the_workflow_state(self) -> None:
+    def test_never_advances_the_workflow_state(self) -> None:
         batch = self.full_batch(cover="Nuovo titolo")
         batch[1]["summary_bold"] = ["Prima frase."]
         batch[1]["summary_serif"] = []
@@ -731,9 +923,99 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertFalse(payload["workflow_state_changed"])
         self.assertEqual(self.manifest()["workflow_state"], "bozza")
 
+    def test_post_visual_edit_rewinds_atomically_to_the_reapproval_checkpoint(self) -> None:
+        manifest = base_manifest()
+        set_workflow_state(manifest, "qa")
+        manifest["proof"].update(
+            {
+                "approved": True,
+                "style_system_verified": True,
+                "browser": {"engine": "chromium", "major": 140},
+                "render_fingerprint": "c" * 64,
+            }
+        )
+
+        result = self.apply(
+            manifest,
+            base_feedback(self.full_batch(cover="Titolo corretto dopo la prova")),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        written = self.manifest()
+        self.assertTrue(payload["workflow_state_changed"])
+        self.assertIn("workflow_state", payload["changed"])
+        self.assertEqual(written["workflow_state"], "bozza")
+        self.assertFalse(written["proof"]["approved"])
+        self.assertFalse(written["proof"]["style_system_verified"])
+        self.assertNotIn("browser", written["proof"])
+        self.assertNotIn("workflow_receipts", written)
+
+    def test_post_visual_note_or_comment_reopens_review_even_without_slide_edits(self) -> None:
+        for changes in (
+            {"overall_note": "Non produrre: cambia la direzione visuale."},
+            {
+                "comments": [
+                    {
+                        "id": "comment-1", "kind": "brand", "slide_id": "",
+                        "field": "", "quote": "", "start": None, "end": None,
+                        "feedback": "Rivedere la composizione.",
+                    }
+                ]
+            },
+        ):
+            manifest = base_manifest()
+            set_workflow_state(manifest, "prova_visuale_approvata")
+            manifest["proof"].update(
+                {
+                    "approved": True,
+                    "style_system_verified": True,
+                    "browser": {"engine": "chromium", "major": 140},
+                    "render_fingerprint": "c" * 64,
+                }
+            )
+            feedback = base_feedback(self.full_batch(), **changes)
+            with self.subTest(changes=changes):
+                result = self.apply(manifest, feedback)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = json.loads(result.stdout)
+                self.assertTrue(payload["workflow_state_changed"])
+                written = self.manifest()
+                self.assertEqual(written["workflow_state"], "bozza")
+                self.assertFalse(written["proof"]["approved"])
+                self.assertFalse(written["proof"]["style_system_verified"])
+                self.assertNotIn("browser", written["proof"])
+                self.assertNotIn("workflow_receipts", written)
+
+    def test_editorial_changes_clear_stale_workflow_receipts(self) -> None:
+        manifest = base_manifest()
+        manifest["workflow_receipts"] = [
+            {
+                "from": "bozza",
+                "to": "testi_approvati",
+                "revision": 1,
+                "render_fingerprint": "a" * 64,
+                "evidence_sha256": "b" * 64,
+                "advanced_at": "2026-08-12T12:00:00+00:00",
+            }
+        ]
+        set_workflow_state(manifest, "testi_approvati")
+        feedback = base_feedback(
+            self.full_batch(**{"item-1": "Testo aggiornato."})
+        )
+
+        result = self.apply(manifest, feedback)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertIn("workflow_receipts", payload["changed"])
+        self.assertNotIn("workflow_receipts", self.manifest())
+        self.assertTrue(payload["workflow_state_changed"])
+        self.assertEqual(self.manifest()["workflow_state"], "bozza")
+
     def test_visual_checkpoint_rejects_legacy_or_incomplete_approval_batches(self) -> None:
         manifest = base_manifest()
-        manifest["workflow_state"] = "testi_approvati"
+        set_workflow_state(manifest, "testi_approvati")
         batch = self.full_batch()
         batch[1]["summary_serif"] = []
 
@@ -754,6 +1036,120 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertEqual(incomplete.returncode, 2)
         self.assertIn("fingerprint", json.loads(incomplete.stderr)["error"])
         self.assertFalse(self.manifest()["proof"]["approved"])
+
+    def visual_approval_feedback(
+        self,
+        manifest: dict,
+        *,
+        slides: list[dict] | None = None,
+        style: str | None = None,
+        logo_mode: str | None = None,
+    ) -> dict:
+        manifest_path = self.workdir / "fingerprint-source.json"
+        write_json(manifest_path, manifest)
+        base_model = apply_review.server_manifest_model(manifest_path)
+        candidate = copy.deepcopy(manifest)
+        if style is not None:
+            candidate["visual_style_system"] = style
+        if logo_mode is not None:
+            candidate["logo_mode"] = logo_mode
+        candidate_slides = slides or self.full_batch()
+        candidate_manifest = copy.deepcopy(candidate)
+        candidate_manifest["cover_title"] = candidate_slides[0]["title"]
+        candidate_manifest["cover_subtitle"] = candidate_slides[0]["summary"]
+        by_id = {item["id"]: item for item in candidate_manifest["items"]}
+        candidate_manifest["items"] = [
+            {
+                **by_id[slide_value["id"]],
+                "title": slide_value["title"],
+                "summary": slide_value["summary"],
+            }
+            for slide_value in candidate_slides
+            if slide_value["kind"] == "item"
+        ]
+        candidate_manifest["outro"] = {
+            **candidate_manifest["outro"],
+            "title": candidate_slides[-1]["title"],
+            "body": candidate_slides[-1]["summary"],
+        }
+        densest = max(
+            candidate_manifest["items"],
+            key=lambda item: len(item.get("title", "").strip())
+            + len(item.get("summary", "").strip()),
+        )["id"]
+        candidate_manifest["proof"]["slide_ids"] = ["cover", densest, "outro"]
+        candidate_model = apply_review.server_manifest_model(
+            manifest_path, manifest=candidate_manifest
+        )
+        return base_feedback(
+            candidate_slides,
+            action="approve",
+            approval_stage="visual_proof",
+            base_workflow_state=manifest["workflow_state"],
+            base_render_fingerprint=base_model["render_fingerprint"],
+            render_fingerprint=candidate_model["render_fingerprint"],
+            proof_slide_ids=candidate_model["proof"]["required_slide_ids"],
+            style_system_verified=True,
+            proof_browser={"engine": "chromium", "major": 140},
+            **({"visual_style_system": style} if style is not None else {}),
+            **({"logo_mode": logo_mode} if logo_mode is not None else {}),
+        )
+
+    def test_visual_proof_binding_preserves_the_complete_text_receipt(self) -> None:
+        manifest = base_manifest()
+        set_workflow_state(manifest, "testi_approvati")
+        original_receipt = copy.deepcopy(manifest["workflow_receipts"][0])
+
+        result = self.apply(manifest, self.visual_approval_feedback(manifest))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        written = self.manifest()
+        self.assertEqual(written["workflow_state"], "testi_approvati")
+        self.assertEqual(written["workflow_receipts"], [original_receipt])
+        self.assertTrue(written["proof"]["approved"])
+        self.assertTrue(written["proof"]["style_system_verified"])
+
+    def test_visual_only_reapproval_rewinds_to_texts_and_preserves_its_receipt(self) -> None:
+        manifest = base_manifest()
+        set_workflow_state(manifest, "qa")
+        original_receipt = copy.deepcopy(manifest["workflow_receipts"][0])
+        feedback = self.visual_approval_feedback(
+            manifest,
+            style="corporate-modular",
+            logo_mode="hidden",
+        )
+
+        result = self.apply(manifest, feedback)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        written = self.manifest()
+        self.assertEqual(written["workflow_state"], "testi_approvati")
+        self.assertEqual(written["workflow_receipts"], [original_receipt])
+        self.assertEqual(written["visual_style_system"], "corporate-modular")
+        self.assertEqual(written["logo_mode"], "hidden")
+        self.assertTrue(written["proof"]["approved"])
+
+    def test_visual_approval_cannot_smuggle_editorial_changes(self) -> None:
+        manifest = base_manifest()
+        set_workflow_state(manifest, "testi_approvati")
+        slides = self.full_batch(**{"item-1": "Testo editoriale cambiato."})
+        feedback = self.visual_approval_feedback(manifest, slides=slides)
+
+        result = self.apply(manifest, feedback)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("modifiche editoriali", json.loads(result.stderr)["error"])
+        self.assertEqual(self.manifest(), manifest)
+
+    def test_empty_feedback_cannot_reopen_an_approved_checkpoint(self) -> None:
+        manifest = base_manifest()
+        set_workflow_state(manifest, "testi_approvati")
+
+        result = self.apply(manifest, base_feedback(self.full_batch()))
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("feedback vuoto", json.loads(result.stderr)["error"])
+        self.assertEqual(self.manifest(), manifest)
 
     def test_persists_explicit_italic_and_removes_legacy_serif(self) -> None:
         batch = self.full_batch()
@@ -848,6 +1244,7 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("massimo 180", json.loads(result.stderr)["error"])
 
+        batch[1]["title"] = ""
         batch[1]["summary"] = "Uno due tre."
         batch[1]["summary_bold"] = ["Uno"]
         batch[1]["summary_italic"] = ["due"]

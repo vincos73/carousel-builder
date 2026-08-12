@@ -9,6 +9,45 @@ RELEASE = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="u
 TESTS = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
 
 
+def workflow_jobs(source: str) -> dict[str, str]:
+    """Return top-level job blocks without treating matches in run scripts as jobs."""
+    lines = source.splitlines()
+    try:
+        jobs_line = lines.index("jobs:")
+    except ValueError as error:
+        raise AssertionError("workflow privo della mappa jobs") from error
+    starts: list[tuple[str, int]] = []
+    for index in range(jobs_line + 1, len(lines)):
+        line = lines[index]
+        if line and not line.startswith((" ", "#")):
+            break
+        match = re.fullmatch(r"  ([a-zA-Z0-9_-]+):", line)
+        if match:
+            starts.append((match.group(1), index))
+    if not starts:
+        raise AssertionError("workflow privo di job strutturali")
+    jobs: dict[str, str] = {}
+    for position, (name, start) in enumerate(starts):
+        end = starts[position + 1][1] if position + 1 < len(starts) else len(lines)
+        jobs[name] = "\n".join(lines[start:end])
+    return jobs
+
+
+def workflow_steps(job: str) -> dict[str, str]:
+    """Return named step blocks from one already-scoped job block."""
+    lines = job.splitlines()
+    starts = [
+        (match.group(1).strip(), index)
+        for index, line in enumerate(lines)
+        if (match := re.fullmatch(r"      - name: (.+)", line))
+    ]
+    steps: dict[str, str] = {}
+    for position, (name, start) in enumerate(starts):
+        end = starts[position + 1][1] if position + 1 < len(starts) else len(lines)
+        steps[name] = "\n".join(lines[start:end])
+    return steps
+
+
 class WorkflowSyntaxGuardTests(unittest.TestCase):
     def test_runner_context_is_not_used_before_steps_exist(self):
         for name, workflow in (("tests", TESTS), ("release", RELEASE)):
@@ -17,6 +56,13 @@ class WorkflowSyntaxGuardTests(unittest.TestCase):
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_release_uses_the_same_pinned_browser_smoke_runtime_as_ci(self):
+        publish_job = workflow_jobs(RELEASE)["publish"]
+        self.assertIn("runs-on: ubuntu-24.04", publish_job)
+        self.assertIn('node-version: "22.23.1"', publish_job)
+        self.assertIn("test -x /usr/bin/google-chrome", publish_job)
+        self.assertIn("node --test tests/test_browser_smoke.cjs", publish_job)
+
     def test_repository_public_and_runtime_versions_are_identical(self):
         skill_pattern = re.compile(r"^Versione: \*\*([^*]+)\*\*$", re.MULTILINE)
         editor_pattern = re.compile(r'^EDITOR_VERSION = ["\']([^"\']+)["\']$', re.MULTILINE)
@@ -76,8 +122,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_release_never_silently_clobbers_existing_assets(self):
         self.assertNotIn("--clobber", RELEASE)
-        self.assertNotIn("gh release upload", RELEASE)
         self.assertIn('gh release create "$TAG"', RELEASE)
+        self.assertIn('gh release upload "$TAG" "dist/$asset_name"', RELEASE)
         self.assertIn('gh release edit "$TAG" --draft=false --latest', RELEASE)
         self.assertIn("gli asset non vengono sovrascritti", RELEASE)
         self.assertIn('select(.tag_name == \\"$TAG\\") | .id', RELEASE)
@@ -117,7 +163,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("sleep 2", guarded)
         self.assertNotIn('gh release create "$TAG"', guarded.split("\n", 1)[1])
 
-    def test_existing_draft_is_resumed_only_when_its_contract_is_exact(self):
+    def test_existing_partial_draft_is_resumed_only_after_byte_verification(self):
         resume = RELEASE.index('if [ "${#matching_release_ids[@]}" -eq 1 ]')
         publish = RELEASE.index('gh release edit "$TAG" --draft=false --latest')
         guarded = RELEASE[resume:publish]
@@ -129,7 +175,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("[.assets[].name] | sort | join", guarded)
         self.assertIn("all(.assets[]; .state == \"uploaded\" and .size > 0)", guarded)
         self.assertIn('resume_draft=true', guarded)
-        self.assertNotIn("gh release upload", guarded)
+        self.assertIn("declare -A verified_assets=()", guarded)
+        self.assertIn("La draft contiene un asset inatteso", guarded)
+        self.assertIn("La draft contiene due asset", guarded)
+        self.assertIn('cmp "dist/$asset_name" "$download_dir/$asset_name"', guarded)
+        self.assertIn(
+            'if [ -z "${verified_assets[$asset_name]+present}" ]',
+            guarded,
+        )
+        self.assertIn('gh release upload "$TAG" "dist/$asset_name"', guarded)
+        self.assertLess(
+            guarded.index('cmp "dist/$asset_name" "$download_dir/$asset_name"'),
+            guarded.index('gh release upload "$TAG" "dist/$asset_name"'),
+        )
         self.assertNotIn("--clobber", guarded)
 
     def test_release_publishes_checksums_with_both_packages(self):
@@ -156,6 +214,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "tests/quick_validate.py agent-plugin/skills/carousel-builder",
             "node --check scripts/export_review_pdf.cjs",
             "node --test tests/test_export_review_pdf.cjs",
+            "node --test tests/test_browser_smoke.cjs",
             "Verifica il mirror Agent Plugin",
             "unzip -t dist/carousel-builder.zip",
             "unzip -t dist/carousel-builder-agent-plugin.zip",
@@ -182,32 +241,32 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
 
 class TestsWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.jobs = workflow_jobs(TESTS)
+
     def test_ci_cancels_superseded_branch_runs(self):
         self.assertIn("concurrency:", TESTS)
         self.assertIn("github.event.pull_request.number || github.ref", TESTS)
         self.assertIn("cancel-in-progress: true", TESTS)
 
     def test_ci_checks_and_tests_the_exporter_without_installing_packages(self):
-        self.assertIn("node-export:", TESTS)
-        self.assertIn("actions/setup-node@v6", TESTS)
-        self.assertIn("node --check scripts/export_review_pdf.cjs", TESTS)
-        self.assertIn("node --check assets/review-editor/app.js", TESTS)
-        self.assertIn("node --test tests/test_export_review_pdf.cjs", TESTS)
-        self.assertNotIn("npm install", TESTS)
-        self.assertNotIn("npm ci", TESTS)
+        node_export = self.jobs["node-export"]
+        self.assertIn("actions/setup-node@v6", node_export)
+        self.assertIn("node --check scripts/export_review_pdf.cjs", node_export)
+        self.assertIn("node --check assets/review-editor/app.js", node_export)
+        self.assertIn("node --test tests/test_export_review_pdf.cjs", node_export)
+        self.assertNotIn("npm install", node_export)
+        self.assertNotIn("npm ci", node_export)
 
     def test_ci_covers_linux_windows_and_macos(self):
-        self.assertIn("runs-on: ubuntu-latest", TESTS)
-        self.assertIn("windows-unittest:", TESTS)
-        self.assertIn("runs-on: windows-latest", TESTS)
-        self.assertIn("macos-unittest:", TESTS)
-        self.assertIn("runs-on: macos-latest", TESTS)
+        self.assertIn("runs-on: ubuntu-latest", self.jobs["unittest"])
+        self.assertIn("runs-on: windows-latest", self.jobs["windows-unittest"])
+        self.assertIn("runs-on: macos-latest", self.jobs["macos-unittest"])
 
     def test_macos_runs_all_unit_modules_and_one_real_http_smoke(self):
-        macos_job = TESTS.split("  macos-unittest:", 1)[1].split(
-            "  node-export:", 1
-        )[0]
+        macos_job = self.jobs["macos-unittest"]
         for module in (
+            "test_advance_workflow",
             "test_apply_review",
             "test_quick_validate",
             "test_review_core",
@@ -223,20 +282,53 @@ class TestsWorkflowTests(unittest.TestCase):
         )
         self.assertNotIn("unittest discover", macos_job)
 
+    def test_real_browser_smoke_is_mandatory_and_dependency_free(self):
+        browser_job = self.jobs["browser-smoke"]
+        steps = workflow_steps(browser_job)
+        self.assertIn("runs-on: ubuntu-24.04", browser_job)
+        self.assertIn("timeout-minutes: 5", browser_job)
+        self.assertIn("CHROME_PATH: /usr/bin/google-chrome", browser_job)
+        self.assertIn('node-version: "22.23.1"', browser_job)
+        self.assertIn("Verify hosted browser-smoke runtimes", steps)
+        self.assertIn("Check browser smoke syntax", steps)
+        self.assertIn("Run mandatory real-browser contract smoke", steps)
+        self.assertIn('test -x "$CHROME_PATH"', steps["Verify hosted browser-smoke runtimes"])
+        self.assertIn('"$CHROME_PATH" --version', steps["Verify hosted browser-smoke runtimes"])
+        self.assertIn(
+            "node --check tests/test_browser_smoke.cjs",
+            steps["Check browser smoke syntax"],
+        )
+        self.assertIn(
+            "node --test tests/test_browser_smoke.cjs",
+            steps["Run mandatory real-browser contract smoke"],
+        )
+        self.assertNotIn("continue-on-error", browser_job)
+        for forbidden in ("npm install", "npm ci", "npx ", "playwright install", "curl ", "wget "):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, browser_job)
+
+    def test_every_ci_job_has_a_timeout_and_checkout(self):
+        for name, job in self.jobs.items():
+            with self.subTest(job=name):
+                self.assertRegex(job, r"(?m)^    timeout-minutes: [1-9][0-9]*$")
+                self.assertIn("uses: actions/checkout@v5", job)
+
     def test_ci_validates_both_skill_copies(self):
-        self.assertIn("tests/quick_validate.py .", TESTS)
-        self.assertIn("tests/quick_validate.py agent-plugin/skills/carousel-builder", TESTS)
-        self.assertIn("for shared_path in SKILL.md references scripts assets agents", TESTS)
+        package_sync = self.jobs["package-sync"]
+        self.assertIn("tests/quick_validate.py .", package_sync)
+        self.assertIn("tests/quick_validate.py agent-plugin/skills/carousel-builder", package_sync)
+        self.assertIn("for shared_path in SKILL.md references scripts assets agents", package_sync)
 
     def test_ci_checks_skill_plugin_and_editor_version_parity(self):
-        self.assertIn("plugin_skill_version", TESTS)
-        self.assertIn("plugin_version", TESTS)
-        self.assertIn("editor_version", TESTS)
-        self.assertIn("plugin_editor_version", TESTS)
-        self.assertIn('test "$skill_version" = "$plugin_skill_version"', TESTS)
-        self.assertIn('test "$skill_version" = "$plugin_version"', TESTS)
-        self.assertIn('test "$skill_version" = "$editor_version"', TESTS)
-        self.assertIn('test "$skill_version" = "$plugin_editor_version"', TESTS)
+        package_sync = self.jobs["package-sync"]
+        self.assertIn("plugin_skill_version", package_sync)
+        self.assertIn("plugin_version", package_sync)
+        self.assertIn("editor_version", package_sync)
+        self.assertIn("plugin_editor_version", package_sync)
+        self.assertIn('test "$skill_version" = "$plugin_skill_version"', package_sync)
+        self.assertIn('test "$skill_version" = "$plugin_version"', package_sync)
+        self.assertIn('test "$skill_version" = "$editor_version"', package_sync)
+        self.assertIn('test "$skill_version" = "$plugin_editor_version"', package_sync)
 
 
 if __name__ == "__main__":

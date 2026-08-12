@@ -1,5 +1,13 @@
 # Capacità e controllo della produzione
 
+## Indice
+
+- [Preflight](#preflight)
+- [Contratto e invocazione local-editor](#contratto-di-produzione-ibrido)
+- [Scala e prova visuale](#master-esportazione-e-scala-tipografica)
+- [Controlli testuali, visivi e accessibilità](#controllo-testuale)
+- [Artefatti, QA e consegna](#controllo-degli-artefatti)
+
 ## Preflight
 
 Prima dell'onboarding determinare, senza installare nulla, se la sessione può:
@@ -47,7 +55,7 @@ Qualunque modalità diversa da `layout` deve:
 5. produrre prima la prova visuale e soltanto dopo il batch completo, usando strutture HTML/CSS/SVG deterministiche e trattando l'immagine come asset opzionale di copertina;
 6. restituire errori e output verificabili, senza sostituire asset, font o firma strutturale in modo invisibile.
 
-Nel percorso `local-editor`, anteprima approvata e produzione devono usare lo stesso albero `.slide-preview`, gli stessi asset e lo stesso foglio di stile. La modalità di produzione può nascondere soltanto i controlli dell'editor e riposizionare la sequenza per la cattura; non può ridefinire copy, tipografia, safe area o geometria del sistema visivo. Prima di creare il PDF, richiedere `proof.approved: true`, un `proof.render_fingerprint` uguale al fingerprint corrente e uno stato compreso fra `prova_visuale_approvata`, `rendering`, `qa` e `consegnato`; i soli alias legacy accettati per lavori preesistenti sono `approvato`, `approved`, `pubblicato` e `published`. Confrontare automaticamente revisione, fingerprint, sistema visivo, snapshot canonico del contenuto, ordine, rapporto 4:5, geometria normalizzata e pixel catturati dell'anteprima e della produzione. Ripetere il confronto dopo la cattura e subito prima della sostituzione atomica del file. Qualsiasi differenza è bloccante.
+Nel percorso `local-editor`, anteprima approvata e produzione devono usare lo stesso albero `.slide-preview`, gli stessi asset e lo stesso foglio di stile. La modalità di produzione può nascondere soltanto i controlli dell'editor e riposizionare la sequenza per la cattura; non può ridefinire copy, tipografia, safe area o geometria del sistema visivo. Prima di creare gli artefatti, richiedere schema `1.4`, stato esatto `rendering`, `proof.approved: true` e un `proof.render_fingerprint` uguale al fingerprint corrente. L'export canonico non è consentito negli stati `qa` o `consegnato`: il risultato attestato deve restare immutato fino alla consegna, mentre una correzione riapre il checkpoint appropriato. Confrontare automaticamente revisione, fingerprint, sistema visivo, contratto degli output, snapshot canonico del contenuto, ordine, rapporto 4:5, geometria normalizzata e pixel catturati dell'anteprima e della produzione. Ripetere il confronto dopo la cattura e subito prima della pubblicazione coordinata. Qualsiasi differenza o feedback durevole pendente è bloccante.
 
 Per questo percorso impostare `production.producer: approved-preview-dom-v2`. Il renderer locale rifiuta identificatori generici o appartenenti a un altro adapter: una prova prodotta altrove deve restare legata al proprio contratto e al proprio export.
 
@@ -55,16 +63,17 @@ Se un renderer o adapter non soddisfa questi requisiti, usare `layout` come fall
 
 ### Invocazione local-editor
 
-Dalla directory della skill, usare il runtime Node già verificato nel preflight e passare sempre l'URL completo dell'editor con token, un percorso PDF assoluto e la directory `node_modules` esistente che espone Playwright, Sharp e pdf-lib:
+Prima dell'export avanzare `prova_visuale_approvata -> rendering` secondo [workflow-state.md](workflow-state.md). Dalla directory della skill, usare il runtime Node già verificato nel preflight e passare sempre l'URL completo dell'editor con token, percorsi assoluti per PDF e risultato JSON e la directory `node_modules` esistente che espone Playwright, Sharp e pdf-lib:
 
 ```bash
 <node> scripts/export_review_pdf.cjs \
   --url "<http://127.0.0.1:porta/?token=token-sessione>" \
   --output "<percorso-assoluto/carousel.pdf>" \
-  --node-modules "<percorso-assoluto/node_modules>"
+  --node-modules "<percorso-assoluto/node_modules>" \
+  --result-json "<percorso-assoluto/render-result.json>"
 ```
 
-Se il browser non viene risolto automaticamente ma esiste già un eseguibile verificato, aggiungere `--chrome "<percorso-assoluto-browser>"`. Non installare dipendenze o browser per completare l'export. Considerare riuscita la produzione soltanto quando il comando termina con stato `ok` e dichiara `preview_production_parity: "exact"`, `live_session_verified: true` e `approval_verified: true`.
+Se il browser non viene risolto automaticamente ma esiste già un eseguibile verificato, aggiungere `--chrome "<percorso-assoluto-browser>"`. Non installare dipendenze o browser per completare l'export. Considerare riuscita la produzione soltanto quando il comando termina con stato `ok` e il risultato dichiara `result_schema: "carousel-builder-export-v1"`, `preview_production_parity: "exact"`, `live_session_verified: true` e `approval_verified: true`.
 
 Per ottenere nello stesso passaggio anche le singole card PNG a 1440×1800 e la contact sheet, aggiungere:
 
@@ -73,7 +82,11 @@ Per ottenere nello stesso passaggio anche le singole card PNG a 1440×1800 e la 
   --contact-sheet "<percorso-assoluto/contact-sheet.png>"
 ```
 
-`--png-dir` deve indicare una directory dedicata: non usare la home, la directory di lavoro o una cartella condivisa con altri file. Il PDF, i PNG e l'eventuale contact sheet vengono preparati prima del gate finale e pubblicati come gruppo coordinato soltanto se revisione, fingerprint, contratto live e ricontrollo pixel restano validi; un errore ordinario durante la pubblicazione attiva il rollback degli output già sostituiti. Ogni singolo target usa sostituzioni durevoli e, su POSIX, sincronizza anche le directory. Un arresto forzato esattamente tra due sostituzioni non equivale però a una transazione filesystem indivisibile tra più percorsi: verificare sempre l'intero set prima della consegna. I PNG incorporati nel PDF vengono riusati senza una nuova codifica. Il ricontrollo finale cattura di nuovo soltanto la pagina di produzione e confronta ogni digest RGBA con la parità anteprima/produzione già dimostrata nella prima passata.
+Gli output richiesti devono coincidere con `production.expected_outputs`: aggiungere `--png-dir` e `--contact-sheet` soltanto quando il manifest dichiara rispettivamente `png` e `contact_sheet`. `--png-dir` deve indicare una directory dedicata: non usare la home, la directory di lavoro o una cartella condivisa con altri file. PDF, directory PNG, contact sheet e risultato JSON devono usare target distinti e non annidati.
+
+Tutti gli output vengono preparati prima del gate finale e pubblicati come gruppo coordinato soltanto se revisione, fingerprint, contratto live e ricontrollo pixel restano validi. Il marker di staging impedisce a due export di usare gli stessi target; il journal durevole registra sostituzioni e backup, consente il rollback di una pubblicazione incompleta e completa la pulizia di una già committed. Dopo un arresto forzato, rieseguire l'export con lo stesso insieme di target: il recovery avviene prima di una nuova pubblicazione. Non cancellare manualmente marker, journal, backup o file temporanei; se non possono essere validati, l'esportatore si blocca senza indovinare.
+
+La pubblicazione coordinata non è una singola transazione filesystem indivisibile fra più percorsi: ispezionare comunque l'intero set prima della consegna. Ogni target usa sostituzioni durevoli e, su POSIX, sincronizza anche le directory. I PNG incorporati nel PDF vengono riusati senza ricodifica. Il PDF usa titolo e produttore stabili e date di creazione e modifica fissate: a parità di contenuto, asset, versione Chromium e pixel catturati produce byte ripetibili. Il ricontrollo finale cattura di nuovo soltanto la pagina di produzione e confronta ogni digest RGBA con la parità anteprima-produzione già dimostrata nella prima passata.
 
 ## Master, esportazione e scala tipografica
 
@@ -168,7 +181,7 @@ Verificare inoltre:
 
 Se uno dei cinque colori richiesti (`background_light`, `background_dark`, `text_on_light`, `text_on_dark`, `accent`) non è dichiarato esplicitamente o non usa `#RRGGBB`, non approvare il fallback mostrato dall'anteprima. Se una palette identificativa dichiarata non supera il contrasto minimo, segnalarlo e chiedere una scelta. Non alterarla silenziosamente.
 
-Correggere e renderizzare di nuovo gli artefatti interessati. Ripetere il controllo dopo ogni correzione.
+Se una correzione cambia manifest, profilo, copy, stile, logo o asset, applicarla tramite il flusso di review: `apply_review.py` riapre il checkpoint ancora valido, poi si ripetono le approvazioni e le transizioni richieste fino a `rendering`. Soltanto allora rieseguire l'export e ripetere tutti i controlli; non riesportare direttamente da `qa` o `consegnato`.
 
 ## Controllo degli artefatti
 
@@ -186,6 +199,8 @@ Prima della consegna verificare:
 - assenza di file incompleti o duplicati presentati come finali.
 
 Se un controllo fallisce, conservare gli output validi, mantenere lo stato precedente e offrire ripetizione o fallback. Non avanzare a `consegnato`.
+
+Nel percorso `local-editor`, ispezionare prima gli artefatti mentre lo stato è `rendering`, quindi avanzare `rendering -> qa` con il risultato JSON dell'export. Solo dopo la creazione della relativa ricevuta compilare il report `carousel-builder-qa-v1` descritto in [workflow-state.md](workflow-state.md), copiandone `render_evidence_sha256`; infine avanzare `qa -> consegnato` con lo stesso `render-result` e il report. Entrambe le transizioni ricalcolano i digest degli artefatti reali. Non compilare il report come semplice copia dell'esito automatico.
 
 ## Consegna
 

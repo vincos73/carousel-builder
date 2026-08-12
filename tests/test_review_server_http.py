@@ -18,7 +18,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from support import SCRIPTS, base_manifest, slide, write_json
+from support import SCRIPTS, base_manifest, set_workflow_state, slide, write_json
 
 
 def request(
@@ -160,7 +160,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
 
     def approved_snapshot_batch(self, workflow_state: str) -> bytes:
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-        manifest["workflow_state"] = workflow_state
+        set_workflow_state(manifest, workflow_state)
         manifest.pop("cover_title_serif", None)
         manifest["items"][0].pop("summary_serif", None)
         write_json(self.manifest_path, manifest)
@@ -206,6 +206,43 @@ class ReviewServerHTTPTest(unittest.TestCase):
     def test_accepts_localhost_as_host(self) -> None:
         status, _ = request(self.api("/api/session"), headers={"Host": "localhost"})
         self.assertEqual(status, 200)
+
+    def test_only_one_live_server_can_own_a_manifest_across_session_dirs(self) -> None:
+        second_session = self.workdir / "second-session"
+        command = [
+            sys.executable,
+            str(SCRIPTS / "review_server.py"),
+            str(self.manifest_path),
+            "--session-dir",
+            str(second_session),
+            "--port",
+            "0",
+        ]
+        blocked = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(blocked.returncode, 2, blocked.stdout)
+        self.assertIn("già servito", json.loads(blocked.stderr)["error"])
+
+        self.stop()
+        replacement = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            ready = json.loads(replacement.stdout.readline())
+            self.assertEqual(ready["manifest"], str(self.manifest_path))
+        finally:
+            replacement.terminate()
+            replacement.wait(timeout=10)
+            replacement.stdout.close()
+            replacement.stderr.close()
 
     def test_serves_the_static_assets(self) -> None:
         for path in (
@@ -645,7 +682,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
             "consegnato",
         ):
             manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-            manifest["workflow_state"] = workflow_state
+            set_workflow_state(manifest, workflow_state)
             write_json(self.manifest_path, manifest)
             status, later_model = json_request(self.api("/api/session"))
             self.assertEqual(status, 200, later_model)
@@ -721,7 +758,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
 
     def test_visual_approve_and_edit_requires_feedback_before_reapproval(self) -> None:
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-        manifest["workflow_state"] = "testi_approvati"
+        set_workflow_state(manifest, "testi_approvati")
         manifest.pop("cover_title_serif", None)
         manifest["items"][0].pop("summary_serif", None)
         write_json(self.manifest_path, manifest)
@@ -761,7 +798,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
             headers={"Content-Type": "application/json"},
         )
         self.assertEqual(status, 422, rejected)
-        self.assertIn("proof_slide_ids", rejected["error"])
+        self.assertIn("modifiche editoriali", rejected["error"])
         self.assertFalse((self.session_dir / "feedback.json").exists())
 
     def test_stale_profile_approval_cannot_cross_the_visual_checkpoint(self) -> None:
@@ -784,7 +821,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
             }
         ).encode("utf-8")
 
-        manifest["workflow_state"] = "testi_approvati"
+        set_workflow_state(manifest, "testi_approvati")
         write_json(self.manifest_path, manifest)
         status, rejected = json_request(
             self.api("/api/submit"),
@@ -969,6 +1006,9 @@ class ReviewServerHTTPTest(unittest.TestCase):
     def test_session_exposes_the_three_visual_proof_options(self) -> None:
         status, payload = json_request(self.api("/api/session"))
         self.assertEqual(status, 200)
+        self.assertFalse(payload["feedback_pending"])
+        self.assertIsNone(payload["last_feedback_id"])
+        self.assertIsNone(payload["applied_feedback_id"])
         proofs = payload["visual_proofs"]
         self.assertEqual(len(proofs["options"]), 3)
         self.assertEqual(proofs["selected_style_system"], "editorial-frame")
@@ -976,13 +1016,18 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.assertEqual(proofs["identity"]["typography"], payload["typography"])
 
     def test_refuses_a_second_batch_until_the_first_is_applied(self) -> None:
-        first, _ = json_request(
+        first, accepted = json_request(
             self.api("/api/submit"),
             method="POST",
             body=self.batch(),
             headers={"Content-Type": "application/json"},
         )
         self.assertEqual(first, 200)
+        session_status, session = json_request(self.api("/api/session"))
+        self.assertEqual(session_status, 200, session)
+        self.assertTrue(session["feedback_pending"])
+        self.assertEqual(session["last_feedback_id"], accepted["feedback_id"])
+        self.assertIsNone(session["applied_feedback_id"])
         second, payload = json_request(
             self.api("/api/submit"),
             method="POST",
