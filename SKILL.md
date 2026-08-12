@@ -5,15 +5,17 @@ description: Trasforma URL, articoli, newsletter, note e testi in caroselli edit
 
 # Carousel Builder
 
-Versione: **2.8.12**
+Versione: **2.9.0**
 
 Creare caroselli separando fonte, identità, testi, prova visuale, produzione e QA. Richiedere due approvazioni distinte prima del rendering completo: prima profilo e testi, poi la prova visuale. Una richiesta iniziale di creare un carosello autorizza la proposta editoriale, non la produzione grafica.
 
 Non ricavare identità, logo, URL, firma o attribuzioni dalla fonte, dalla memoria o dal profilo personale. Usare solo ciò che l'utente fornisce o approva esplicitamente.
 
-Usare soltanto strumenti già disponibili. Non installare pacchetti e non scaricare browser, font o dipendenze. Nel percorso locale eseguire esclusivamente gli script inclusi e verificati dalla skill: `scripts/review_server.py`, `scripts/apply_review.py`, `scripts/advance_workflow.py` e `scripts/export_review_pdf.cjs`. Recuperare risorse esterne soltanto da una fonte fornita o approvata dall'utente.
+Usare soltanto strumenti già disponibili. Non installare pacchetti e non scaricare browser, font o dipendenze. Nel percorso locale eseguire esclusivamente gli script inclusi e verificati dalla skill: `scripts/review_server.py`, `scripts/apply_review.py`, `scripts/advance_workflow.py`, `scripts/carousel_status.py` e `scripts/export_review_pdf.cjs`. Recuperare risorse esterne soltanto da una fonte fornita o approvata dall'utente.
 
 Il workflow canonico è `bozza` → `testi_approvati` → `prova_visuale_approvata` → `rendering` → `qa` → `consegnato`. Nel percorso `local-editor` avanzare soltanto con `advance_workflow.py`, usando sessione, revisione attesa ed evidenza richiesta: non modificare `workflow_state` o le ricevute a mano e non auto-approvare. `apply_review.py` non avanza mai; quando arriva una correzione dopo un checkpoint, riapre atomicamente l'ultimo checkpoint ancora valido. Nei percorsi `adapter` e `layout` applicare gli stessi checkpoint con il contratto del produttore disponibile, senza invocare o simulare le attestazioni del renderer locale.
+
+Prima di decidere il passo successivo o dopo un recovery, eseguire `carousel_status.py` con manifest e cartella di sessione. Usare `next_action` come diagnosi, ma applicare comunque i gate dello script indicato: il comando non modifica file né approva.
 
 ## Routing delle istruzioni
 

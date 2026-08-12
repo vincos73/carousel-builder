@@ -99,12 +99,25 @@ Il repository include anche un pacchetto skills-only compatibile con Agent Plugi
 
 Il contenuto di `agent-plugin/skills/carousel-builder/` è una copia esatta della skill nella radice del repository. Ogni modifica va replicata in entrambe le posizioni: la CI confronta le due copie e fallisce se divergono.
 
+## Diagnosi del workflow locale
+
+La versione 2.9 aggiunge un controllo JSON unico e read-only. Valida manifest, proof e sessione, segnala feedback pendente e indica il prossimo passo sicuro senza modificare lo stato:
+
+```bash
+python3 scripts/carousel_status.py /percorso/manifest.json \
+  --session-dir /percorso/sessione
+```
+
+Il campo `next_action` restituisce la fase di revisione, il comando di apply/advance o gli output attesi dall'export. Senza `--session-dir` il comando esegue una validazione statica e dichiara esplicitamente che lo stato del feedback non è verificabile.
+
 ## Sviluppo
 
-I quattro script del percorso `local-editor` sono coperti da test automatici. Il server, l'applicazione del feedback e l'avanzamento verificato del workflow usano la sola libreria standard Python; l'esportatore PDF usa le librerie Node già disponibili nell'ambiente. L'export può pubblicare un risultato JSON con digest degli artefatti, poi legato alle ricevute di stato e al report QA:
+I cinque entrypoint del percorso `local-editor` sono coperti da test automatici. Il contratto manifest e gli strumenti Python usano la sola libreria standard; l'esportatore PDF usa le librerie Node già disponibili nell'ambiente. La CI esegue anche il percorso completo con server e Chromium reali, usando dipendenze di test bloccate nel lockfile. L'export può pubblicare un risultato JSON con digest degli artefatti, poi legato alle ricevute di stato e al report QA:
 
 ```bash
 python3 -m unittest discover -s tests -t tests -v
+node --test tests/test_export_review_pdf.cjs
+npm ci --ignore-scripts && node --test tests/test_export_review_pdf_e2e.cjs
 ```
 
 ## Feedback

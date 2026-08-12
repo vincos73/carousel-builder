@@ -28,6 +28,7 @@ from review_core import (  # noqa: E402
     validate_canonical_workflow_transition,
     validate_workflow_receipts,
 )
+from manifest_contract import validated_revision  # noqa: E402
 from review_server import (  # noqa: E402
     RENDER_CONTRACT,
     absolute_input_path,
@@ -66,13 +67,6 @@ def read_json_object(path: Path, *, label: str) -> dict:
     if not isinstance(value, dict):
         raise ValueError(f"{label} deve contenere un oggetto JSON")
     return value
-
-
-def validated_revision(manifest: dict) -> int:
-    revision = manifest.get("revision", 1)
-    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
-        raise ValueError("revision deve essere un intero non negativo")
-    return revision
 
 
 def require_review_approval(manifest: dict, *, stage: str, revision: int) -> None:

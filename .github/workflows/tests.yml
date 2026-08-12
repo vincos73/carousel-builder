@@ -118,6 +118,35 @@ jobs:
       - name: Run exporter regression tests
         run: node --test tests/test_export_review_pdf.cjs
 
+  export-e2e:
+    # This is the full publication path: real server, hosted Chrome, pinned
+    # exporter dependencies and durable PDF/PNG/contact-sheet/result outputs.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      CHROME_PATH: /usr/bin/google-chrome
+      PYTHON: python
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.23.1"
+          cache: npm
+      - name: Install pinned exporter dependencies
+        run: npm ci --ignore-scripts
+      - name: Verify hosted export runtimes
+        run: |
+          test -x "$CHROME_PATH"
+          "$CHROME_PATH" --version
+          python --version
+          node --version
+          npm audit --audit-level=high
+      - name: Run mandatory real export E2E
+        run: node --test tests/test_export_review_pdf_e2e.cjs
+
   package-sync:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -140,11 +169,13 @@ jobs:
           skill_version=$(grep -oP '(?<=^Versione: \*\*)[^*]+' SKILL.md)
           plugin_skill_version=$(grep -oP '(?<=^Versione: \*\*)[^*]+' agent-plugin/skills/carousel-builder/SKILL.md)
           plugin_version=$(python -c "import json;print(json.load(open('agent-plugin/plugin.json'))['version'])")
+          ci_package_version=$(python -c "import json;print(json.load(open('package.json'))['version'])")
           editor_version=$(python -c "import re;print(re.search(r'^EDITOR_VERSION = \"([^\"]+)\"$', open('scripts/review_server.py').read(), re.M).group(1))")
           plugin_editor_version=$(python -c "import re;print(re.search(r'^EDITOR_VERSION = \"([^\"]+)\"$', open('agent-plugin/skills/carousel-builder/scripts/review_server.py').read(), re.M).group(1))")
-          echo "SKILL.md=$skill_version plugin-SKILL.md=$plugin_skill_version plugin.json=$plugin_version root-editor=$editor_version plugin-editor=$plugin_editor_version"
+          echo "SKILL.md=$skill_version plugin-SKILL.md=$plugin_skill_version plugin.json=$plugin_version package.json=$ci_package_version root-editor=$editor_version plugin-editor=$plugin_editor_version"
           test "$skill_version" = "$plugin_skill_version"
           test "$skill_version" = "$plugin_version"
+          test "$skill_version" = "$ci_package_version"
           test "$skill_version" = "$editor_version"
           test "$skill_version" = "$plugin_editor_version"
       - name: La licenza MIT deve essere inclusa nel pacchetto Agent Plugin
