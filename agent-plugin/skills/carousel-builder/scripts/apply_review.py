@@ -89,6 +89,12 @@ def atomic_copy(source: Path, destination: Path) -> None:
             os.fchmod(descriptor, 0o600)
         os.fsync(descriptor)
         verify_temporary_copy(temporary, descriptor)
+        # Windows does not allow os.replace while the verified temporary file
+        # is still open without delete sharing.  Keep the fd-bound verification
+        # on every platform, then close only at the Windows publish boundary.
+        if os.name == "nt":
+            os.close(descriptor)
+            descriptor = None
         os.replace(temporary, destination)
         fsync_directory(destination.parent)
     finally:

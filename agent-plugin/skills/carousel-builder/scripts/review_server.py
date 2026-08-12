@@ -205,14 +205,17 @@ def path_entry_exists(path: Path) -> bool:
 
 
 def _stable_stat_signature(path_stat: os.stat_result) -> tuple[int, ...]:
-    return (
+    signature = (
         path_stat.st_dev,
         path_stat.st_ino,
         path_stat.st_size,
         path_stat.st_mtime_ns,
-        path_stat.st_ctime_ns,
         path_stat.st_nlink,
     )
+    # On Windows, ctime is creation-time metadata and the value exposed by a
+    # pathname stat can differ from the value exposed by the already-open file
+    # handle.  Inode, size, mtime and link-count still bind the stable read.
+    return signature if os.name == "nt" else signature + (path_stat.st_ctime_ns,)
 
 
 def _validate_private_file_stat(path: Path, path_stat: os.stat_result) -> None:

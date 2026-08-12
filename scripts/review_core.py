@@ -719,6 +719,13 @@ def atomic_write_json(
         _fchmod_open_file(descriptor, target_mode)
         os.fsync(descriptor)
         _verify_open_temporary_entry(temporary, descriptor, expected_nlink=1)
+        # Windows denies rename/replace while this process still owns a handle
+        # without FILE_SHARE_DELETE.  POSIX keeps the descriptor open through
+        # publication for the strongest possible pathname binding; on Windows
+        # the verified handle must be closed immediately before os.replace.
+        if os.name == "nt":
+            os.close(descriptor)
+            descriptor = None
         os.replace(temporary, path)
         fsync_directory(path.parent)
     finally:
