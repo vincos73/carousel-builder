@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: "3.13"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -158,11 +158,15 @@ jobs:
         run: |
           set -euo pipefail
           expected_assets="SHA256SUMS,carousel-builder-agent-plugin.zip,carousel-builder.zip"
-          mapfile -t matching_release_ids < <(gh api \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/$GITHUB_REPOSITORY/releases" \
-            --paginate \
-            --jq ".[] | select(.tag_name == \"$TAG\") | .id")
+          load_matching_release_ids() {
+            mapfile -t matching_release_ids < <(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$GITHUB_REPOSITORY/releases" \
+              --paginate \
+              --jq ".[] | select(.tag_name == \"$TAG\") | .id")
+          }
+          matching_release_ids=()
+          load_matching_release_ids
           if [ "${#matching_release_ids[@]}" -gt 1 ]; then
             echo "::error::Più release condividono il tag $TAG; pubblicazione interrotta."
             exit 1
@@ -180,11 +184,21 @@ jobs:
               dist/carousel-builder.zip \
               dist/carousel-builder-agent-plugin.zip \
               dist/SHA256SUMS
-            mapfile -t matching_release_ids < <(gh api \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/$GITHUB_REPOSITORY/releases" \
-              --paginate \
-              --jq ".[] | select(.tag_name == \"$TAG\") | .id")
+            # La lista release può essere eventualmente consistente subito
+            # dopo la creazione. Attendi l'ID senza creare una seconda draft.
+            for attempt in {1..10}; do
+              load_matching_release_ids
+              if [ "${#matching_release_ids[@]}" -gt 1 ]; then
+                echo "::error::Più release condividono il tag $TAG; pubblicazione interrotta."
+                exit 1
+              fi
+              if [ "${#matching_release_ids[@]}" -eq 1 ]; then
+                break
+              fi
+              if [ "$attempt" -lt 10 ]; then
+                sleep 2
+              fi
+            done
             if [ "${#matching_release_ids[@]}" -ne 1 ]; then
               echo "::error::La draft $TAG appena creata non è risolvibile in modo univoco."
               exit 1
