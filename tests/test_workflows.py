@@ -94,8 +94,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertLess(create, publish)
         between = RELEASE[create:publish]
         self.assertIn("--draft", between)
-        self.assertIn('"/repos/$GITHUB_REPOSITORY/releases"', between)
-        self.assertIn("select(.tag_name", between)
+        self.assertIn("load_matching_release_ids", between)
+        self.assertIn('"/repos/$GITHUB_REPOSITORY/releases"', RELEASE)
+        self.assertIn("select(.tag_name", RELEASE)
         self.assertIn('if [ "$(jq -r \'.draft\'', between)
         self.assertIn('"/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"', between)
         self.assertIn('Accept: application/octet-stream', between)
@@ -103,6 +104,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('unzip -t "$download_dir/carousel-builder.zip"', between)
         self.assertIn('test "$(jq -r \'.prerelease\'', between)
         self.assertIn("Riprendo la release draft", RELEASE)
+
+    def test_new_draft_resolution_retries_eventual_consistency(self):
+        create = RELEASE.index('gh release create "$TAG"')
+        verify = RELEASE.index(
+            'if [ "${#matching_release_ids[@]}" -ne 1 ]', create
+        )
+        guarded = RELEASE[create:verify]
+        self.assertIn("for attempt in {1..10}", guarded)
+        self.assertIn("load_matching_release_ids", guarded)
+        self.assertIn('if [ "$attempt" -lt 10 ]', guarded)
+        self.assertIn("sleep 2", guarded)
+        self.assertNotIn('gh release create "$TAG"', guarded.split("\n", 1)[1])
 
     def test_existing_draft_is_resumed_only_when_its_contract_is_exact(self):
         resume = RELEASE.index('if [ "${#matching_release_ids[@]}" -eq 1 ]')
@@ -176,7 +189,7 @@ class TestsWorkflowTests(unittest.TestCase):
 
     def test_ci_checks_and_tests_the_exporter_without_installing_packages(self):
         self.assertIn("node-export:", TESTS)
-        self.assertIn("actions/setup-node@v4", TESTS)
+        self.assertIn("actions/setup-node@v6", TESTS)
         self.assertIn("node --check scripts/export_review_pdf.cjs", TESTS)
         self.assertIn("node --check assets/review-editor/app.js", TESTS)
         self.assertIn("node --test tests/test_export_review_pdf.cjs", TESTS)
