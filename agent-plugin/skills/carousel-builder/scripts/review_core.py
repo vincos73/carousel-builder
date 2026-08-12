@@ -844,7 +844,7 @@ def append_only_json(path: Path, value: dict) -> bool:
                             "Il batch append-only esiste già con contenuto diverso: "
                             f"{path.name}"
                         )
-                    if hasattr(os, "fchmod"):
+                    if hasattr(os, "fchmod") and os.name != "nt":
                         os.fchmod(stream.fileno(), 0o600)
             finally:
                 if existing_descriptor is not None:
