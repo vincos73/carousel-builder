@@ -120,8 +120,9 @@ def verify_temporary_copy(path: Path, descriptor: int) -> None:
         "st_nlink",
         "st_size",
         "st_mtime_ns",
-        "st_ctime_ns",
     )
+    if os.name != "nt":
+        stable_fields += ("st_ctime_ns",)
     if (
         not stat.S_ISREG(opened.st_mode)
         or not stat.S_ISREG(current.st_mode)

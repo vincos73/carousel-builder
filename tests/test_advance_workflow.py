@@ -476,6 +476,10 @@ class AdvanceWorkflowTest(unittest.TestCase):
 
         self.assertEqual(victim.read_bytes(), b"external-content")
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "Windows impedisce già la sostituzione mentre l'artefatto è aperto",
+    )
     def test_artifact_hash_rejects_path_replacement_during_read(self) -> None:
         artifact = self.workdir / "artifact.pdf"
         artifact.write_bytes(b"original-content")

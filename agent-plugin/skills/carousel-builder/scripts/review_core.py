@@ -416,6 +416,16 @@ class InterprocessLock:
 
 def _existing_mode(path: Path, fallback: int) -> int:
     """Read the mode of one stable, uniquely linked regular target."""
+    try:
+        initial = path.lstat()
+    except FileNotFoundError:
+        return fallback
+    if stat.S_ISLNK(initial.st_mode):
+        raise ValueError(
+            f"Il target JSON esistente non può essere un collegamento simbolico: {path}"
+        )
+    if not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1:
+        raise ValueError(f"Target JSON esistente non sicuro: {path}")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     descriptor = None
     try:
@@ -435,6 +445,7 @@ def _existing_mode(path: Path, fallback: int) -> int:
             not stat.S_ISREG(before.st_mode)
             or stat.S_ISLNK(current.st_mode)
             or not stat.S_ISREG(current.st_mode)
+            or (initial.st_dev, initial.st_ino) != (current.st_dev, current.st_ino)
             or (before.st_dev, before.st_ino) != (current.st_dev, current.st_ino)
             or before.st_nlink != 1
             or current.st_nlink != 1
@@ -450,8 +461,9 @@ def _existing_mode(path: Path, fallback: int) -> int:
             "st_nlink",
             "st_size",
             "st_mtime_ns",
-            "st_ctime_ns",
         )
+        if os.name != "nt":
+            stable_fields += ("st_ctime_ns",)
         if (
             any(
                 getattr(before, field) != getattr(after, field)
@@ -495,8 +507,9 @@ def _verify_open_temporary_entry(
         "st_nlink",
         "st_size",
         "st_mtime_ns",
-        "st_ctime_ns",
     )
+    if os.name != "nt":
+        stable_fields += ("st_ctime_ns",)
     if (
         not stat.S_ISREG(opened.st_mode)
         or not stat.S_ISREG(current.st_mode)
@@ -565,8 +578,9 @@ def _read_stable_append_entry(
             "st_nlink",
             "st_size",
             "st_mtime_ns",
-            "st_ctime_ns",
         )
+        if os.name != "nt":
+            stable_fields += ("st_ctime_ns",)
         if (
             any(getattr(opened, field) != getattr(after, field) for field in stable_fields)
             or any(getattr(current, field) != getattr(latest, field) for field in stable_fields)
@@ -639,10 +653,14 @@ def _reconcile_append_only_residue(
                     "Il temporaneo append-only residuo contiene dati diversi: "
                     f"{temporary.name}"
                 )
+            if os.name == "nt":
+                os.close(descriptor)
+                descriptor = None
             _unlink_verified_append_entry(temporary, metadata)
             fsync_directory(path.parent)
         finally:
-            os.close(descriptor)
+            if descriptor is not None:
+                os.close(descriptor)
         return False
 
     target_descriptor = temporary_descriptor = None
@@ -666,8 +684,13 @@ def _reconcile_append_only_residue(
                 f"{path.name}"
             )
 
+        if os.name == "nt":
+            os.close(temporary_descriptor)
+            temporary_descriptor = None
+            os.close(target_descriptor)
+            target_descriptor = None
         _unlink_verified_append_entry(temporary, temporary_metadata)
-        after = os.fstat(target_descriptor)
+        after = target_metadata if target_descriptor is None else os.fstat(target_descriptor)
         latest = path.lstat()
         if (
             not stat.S_ISREG(after.st_mode)
@@ -798,8 +821,9 @@ def append_only_json(path: Path, value: dict) -> bool:
                         "st_ino",
                         "st_size",
                         "st_mtime_ns",
-                        "st_ctime_ns",
                     )
+                    if os.name != "nt":
+                        stable_fields += ("st_ctime_ns",)
                     if (
                         any(
                             getattr(opened, field) != getattr(after, field)
@@ -841,10 +865,26 @@ def append_only_json(path: Path, value: dict) -> bool:
         # the next exact replay can safely reconcile.
         fsync_directory(path.parent)
         temporary_metadata = os.fstat(descriptor)
+        if os.name == "nt":
+            os.close(descriptor)
+            descriptor = None
         _unlink_verified_append_entry(temporary, temporary_metadata)
-        _verify_open_temporary_entry(path, descriptor, expected_nlink=1)
+        if descriptor is None:
+            published = path.lstat()
+            if (
+                not stat.S_ISREG(published.st_mode)
+                or (published.st_dev, published.st_ino)
+                != (temporary_metadata.st_dev, temporary_metadata.st_ino)
+                or published.st_nlink != 1
+            ):
+                raise ValueError(
+                    f"Il batch append-only è cambiato durante la pubblicazione: {path.name}"
+                )
+        else:
+            _verify_open_temporary_entry(path, descriptor, expected_nlink=1)
         fsync_directory(path.parent)
-        _verify_open_temporary_entry(path, descriptor, expected_nlink=1)
+        if descriptor is not None:
+            _verify_open_temporary_entry(path, descriptor, expected_nlink=1)
         return True
     finally:
         if descriptor is not None:

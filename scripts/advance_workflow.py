@@ -400,8 +400,9 @@ def sha256_regular_file(path: Path) -> str:
             "st_nlink",
             "st_size",
             "st_mtime_ns",
-            "st_ctime_ns",
         )
+        if os.name != "nt":
+            stable_fields += ("st_ctime_ns",)
         if (
             not stat.S_ISREG(before.st_mode)
             or not stat.S_ISREG(current.st_mode)
