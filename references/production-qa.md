@@ -47,7 +47,9 @@ Qualunque modalità diversa da `layout` deve:
 5. produrre prima la prova visuale e soltanto dopo il batch completo, usando strutture HTML/CSS/SVG deterministiche e trattando l'immagine come asset opzionale di copertina;
 6. restituire errori e output verificabili, senza sostituire asset, font o firma strutturale in modo invisibile.
 
-Nel percorso `local-editor`, anteprima approvata e produzione devono usare lo stesso albero `.slide-preview`, gli stessi asset e lo stesso foglio di stile. La modalità di produzione può nascondere soltanto i controlli dell'editor e riposizionare la sequenza per la cattura; non può ridefinire copy, tipografia, safe area o geometria del sistema visivo. Prima di creare il PDF, richiedere `proof.approved: true`, un `proof.render_fingerprint` uguale al fingerprint corrente e uno stato compreso fra `prova_visuale_approvata`, `rendering`, `qa` e `consegnato`; confrontare automaticamente revisione, fingerprint, sistema visivo, snapshot canonico del contenuto, ordine, rapporto 4:5, geometria normalizzata e pixel catturati dell'anteprima e della produzione. Ripetere il confronto dopo la cattura e subito prima della sostituzione atomica del file. Qualsiasi differenza è bloccante.
+Nel percorso `local-editor`, anteprima approvata e produzione devono usare lo stesso albero `.slide-preview`, gli stessi asset e lo stesso foglio di stile. La modalità di produzione può nascondere soltanto i controlli dell'editor e riposizionare la sequenza per la cattura; non può ridefinire copy, tipografia, safe area o geometria del sistema visivo. Prima di creare il PDF, richiedere `proof.approved: true`, un `proof.render_fingerprint` uguale al fingerprint corrente e uno stato compreso fra `prova_visuale_approvata`, `rendering`, `qa` e `consegnato`; i soli alias legacy accettati per lavori preesistenti sono `approvato`, `approved`, `pubblicato` e `published`. Confrontare automaticamente revisione, fingerprint, sistema visivo, snapshot canonico del contenuto, ordine, rapporto 4:5, geometria normalizzata e pixel catturati dell'anteprima e della produzione. Ripetere il confronto dopo la cattura e subito prima della sostituzione atomica del file. Qualsiasi differenza è bloccante.
+
+Per questo percorso impostare `production.producer: approved-preview-dom-v2`. Il renderer locale rifiuta identificatori generici o appartenenti a un altro adapter: una prova prodotta altrove deve restare legata al proprio contratto e al proprio export.
 
 Se un renderer o adapter non soddisfa questi requisiti, usare `layout` come fallback dichiarato.
 
@@ -63,6 +65,15 @@ Dalla directory della skill, usare il runtime Node già verificato nel preflight
 ```
 
 Se il browser non viene risolto automaticamente ma esiste già un eseguibile verificato, aggiungere `--chrome "<percorso-assoluto-browser>"`. Non installare dipendenze o browser per completare l'export. Considerare riuscita la produzione soltanto quando il comando termina con stato `ok` e dichiara `preview_production_parity: "exact"`, `live_session_verified: true` e `approval_verified: true`.
+
+Per ottenere nello stesso passaggio anche le singole card PNG a 1440×1800 e la contact sheet, aggiungere:
+
+```bash
+  --png-dir "<directory-assoluta-dedicata/png>" \
+  --contact-sheet "<percorso-assoluto/contact-sheet.png>"
+```
+
+`--png-dir` deve indicare una directory dedicata: non usare la home, la directory di lavoro o una cartella condivisa con altri file. Il PDF, i PNG e l'eventuale contact sheet vengono preparati prima del gate finale e pubblicati come gruppo coordinato soltanto se revisione, fingerprint, contratto live e ricontrollo pixel restano validi; un errore ordinario durante la pubblicazione attiva il rollback degli output già sostituiti. Ogni singolo target usa sostituzioni durevoli e, su POSIX, sincronizza anche le directory. Un arresto forzato esattamente tra due sostituzioni non equivale però a una transazione filesystem indivisibile tra più percorsi: verificare sempre l'intero set prima della consegna. I PNG incorporati nel PDF vengono riusati senza una nuova codifica. Il ricontrollo finale cattura di nuovo soltanto la pagina di produzione e confronta ogni digest RGBA con la parità anteprima/produzione già dimostrata nella prima passata.
 
 ## Master, esportazione e scala tipografica
 
@@ -171,7 +182,7 @@ Prima della consegna verificare:
 - corrispondenza tra font richiesto, font approvato e famiglia effettivamente renderizzata;
 - corrispondenza tra testi approvati, manifest e artefatti;
 - in modalità `renderer` o `adapter`, presenza di `production.supported_style_systems` con il sistema selezionato e di `proof.style_system_verified: true`;
-- nel percorso `local-editor`, esito positivo del contratto `approved-preview-dom-v1`, prova visuale ancora approvata e legata agli asset correnti, e parità esatta di revisione, contenuto, geometria e pixel tra anteprima e produzione prima e dopo la cattura;
+- nel percorso `local-editor`, esito positivo del contratto `approved-preview-dom-v2`, prova visuale ancora approvata e legata agli asset correnti, e parità esatta di revisione, contenuto, geometria e pixel tra anteprima e produzione prima e dopo la cattura;
 - assenza di file incompleti o duplicati presentati come finali.
 
 Se un controllo fallisce, conservare gli output validi, mantenere lo stato precedente e offrire ripetizione o fallback. Non avanzare a `consegnato`.

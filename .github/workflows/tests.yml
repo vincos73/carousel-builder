@@ -40,6 +40,38 @@ jobs:
       - name: Run tests
         run: python -B -m unittest discover -s tests -t tests -v
 
+  macos-unittest:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Compile scripts
+        run: python -m compileall -q scripts tests
+      # macos-26-arm64 hosted runners can spend about 35 seconds on every
+      # fresh durable server session. The full 44-case HTTP suite already runs
+      # on Linux (four Python versions) and Windows; keep one real macOS
+      # submit smoke while still running every platform-independent test here.
+      - name: Run platform tests
+        env:
+          PYTHONPATH: tests
+        run: |
+          python -B -m unittest -v \
+            test_apply_review \
+            test_quick_validate \
+            test_review_core \
+            test_review_editor_assets \
+            test_review_server \
+            test_workflows
+      - name: Run durable HTTP smoke
+        env:
+          PYTHONPATH: tests
+        run: >-
+          python -B -m unittest -v
+          test_review_server_http.ReviewServerHTTPTest.test_accepts_a_batch_and_writes_the_session_files
+
   node-export:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -72,11 +104,17 @@ jobs:
           for shared_path in SKILL.md references scripts assets agents; do
             diff -r -x __pycache__ "$shared_path" "agent-plugin/skills/carousel-builder/$shared_path"
           done
-      - name: La versione della skill deve coincidere con quella del plugin
+      - name: Versioni skill, plugin ed editor devono coincidere
         run: |
           skill_version=$(grep -oP '(?<=^Versione: \*\*)[^*]+' SKILL.md)
+          plugin_skill_version=$(grep -oP '(?<=^Versione: \*\*)[^*]+' agent-plugin/skills/carousel-builder/SKILL.md)
           plugin_version=$(python -c "import json;print(json.load(open('agent-plugin/plugin.json'))['version'])")
-          echo "SKILL.md=$skill_version plugin.json=$plugin_version"
+          editor_version=$(python -c "import re;print(re.search(r'^EDITOR_VERSION = \"([^\"]+)\"$', open('scripts/review_server.py').read(), re.M).group(1))")
+          plugin_editor_version=$(python -c "import re;print(re.search(r'^EDITOR_VERSION = \"([^\"]+)\"$', open('agent-plugin/skills/carousel-builder/scripts/review_server.py').read(), re.M).group(1))")
+          echo "SKILL.md=$skill_version plugin-SKILL.md=$plugin_skill_version plugin.json=$plugin_version root-editor=$editor_version plugin-editor=$plugin_editor_version"
+          test "$skill_version" = "$plugin_skill_version"
           test "$skill_version" = "$plugin_version"
+          test "$skill_version" = "$editor_version"
+          test "$skill_version" = "$plugin_editor_version"
       - name: La licenza MIT deve essere inclusa nel pacchetto Agent Plugin
         run: cmp LICENSE agent-plugin/LICENSE

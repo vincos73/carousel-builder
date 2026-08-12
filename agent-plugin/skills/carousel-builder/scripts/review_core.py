@@ -64,6 +64,32 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_json(value: object) -> str:
+    """Hash a JSON-compatible value independently from its on-disk formatting."""
+    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def fsync_directory(path: Path) -> None:
+    """Persist directory-entry changes after replace, link or unlink operations."""
+    if os.name == "nt":
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _unlink_temporary(path: Path) -> None:
+    """Remove a temporary entry and persist that removal when it existed."""
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    fsync_directory(path.parent)
+
+
 def render_context_fingerprint(context: dict, asset_digests: dict[str, str]) -> str:
     return hashlib.sha256(
         canonical_json_bytes({"context": context, "assets": asset_digests})
@@ -96,6 +122,10 @@ def valid_sha256(value: object) -> str | None:
 
 
 def approval_stage_for_workflow(workflow_state: object) -> str:
+    if not isinstance(workflow_state, str):
+        raise ValueError(
+            f"workflow_state non valido per l'approvazione: {workflow_state!r}"
+        )
     if workflow_state in {
         "bozza",
         "draft",
@@ -214,11 +244,12 @@ def atomic_write_json(
             os.fsync(stream.fileno())
         os.chmod(temporary, target_mode)
         os.replace(temporary, path)
+        fsync_directory(path.parent)
     finally:
         if descriptor is not None:
             os.close(descriptor)
         try:
-            temporary.unlink(missing_ok=True)
+            _unlink_temporary(temporary)
         except OSError:
             pass
 
@@ -255,12 +286,13 @@ def append_only_json(path: Path, value: dict) -> bool:
                 if os.name != "nt":
                     raise
             return False
+        fsync_directory(path.parent)
         return True
     finally:
         if descriptor is not None:
             os.close(descriptor)
         try:
-            temporary.unlink(missing_ok=True)
+            _unlink_temporary(temporary)
         except OSError:
             pass
 
@@ -315,11 +347,22 @@ def sentence_line_breaks(value: str) -> str:
 
     def replace(match: re.Match[str]) -> str:
         punctuation = match.group(1)
-        prefix = value[: match.start()]
         if punctuation == ".":
-            token = re.search(r"([A-Za-zÀ-ÿ]+)$", prefix)
-            if token:
-                word = token.group(1)
+            # Walk only the adjacent token.  Slicing the whole prefix for every
+            # sentence made a long, punctuation-heavy card quadratic.
+            token_end = match.start()
+            token_start = token_end
+            while token_start > 0:
+                character = value[token_start - 1]
+                if not (
+                    "A" <= character <= "Z"
+                    or "a" <= character <= "z"
+                    or "À" <= character <= "ÿ"
+                ):
+                    break
+                token_start -= 1
+            if token_start < token_end:
+                word = value[token_start:token_end]
                 if len(word) == 1 or word.casefold() in SENTENCE_BREAK_ABBREVIATIONS:
                     return match.group(0)
         return punctuation + match.group(2) + "\n"

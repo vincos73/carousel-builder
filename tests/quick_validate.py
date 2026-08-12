@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 
 NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 
 
 def _frontmatter(skill_path: Path) -> dict[str, str]:
@@ -32,6 +34,47 @@ def _frontmatter(skill_path: Path) -> dict[str, str]:
     return values
 
 
+def _local_link_errors(root: Path) -> list[str]:
+    """Validate packaged Markdown links without following paths outside the skill."""
+    root = root.resolve()
+    documents = [root / "SKILL.md"]
+    references = root / "references"
+    if references.is_dir():
+        documents.extend(sorted(references.glob("*.md")))
+
+    errors: list[str] = []
+    for document in documents:
+        try:
+            source = document.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            errors.append(f"impossibile leggere {document.relative_to(root)}: {error}")
+            continue
+        for raw_target in MARKDOWN_LINK_PATTERN.findall(source):
+            target = raw_target.strip()
+            if target.startswith("<") and target.endswith(">"):
+                target = target[1:-1]
+            target = target.split(maxsplit=1)[0]
+            parsed = urlparse(target)
+            if parsed.scheme or parsed.netloc or target.startswith("#"):
+                continue
+            relative_target = unquote(parsed.path)
+            if not relative_target:
+                continue
+            resolved = (document.parent / relative_target).resolve()
+            try:
+                resolved.relative_to(root)
+            except ValueError:
+                errors.append(
+                    f"link locale fuori dalla skill in {document.relative_to(root)}: {target}"
+                )
+                continue
+            if not resolved.is_file():
+                errors.append(
+                    f"link locale mancante in {document.relative_to(root)}: {target}"
+                )
+    return errors
+
+
 def validate_skill(root: Path) -> list[str]:
     errors: list[str] = []
     skill_path = root / "SKILL.md"
@@ -53,6 +96,7 @@ def validate_skill(root: Path) -> list[str]:
         errors.append("description deve contenere tra 1 e 1024 caratteri")
     if "<" in description or ">" in description:
         errors.append("description non può contenere parentesi angolari")
+    errors.extend(_local_link_errors(root))
     return errors
 
 

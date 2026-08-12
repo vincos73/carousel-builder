@@ -140,6 +140,36 @@ assert.deepEqual(fontAssetDescriptors("italic", "italic"), { style: "italic", we
         self.assertIn('response.status === 422 && rejectedAction === "approve"', self.source)
         self.assertIn("await loadSession()", self.source)
 
+    def test_visual_approval_binds_viewed_proof_sample_and_browser(self) -> None:
+        submit = self.source.split("async function submit(action)", 1)[1].split("function schedulePoll", 1)[0]
+        gate = self.source.split("function collectApprovalIssues()", 1)[1].split("function validationTarget", 1)[0]
+        snapshot = self.source.split("function canonicalContentSnapshot()", 1)[1].split("function getRenderContract", 1)[0]
+        self.assertIn("requiredProofSlideIds()", gate)
+        self.assertIn("viewedSlideIds.has(slideId)", gate)
+        self.assertIn("model?.proof_approved !== true", gate)
+        self.assertIn("!productionRender", gate)
+        self.assertIn('model?.proof?.preview_width !== 480', gate)
+        self.assertIn("Math.abs(bounds.width - expectedWidth) > 0.5", gate)
+        self.assertIn("Math.abs(bounds.height - expectedHeight) > 0.5", gate)
+        self.assertIn("payload.proof_slide_ids = requiredProofSlideIds()", submit)
+        self.assertIn("payload.style_system_verified = true", submit)
+        self.assertIn("payload.proof_browser = browserProofDescriptor()", submit)
+        self.assertIn("proof: clone(model?.proof || {})", snapshot)
+        self.assertIn("production: clone(model?.production || {})", snapshot)
+        self.assertIn("proof-draft-changed", gate)
+        self.assertIn("normalizedSlides(draftSlides)", gate)
+        self.assertIn('engine, major', self.source)
+        self.assertNotIn('["firefox",', self.source)
+        self.assertNotIn('["webkit",', self.source)
+
+    def test_viewed_proof_state_is_bound_to_checkpoint_fingerprint_and_style(self) -> None:
+        key = self.source.split("function viewedStorageKey()", 1)[1].split("function visualSystemStorageKey", 1)[0]
+        self.assertIn("model?.approval_checkpoint", key)
+        self.assertIn("model?.render_fingerprint", key)
+        self.assertIn("selectedVisualSystem", key)
+        setter = self.source.split("function setVisualSystem", 1)[1].split("function loadViewState", 1)[0]
+        self.assertIn("loadViewState()", setter)
+
     def test_status_checkpoint_change_reloads_clean_and_preserves_dirty_or_pending(self) -> None:
         poll = self.source.split("async function pollStatus()", 1)[1].split("function clearPendingSelection", 1)[0]
         self.assertIn("statusBaseChange(status)", poll)
@@ -300,7 +330,7 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         ):
             with self.subTest(selector=selector):
                 self.assertIn(selector, self.stylesheet)
-        for declaration in ("width: 440px;", "border: 10px solid", "border-radius: 0;", "box-shadow: none;"):
+        for declaration in ("width: 480px;", "border: 10px solid", "border-radius: 0;", "box-shadow: none;"):
             with self.subTest(declaration=declaration):
                 self.assertIn(declaration, self.stylesheet.split('html[data-capture-target="true"] .slide-preview', 1)[1])
 
@@ -329,7 +359,7 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         stylesheet = (EDITOR_DIR / "styles.css").read_text(encoding="utf-8")
         exporter = EXPORTER.read_text(encoding="utf-8")
         self.assertIn("productionRender", self.source)
-        self.assertIn("approved-preview-dom-v1", self.source)
+        self.assertIn("approved-preview-dom-v2", self.source)
         self.assertIn("getSlideFrames", self.source)
         self.assertIn("getSlideGeometry", self.source)
         self.assertIn('preview.dataset.productionSource = "approved-preview"', self.source)

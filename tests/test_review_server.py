@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-from support import base_manifest, slide, write_json
+from support import base_manifest, legacy_manifest, slide, sync_derived_contract, write_json
 
 SPEC = importlib.util.spec_from_file_location(
     "review_server", Path(__file__).resolve().parent.parent / "scripts" / "review_server.py"
@@ -31,9 +31,12 @@ class ManifestModelTest(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
 
     def model(self, manifest: dict | None = None) -> dict:
+        value = manifest if manifest is not None else base_manifest()
+        if value.get("schema_version") == "1.3":
+            sync_derived_contract(value)
         path = self.workdir / "manifest.json"
         path.write_text(
-            json.dumps(manifest if manifest is not None else base_manifest()),
+            json.dumps(value),
             encoding="utf-8",
         )
         return review_server.manifest_model(path)
@@ -48,6 +51,155 @@ class ManifestModelTest(unittest.TestCase):
         self.assertTrue(model["slides"][1]["deletable"])
         self.assertFalse(model["slides"][-1]["deletable"])
 
+    def test_accepts_supported_legacy_versions_and_rejects_future_schema(self) -> None:
+        for version in (None, "1.0", "1.1", "1.2"):
+            with self.subTest(version=version):
+                model = self.model(legacy_manifest(version))
+                self.assertTrue(model["legacy_manifest"])
+                self.assertFalse(model["proof_approved"])
+        manifest = base_manifest()
+        manifest["schema_version"] = "99.0"
+        with self.assertRaisesRegex(ValueError, "non supportata"):
+            self.model(manifest)
+
+    def test_legacy_missing_item_id_gets_stable_fallback_but_current_rejects(self) -> None:
+        for version in (None, "1.0", "1.1", "1.2"):
+            manifest = legacy_manifest(version)
+            manifest["items"][0].pop("id")
+            manifest["proof"]["slide_ids"] = ["cover", "item-1", "outro"]
+            manifest["accessibility"]["reading_order"] = [
+                "cover", "item-1", "item-2", "outro"
+            ]
+            with self.subTest(version=version):
+                self.assertEqual(self.model(manifest)["slides"][1]["id"], "item-1")
+        manifest = base_manifest()
+        manifest["items"][0].pop("id")
+        with self.assertRaisesRegex(ValueError, r"items\[\]\.id"):
+            review_server.validate_manifest_contract(manifest)
+
+    def test_rejects_reserved_unsafe_or_overlong_item_ids(self) -> None:
+        for item_id in ("cover", "outro", "../escape", "x" * 65):
+            manifest = base_manifest()
+            manifest["items"][0]["id"] = item_id
+            with self.subTest(item_id=item_id), self.assertRaises(ValueError):
+                self.model(manifest)
+
+    def test_rejects_more_than_max_slides(self) -> None:
+        manifest = base_manifest()
+        manifest["items"] = [
+            {"id": f"item-{index}", "title": "", "summary": "Testo"}
+            for index in range(review_server.MAX_SLIDES)
+        ]
+        with self.assertRaisesRegex(ValueError, "massimo 50"):
+            self.model(manifest)
+
+    def test_current_schema_rejects_empty_or_semantically_invalid_slides(self) -> None:
+        cases = []
+        empty_cover = base_manifest()
+        empty_cover["cover_title"] = " "
+        cases.append((empty_cover, "cover_title"))
+        empty_item = base_manifest()
+        empty_item["items"][0].update({"title": "", "summary": ""})
+        cases.append((empty_item, "non può essere vuota"))
+        narrative_title = base_manifest()
+        narrative_title["items"][0]["title"] = "Titolo vietato"
+        cases.append((narrative_title, "modalità narrative"))
+        empty_outro = base_manifest()
+        empty_outro["outro"].update({"title": "", "body": ""})
+        cases.append((empty_outro, "chiusura"))
+        for manifest, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                self.model(manifest)
+
+    def test_manifest_enum_fields_reject_unhashable_json_values_cleanly(self) -> None:
+        fields = (
+            ("source_type", ["article"]),
+            ("sequence_mode", {"value": "narrative"}),
+            ("workflow_state", ["bozza"]),
+        )
+        for field, value in fields:
+            manifest = base_manifest()
+            manifest[field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
+                review_server.validate_manifest_contract(manifest)
+
+        manifest = base_manifest()
+        manifest["production"]["mode"] = ["renderer"]
+        with self.assertRaisesRegex(ValueError, "production.mode"):
+            review_server.validate_manifest_contract(manifest)
+
+    def test_current_schema_rejects_malformed_optional_contract_fields(self) -> None:
+        cases = (
+            ("outro.enabled", lambda manifest: manifest["outro"].update(enabled="yes")),
+            ("visual_style_system", lambda manifest: manifest.update(visual_style_system=["editorial-frame"])),
+            ("logo_mode", lambda manifest: manifest.update(logo_mode=["auto"])),
+            ("cover_mode", lambda manifest: manifest.update(cover_mode=["generated"])),
+            ("brand", lambda manifest: manifest.update(brand=[])),
+            ("typography", lambda manifest: manifest.update(typography=[])),
+            ("expected_outputs", lambda manifest: manifest["production"].update(expected_outputs=["pdf", "pdf"])),
+            ("proof.approved", lambda manifest: manifest["proof"].update(approved=1)),
+            ("proof.render_fingerprint", lambda manifest: manifest["proof"].update(render_fingerprint=["bad"])),
+        )
+        for field, mutate in cases:
+            manifest = base_manifest()
+            mutate(manifest)
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
+                review_server.validate_manifest_contract(manifest)
+
+    def test_current_schema_requires_explicit_480px_proof_width(self) -> None:
+        for value in (None, 479, "480"):
+            manifest = base_manifest()
+            if value is None:
+                manifest["format"].pop("preview_width")
+            else:
+                manifest["format"]["preview_width"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "preview_width"):
+                self.model(manifest)
+
+    def test_current_schema_requires_the_exact_render_dimensions(self) -> None:
+        expected = {
+            "ratio": "4:5",
+            "master_width": 1080,
+            "master_height": 1350,
+            "width": 1440,
+            "height": 1800,
+            "preview_width": 480,
+            "preview_height": 600,
+        }
+        for field, value in expected.items():
+            manifest = base_manifest()
+            manifest["format"][field] = value + 1 if isinstance(value, int) else "1:1"
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, f"format.{field}"):
+                self.model(manifest)
+
+    def test_current_schema_requires_canonical_proof_and_supported_producer(self) -> None:
+        manifest = base_manifest()
+        manifest["proof"]["slide_ids"] = ["cover", "item-1", "outro"]
+        with self.assertRaisesRegex(ValueError, "card più densa"):
+            review_server.validate_manifest_contract(manifest)
+        manifest = base_manifest()
+        manifest["production"]["supported_style_systems"] = ["corporate-modular"]
+        with self.assertRaisesRegex(ValueError, "deve includere"):
+            self.model(manifest)
+        for mode in ("renderer", "adapter"):
+            manifest = base_manifest()
+            manifest["production"].update({"mode": mode, "producer": ""})
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "producer"):
+                self.model(manifest)
+
+    def test_renderer_bundle_byte_changes_invalidate_fingerprint(self) -> None:
+        manifest = base_manifest()
+        baseline = self.model(manifest)["render_fingerprint"]
+        original = review_server.sha256_file
+
+        def changed_digest(path: Path) -> str:
+            if path.name == "styles.css":
+                return "f" * 64
+            return original(path)
+
+        with mock.patch.object(review_server, "sha256_file", side_effect=changed_digest):
+            self.assertNotEqual(self.model(manifest)["render_fingerprint"], baseline)
+
     def test_exposes_optional_cover_subtitle(self) -> None:
         manifest = base_manifest()
         manifest["cover_subtitle"] = "Ecco cosa puoi fare"
@@ -60,11 +212,20 @@ class ManifestModelTest(unittest.TestCase):
         unbound = self.model(manifest)
         self.assertFalse(unbound["proof_approved"])
         manifest["proof"]["render_fingerprint"] = unbound["render_fingerprint"]
+        self.assertFalse(self.model(manifest)["proof_approved"])
+        manifest["proof"].update(
+            {
+                "style_system_verified": True,
+                "browser": {"engine": "chromium", "major": 140},
+            }
+        )
         self.assertTrue(self.model(manifest)["proof_approved"])
         manifest["proof"]["approved"] = 1
-        self.assertFalse(self.model(manifest)["proof_approved"])
+        with self.assertRaisesRegex(ValueError, "proof.approved"):
+            self.model(manifest)
         manifest["proof"] = "invalid"
-        self.assertFalse(self.model(manifest)["proof_approved"])
+        with self.assertRaisesRegex(ValueError, "proof deve essere"):
+            self.model(manifest)
 
     def test_render_fingerprint_tracks_the_coarse_approval_checkpoint(self) -> None:
         manifest = base_manifest()
@@ -89,6 +250,12 @@ class ManifestModelTest(unittest.TestCase):
         self.assertNotEqual(visual["render_fingerprint"], profile["render_fingerprint"])
         manifest["proof"].update(
             {"approved": True, "render_fingerprint": visual["render_fingerprint"]}
+        )
+        manifest["proof"].update(
+            {
+                "style_system_verified": True,
+                "browser": {"engine": "chromium", "major": 140},
+            }
         )
         for workflow_state in (
             "prova_visuale_approvata",
@@ -125,11 +292,14 @@ class ManifestModelTest(unittest.TestCase):
                 }
             },
         }
+        manifest.pop("visual_style_system", None)
         initial = self.model(manifest)
         manifest["proof"].update(
             {
                 "approved": True,
                 "render_fingerprint": initial["render_fingerprint"],
+                "style_system_verified": True,
+                "browser": {"engine": "chromium", "major": 140},
             }
         )
         self.assertTrue(self.model(manifest)["proof_approved"])
@@ -171,6 +341,7 @@ class ManifestModelTest(unittest.TestCase):
             "name": "Studio",
             "visual_signature": {"style_system": "corporate_modular"},
         }
+        manifest.pop("visual_style_system", None)
         proofs = self.model(manifest)["visual_proofs"]
         self.assertEqual(proofs["selected_style_system"], "corporate-modular")
         self.assertEqual(
@@ -205,6 +376,9 @@ class ManifestModelTest(unittest.TestCase):
 
         manifest["visual_style_system"] = "non-esiste"
         manifest["cover_image"] = "manca.png"
+        with self.assertRaisesRegex(ValueError, "visual_style_system"):
+            self.model(manifest)
+        manifest["schema_version"] = "1.2"
         self.assertEqual(
             self.model(manifest)["visual_proofs"]["selected_style_system"],
             "editorial-frame",
@@ -306,10 +480,11 @@ class ManifestModelTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.model(manifest)
 
-    def test_falls_back_to_a_known_sequence_mode(self) -> None:
+    def test_rejects_an_unknown_sequence_mode_in_current_schema(self) -> None:
         manifest = base_manifest()
         manifest["sequence_mode"] = "qualcosa"
-        self.assertEqual(self.model(manifest)["sequence_mode"], "narrative")
+        with self.assertRaisesRegex(ValueError, "sequence_mode"):
+            self.model(manifest)
 
     def test_exposes_only_the_brand_summary(self) -> None:
         manifest = base_manifest()
@@ -379,7 +554,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.8.10")
+        self.assertEqual(model["editor_version"], "2.8.11")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
@@ -535,6 +710,7 @@ class ManifestModelTest(unittest.TestCase):
 
     def test_exposes_only_exact_emphasis_for_each_slide_field(self) -> None:
         manifest = base_manifest()
+        manifest["sequence_mode"] = "sectional"
         manifest["cover_title_bold"] = ["La lezione", "assente"]
         manifest["cover_title_accent"] = ["La lezione", "assente", "operativa"]
         manifest["cover_title_underline"] = ["operativa", "assente"]
@@ -678,6 +854,26 @@ class ValidateFeedbackTest(unittest.TestCase):
         self.assertEqual(str(uuid.UUID(result["feedback_id"])), result["feedback_id"])
         self.assertEqual(len(result["slides"]), 4)
 
+    def test_unhashable_json_fields_are_rejected_as_validation_errors(self) -> None:
+        cases = []
+        cases.append(self.payload(action=["feedback"]))
+
+        bad_slide_id = self.payload()
+        bad_slide_id["slides"][1]["id"] = ["item-1"]
+        cases.append(bad_slide_id)
+
+        bad_comment_kind = self.payload()
+        bad_comment_kind["comments"] = [{"kind": ["slide"], "slide_id": "item-1"}]
+        cases.append(bad_comment_kind)
+
+        bad_comment_slide = self.payload()
+        bad_comment_slide["comments"] = [{"kind": "slide", "slide_id": ["item-1"]}]
+        cases.append(bad_comment_slide)
+
+        for index, payload in enumerate(cases):
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                review_server.validate_feedback(payload, self.model)
+
     def test_accepts_a_canonical_client_feedback_uuid_and_rejects_other_ids(self) -> None:
         feedback_id = str(uuid.uuid4())
         result = review_server.validate_feedback(
@@ -805,6 +1001,9 @@ class ValidateFeedbackTest(unittest.TestCase):
                 action="approve",
                 base_workflow_state=visual_model["workflow_state"],
                 render_fingerprint=visual_model["render_fingerprint"],
+                proof_slide_ids=visual_model["proof"]["required_slide_ids"],
+                style_system_verified=True,
+                proof_browser={"engine": "chromium", "major": 140},
             ),
             visual_model,
         )
@@ -826,6 +1025,9 @@ class ValidateFeedbackTest(unittest.TestCase):
                     action="approve",
                     base_workflow_state=workflow_state,
                     render_fingerprint=reapproval_model["render_fingerprint"],
+                    proof_slide_ids=reapproval_model["proof"]["required_slide_ids"],
+                    style_system_verified=True,
+                    proof_browser={"engine": "chromium", "major": 140},
                 ),
                 reapproval_model,
             )
@@ -843,6 +1045,9 @@ class ValidateFeedbackTest(unittest.TestCase):
                     action="approve",
                     base_workflow_state=visual_model["workflow_state"],
                     render_fingerprint="0" * 64,
+                    proof_slide_ids=visual_model["proof"]["required_slide_ids"],
+                    style_system_verified=True,
+                    proof_browser={"engine": "chromium", "major": 140},
                 ),
                 visual_model,
             )
@@ -854,9 +1059,85 @@ class ValidateFeedbackTest(unittest.TestCase):
                     base_workflow_state=visual_model["workflow_state"],
                     render_fingerprint=visual_model["render_fingerprint"],
                     approval_stage="profile_text",
+                    proof_slide_ids=visual_model["proof"]["required_slide_ids"],
+                    style_system_verified=True,
+                    proof_browser={"engine": "chromium", "major": 140},
                 ),
                 visual_model,
             )
+
+    def test_visual_approval_requires_proof_attestation_and_supported_producer(self) -> None:
+        manifest = base_manifest()
+        manifest["workflow_state"] = "testi_approvati"
+        path = self.workdir / "proof-contract.json"
+        write_json(path, manifest)
+        model = review_server.manifest_model(path, include_internal=True)
+        slides = self.payload()["slides"]
+        slides[0]["title_serif"] = []
+        slides[1]["summary_serif"] = []
+        common = {
+            "action": "approve",
+            "base_workflow_state": model["workflow_state"],
+            "render_fingerprint": model["render_fingerprint"],
+        }
+        for missing in ("proof_slide_ids", "style_system_verified", "proof_browser"):
+            payload = self.payload(slides, **common)
+            payload.update(
+                {
+                    "proof_slide_ids": model["proof"]["required_slide_ids"],
+                    "style_system_verified": True,
+                    "proof_browser": {"engine": "chromium", "major": 140},
+                }
+            )
+            payload.pop(missing)
+            with self.subTest(missing=missing), self.assertRaises(ValueError):
+                review_server.validate_feedback(payload, model)
+
+        invalid_browser = self.payload(
+            slides,
+            **common,
+            proof_slide_ids=model["proof"]["required_slide_ids"],
+            style_system_verified=True,
+            proof_browser={"engine": "firefox", "major": 141},
+        )
+        with self.assertRaisesRegex(ValueError, "chromium"):
+            review_server.validate_feedback(invalid_browser, model)
+
+        incompatible_manifest = base_manifest()
+        incompatible_manifest["workflow_state"] = "testi_approvati"
+        incompatible_manifest["production"]["producer"] = "unrelated-renderer"
+        incompatible_path = self.workdir / "incompatible-renderer.json"
+        write_json(incompatible_path, incompatible_manifest)
+        incompatible_model = review_server.manifest_model(
+            incompatible_path, include_internal=True
+        )
+        with self.assertRaisesRegex(ValueError, "contratto renderer locale"):
+            review_server.validate_feedback(
+                self.payload(
+                    slides,
+                    action="approve",
+                    base_workflow_state=incompatible_model["workflow_state"],
+                    render_fingerprint=incompatible_model["render_fingerprint"],
+                    proof_slide_ids=incompatible_model["proof"]["required_slide_ids"],
+                    style_system_verified=True,
+                    proof_browser={"engine": "chromium", "major": 140},
+                ),
+                incompatible_model,
+            )
+
+        approved = review_server.validate_feedback(
+            self.payload(
+                slides,
+                **common,
+                proof_slide_ids=model["proof"]["required_slide_ids"],
+                style_system_verified=True,
+                proof_browser={"engine": "chromium", "major": 140},
+            ),
+            model,
+        )
+        self.assertEqual(approved["proof_slide_ids"], ["cover", "item-2", "outro"])
+        self.assertTrue(approved["style_system_verified"])
+        self.assertEqual(approved["proof_browser"]["engine"], "chromium")
 
     def test_approval_requires_the_server_issued_workflow_echo(self) -> None:
         slides = self.payload()["slides"]
@@ -1238,6 +1519,54 @@ class FeedbackTransactionTest(unittest.TestCase):
                 state_path=self.state_path,
                 manifest_path=self.manifest_path,
             )
+
+    def test_recovery_rejects_unhashable_journal_fields_as_validation_errors(self) -> None:
+        self.commit()
+        original = json.loads(self.journal_path.read_text(encoding="utf-8"))
+        for field, value, message in (
+            ("version", [2], "Journal feedback non valido"),
+            ("feedback.action", ["feedback"], "Journal feedback incoerente"),
+        ):
+            journal = json.loads(json.dumps(original))
+            if field == "version":
+                journal["version"] = value
+            else:
+                journal["feedback"]["action"] = value
+            write_json(self.journal_path, journal)
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, message):
+                review_server.recover_feedback_commit(
+                    journal_path=self.journal_path,
+                    feedback_path=self.feedback_path,
+                    state_path=self.state_path,
+                    manifest_path=self.manifest_path,
+                )
+
+    def test_journal_exists_before_state_revision_is_advanced(self) -> None:
+        original = review_server.atomic_write_json
+        observed = []
+
+        def checked(path: Path, value: dict) -> None:
+            if path == self.state_path and value.get("manifest_revision") == 2:
+                observed.append(self.journal_path.exists())
+            original(path, value)
+
+        with mock.patch.object(review_server, "atomic_write_json", side_effect=checked):
+            review_server.commit_feedback(
+                journal_path=self.journal_path,
+                feedback_path=self.feedback_path,
+                state_path=self.state_path,
+                manifest_path=self.manifest_path,
+                current_state=self.state,
+                feedback=self.feedback,
+                manifest_revision=2,
+            )
+        self.assertEqual(observed, [True])
+
+
+class EventTransportTest(unittest.TestCase):
+    def test_stdout_event_is_best_effort(self) -> None:
+        with mock.patch("builtins.print", side_effect=BrokenPipeError):
+            self.assertFalse(review_server.emit_event({"event": "feedback"}))
 
 
 if __name__ == "__main__":

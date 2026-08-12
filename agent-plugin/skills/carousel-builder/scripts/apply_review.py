@@ -22,9 +22,11 @@ from review_core import (  # noqa: E402
     copy_limit_issues,
     ensure_private_directory,
     feedback_archive_path,
+    fsync_directory,
     open_private_lock_file,
     safe_feedback_id,
     sentence_line_breaks,
+    sha256_json,
     strict_json_loads,
     valid_sha256,
     validate_emphasis_values,
@@ -124,6 +126,7 @@ def atomic_copy(source: Path, destination: Path) -> None:
             os.fsync(target_stream.fileno())
         os.chmod(temporary, 0o600)
         os.replace(temporary, destination)
+        fsync_directory(destination.parent)
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -149,6 +152,113 @@ def validate_state_manifest(state: dict, manifest_path: Path) -> None:
         raise ValueError("La sessione è associata a un manifest diverso")
 
 
+def validated_revision(value: object, *, field: str = "revision") -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{field} deve essere un intero non negativo")
+    return value
+
+
+APPLIED_STATE_RECEIPT_FIELDS = {
+    "applied_feedback_action",
+    "applied_feedback_sha256",
+    "applied_manifest_revision",
+    "applied_manifest_sha256",
+}
+MANIFEST_REVIEW_RECEIPT_FIELDS = {
+    "last_feedback_sha256",
+    "applied_manifest_revision",
+}
+
+
+def verify_applied_manifest(
+    *,
+    manifest: dict,
+    manifest_path: Path,
+    state: dict,
+    feedback_id: str,
+    action: str,
+    feedback_sha256: str,
+    base_revision: int,
+    require_applied_state: bool,
+) -> dict:
+    """Verify and return a durable receipt for an already committed batch.
+
+    Version 2.8.10 stored only the feedback id/action in ``manifest.review``.
+    That legacy receipt remains recoverable when its revision is plausible, but
+    a partial modern receipt is treated as corruption rather than guessed.
+    """
+    review = manifest.get("review")
+    if not isinstance(review, dict):
+        raise ValueError(
+            "Lo stato indica un batch applicato, ma il manifest non contiene la ricevuta review"
+        )
+    if review.get("last_feedback_id") != feedback_id:
+        raise ValueError(
+            "Lo stato indica un batch applicato che non coincide con la ricevuta del manifest"
+        )
+    if review.get("last_action") != action:
+        raise ValueError(
+            "L'azione applicata non coincide con la ricevuta review del manifest"
+        )
+
+    revision = validated_revision(manifest.get("revision", 1))
+    review_receipt_fields = MANIFEST_REVIEW_RECEIPT_FIELDS.intersection(review)
+    if review_receipt_fields and review_receipt_fields != MANIFEST_REVIEW_RECEIPT_FIELDS:
+        raise ValueError("La ricevuta review moderna è incompleta")
+    if review_receipt_fields:
+        stored_feedback_sha256 = valid_sha256(review.get("last_feedback_sha256"))
+        if stored_feedback_sha256 != feedback_sha256:
+            raise ValueError("Il digest del feedback non coincide con la ricevuta review")
+        if validated_revision(
+            review.get("applied_manifest_revision"),
+            field="review.applied_manifest_revision",
+        ) != revision:
+            raise ValueError("La revisione corrente non coincide con la ricevuta review")
+    elif revision not in {base_revision, base_revision + 1}:
+        raise ValueError(
+            "La revisione del manifest non è compatibile con la ricevuta review legacy"
+        )
+
+    # Bind semantic JSON, not whitespace: callers may restore the same manifest
+    # with different indentation without invalidating an otherwise exact receipt.
+    manifest_sha256 = sha256_json(manifest)
+    receipt = {
+        "applied_feedback_action": action,
+        "applied_feedback_sha256": feedback_sha256,
+        "applied_manifest_revision": revision,
+        "applied_manifest_sha256": manifest_sha256,
+    }
+    if require_applied_state:
+        state_receipt_fields = APPLIED_STATE_RECEIPT_FIELDS.intersection(state)
+        if state_receipt_fields and state_receipt_fields != APPLIED_STATE_RECEIPT_FIELDS:
+            raise ValueError("La ricevuta applicata nello stato della sessione è incompleta")
+        if state_receipt_fields:
+            if state.get("applied_feedback_action") != action:
+                raise ValueError("applied_feedback_action non coincide con il batch")
+            if valid_sha256(state.get("applied_feedback_sha256")) != feedback_sha256:
+                raise ValueError("applied_feedback_sha256 non coincide con il batch")
+            if validated_revision(
+                state.get("applied_manifest_revision"),
+                field="applied_manifest_revision",
+            ) != revision:
+                raise ValueError("applied_manifest_revision non coincide con il manifest")
+            if valid_sha256(state.get("applied_manifest_sha256")) != manifest_sha256:
+                raise ValueError(
+                    "Il manifest è cambiato dopo la registrazione del batch applicato"
+                )
+        else:
+            # Legacy 2.8.10 state always carried the live manifest revision.
+            # Requiring it prevents a lone/tampered applied_feedback_id from
+            # manufacturing a successful replay while still allowing backfill.
+            if validated_revision(
+                state.get("manifest_revision"), field="manifest_revision"
+            ) != revision:
+                raise ValueError(
+                    "manifest_revision non coincide con la ricevuta review legacy"
+                )
+    return receipt
+
+
 def require_text(value: object, field: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field} deve essere una stringa")
@@ -164,6 +274,9 @@ EMPHASIS_KEYS = {
     "summary": ("summary_bold", "summary_italic", "summary_serif", "summary_accent", "summary_underline"),
 }
 EMPHASIS_ROLES = ("bold", "italic", "serif", "accent", "underline")
+MAX_SLIDES = 50
+RESERVED_SLIDE_IDS = {"cover", "outro"}
+BROWSER_ENGINES = {"chromium"}
 LOGO_MODES = {"auto", "hidden"}
 VISUAL_STYLE_SYSTEMS = {
     "editorial-frame",
@@ -355,6 +468,79 @@ def approval_warnings(items: list[dict]) -> list[str]:
     return issues
 
 
+def validated_batch_slides(
+    feedback: dict,
+    *,
+    item_ids: set[str],
+    outro_enabled: bool,
+) -> list[dict]:
+    """Validate the archived batch as strictly as the HTTP boundary did."""
+    slides = feedback.get("slides")
+    if not isinstance(slides, list) or not (2 <= len(slides) <= MAX_SLIDES):
+        raise ValueError(f"Il batch deve contenere tra 2 e {MAX_SLIDES} slide")
+    expected_kinds = {"cover": "cover", **{item_id: "item" for item_id in item_ids}}
+    if outro_enabled:
+        expected_kinds["outro"] = "outro"
+
+    seen: set[str] = set()
+    item_count = 0
+    for index, slide in enumerate(slides):
+        if not isinstance(slide, dict):
+            raise ValueError("Ogni slide del batch deve essere un oggetto")
+        slide_id = slide.get("id")
+        if not isinstance(slide_id, str) or not slide_id:
+            raise ValueError(f"slides[{index}].id deve essere una stringa non vuota")
+        if slide_id in seen:
+            raise ValueError(f"ID slide duplicato nel batch: {slide_id}")
+        seen.add(slide_id)
+        expected_kind = expected_kinds.get(slide_id)
+        if expected_kind is None:
+            raise ValueError(f"ID slide sconosciuto o riservato: {slide_id}")
+        if slide.get("kind") != expected_kind:
+            raise ValueError(f"Tipo non valido per {slide_id}")
+        if expected_kind == "item":
+            item_count += 1
+
+    if "cover" not in seen:
+        raise ValueError("La copertina manca dal batch")
+    if slides[0].get("id") != "cover":
+        raise ValueError("La copertina deve restare la prima slide")
+    if outro_enabled:
+        if "outro" not in seen:
+            raise ValueError("La chiusura manca dal batch")
+        if slides[-1].get("id") != "outro":
+            raise ValueError("La chiusura deve restare l'ultima slide")
+    if item_count < 1:
+        raise ValueError("Deve restare almeno una slide interna")
+    return slides
+
+
+def canonical_proof_slide_ids(items: list[dict], *, outro_enabled: bool) -> list[str]:
+    """Select cover, the densest surviving item (stable tie), and optional outro."""
+    if not items:
+        raise ValueError("La prova richiede almeno una slide interna")
+
+    def copy_density(item: dict) -> int:
+        title = item.get("title") if isinstance(item.get("title"), str) else ""
+        summary = item.get("summary") if isinstance(item.get("summary"), str) else ""
+        return len(title.strip()) + len(summary.strip())
+
+    dense_item = max(items, key=copy_density)
+    return ["cover", str(dense_item["id"])] + (["outro"] if outro_enabled else [])
+
+
+def validated_proof_browser(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {"engine", "major"}:
+        raise ValueError("proof_browser deve contenere soltanto engine e major")
+    engine = value.get("engine")
+    major = value.get("major")
+    if engine not in BROWSER_ENGINES:
+        raise ValueError("proof_browser.engine non valido")
+    if not isinstance(major, int) or isinstance(major, bool) or not (1 <= major <= 999):
+        raise ValueError("proof_browser.major deve essere un intero tra 1 e 999")
+    return {"engine": engine, "major": major}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("manifest", type=Path)
@@ -410,7 +596,7 @@ def main() -> int:
         if is_direct_archive and feedback_path.name != f"{feedback_id}.json":
             raise ValueError("Il nome del batch append-only non coincide con feedback_id")
         action = feedback.get("action")
-        if action not in {"feedback", "approve"}:
+        if not isinstance(action, str) or action not in {"feedback", "approve"}:
             raise ValueError("Azione del batch non valida")
         bind_approved_proof = False
         approval_stage = None
@@ -419,9 +605,7 @@ def main() -> int:
             state["last_action"] = action
         elif stored_action != action:
             raise ValueError("last_action non coincide con l'azione del feedback")
-        revision = manifest.get("revision", 1)
-        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
-            raise ValueError("revision deve essere un intero non negativo")
+        revision = validated_revision(manifest.get("revision", 1))
         if feedback_id != state.get("last_feedback_id"):
             raise ValueError("Il batch non coincide con l'ultimo feedback della sessione")
         expected_archive_path = feedback_archive_path(session_dir, feedback_id)
@@ -441,7 +625,28 @@ def main() -> int:
             raise ValueError("last_feedback_path non coincide con il batch della sessione")
         if bound_feedback_path is not None and not expected_archive_path.is_file():
             raise ValueError("Il batch append-only canonico indicato dallo stato manca")
+        base_revision = validated_revision(
+            feedback.get("base_revision"), field="base_revision"
+        )
+        feedback_sha256 = sha256_json(feedback)
+        existing_review = (
+            manifest.get("review")
+            if isinstance(manifest.get("review"), dict)
+            else {}
+        )
         if feedback_id == state.get("applied_feedback_id"):
+            receipt = verify_applied_manifest(
+                manifest=manifest,
+                manifest_path=manifest_path,
+                state=state,
+                feedback_id=feedback_id,
+                action=action,
+                feedback_sha256=feedback_sha256,
+                base_revision=base_revision,
+                require_applied_state=True,
+            )
+            state.update(receipt)
+            state["manifest_revision"] = revision
             atomic_write_json(state_path, state, private=True)
             print(
                 json.dumps(
@@ -455,17 +660,23 @@ def main() -> int:
                 )
             )
             return 0
-        existing_review = (
-            manifest.get("review")
-            if isinstance(manifest.get("review"), dict)
-            else {}
-        )
         if existing_review.get("last_feedback_id") == feedback_id:
+            receipt = verify_applied_manifest(
+                manifest=manifest,
+                manifest_path=manifest_path,
+                state=state,
+                feedback_id=feedback_id,
+                action=action,
+                feedback_sha256=feedback_sha256,
+                base_revision=base_revision,
+                require_applied_state=False,
+            )
             state.update(
                 {
                     "applied_feedback_id": feedback_id,
                     "applied_at": now_iso(),
                     "manifest_revision": revision,
+                    **receipt,
                 }
             )
             atomic_write_json(state_path, state, private=True)
@@ -482,9 +693,6 @@ def main() -> int:
                 )
             )
             return 0
-        base_revision = feedback.get("base_revision")
-        if not isinstance(base_revision, int) or isinstance(base_revision, bool):
-            raise ValueError("base_revision deve essere un intero")
         if base_revision != revision:
             raise ValueError(
                 f"Il batch parte dalla revisione {feedback.get('base_revision')}, ma il manifest è alla revisione {revision}"
@@ -524,9 +732,18 @@ def main() -> int:
                     raise ValueError(
                         "Il checkpoint di approvazione richiede entrambi i fingerprint visuali validi"
                     )
-                current_render_fingerprint = server_manifest_model(
+                current_model = server_manifest_model(
                     manifest_path, manifest=manifest
-                )["render_fingerprint"]
+                )
+                current_render_fingerprint = current_model["render_fingerprint"]
+                if (
+                    expected_approval_stage == "visual_proof"
+                    and current_model.get("production", {}).get("producer")
+                    != current_model.get("render_contract")
+                ):
+                    raise ValueError(
+                        "Il produttore non implementa il contratto renderer locale corrente"
+                    )
                 if base_render_fingerprint != current_render_fingerprint:
                     raise ValueError(
                         "Gli asset, il contenuto o il checkpoint sono cambiati dopo l'approvazione; ricarica l'editor"
@@ -561,16 +778,22 @@ def main() -> int:
             item_id = item.get("id") or f"item-{index}"
             if not isinstance(item_id, str) or not item_id or item_id in by_id:
                 raise ValueError("Gli ID delle slide interne devono essere univoci")
+            if item_id in RESERVED_SLIDE_IDS:
+                raise ValueError(
+                    f"L'ID della slide interna {item_id!r} è riservato"
+                )
             by_id[item_id] = {**item, "id": item_id}
 
-        slides = feedback.get("slides")
-        if not isinstance(slides, list):
-            raise ValueError("Il batch non contiene slides valide")
-        if not all(isinstance(slide, dict) for slide in slides):
-            raise ValueError("Ogni slide del batch deve essere un oggetto")
-        cover = next((slide for slide in slides if slide.get("id") == "cover"), None)
-        if not isinstance(cover, dict):
-            raise ValueError("La copertina manca dal batch")
+        outro_enabled = bool(
+            isinstance(manifest.get("outro"), dict)
+            and manifest["outro"].get("enabled", False)
+        )
+        slides = validated_batch_slides(
+            feedback,
+            item_ids=set(by_id),
+            outro_enabled=outro_enabled,
+        )
+        cover = slides[0]
         new_cover = require_text(cover.get("title"), "cover.title")
         new_cover_subtitle = sentence_line_breaks(
             require_text(cover.get("summary"), "cover.summary")
@@ -663,10 +886,8 @@ def main() -> int:
             raise ValueError("Deve restare almeno una slide interna")
 
         new_outro = None
-        if isinstance(manifest.get("outro"), dict) and manifest["outro"].get("enabled", False):
-            outro_slide = next((slide for slide in slides if slide.get("id") == "outro"), None)
-            if not isinstance(outro_slide, dict):
-                raise ValueError("La chiusura manca dal batch")
+        if outro_enabled:
+            outro_slide = slides[-1]
             new_outro = dict(manifest["outro"])
             new_outro["title"] = require_text(outro_slide.get("title"), "outro.title")
             new_outro["body"] = sentence_line_breaks(
@@ -746,17 +967,17 @@ def main() -> int:
         pruned_proof_ids: list[str] = []
         new_proof_ids = None
         if proof is not None and isinstance(proof.get("slide_ids"), list):
-            known = set(slide_ids)
-            kept = [
-                slide_id
-                for slide_id in proof["slide_ids"]
-                if isinstance(slide_id, str) and slide_id in known
-            ]
-            if kept != proof["slide_ids"]:
+            canonical_ids = canonical_proof_slide_ids(
+                new_items, outro_enabled=new_outro is not None
+            )
+            if canonical_ids != proof["slide_ids"]:
+                known = set(canonical_ids)
                 pruned_proof_ids = [
-                    str(slide_id) for slide_id in proof["slide_ids"] if slide_id not in kept
+                    str(slide_id)
+                    for slide_id in proof["slide_ids"]
+                    if slide_id not in known
                 ]
-                new_proof_ids = kept
+                new_proof_ids = canonical_ids
                 changed.append("proof.slide_ids")
 
         editorial_changed = bool(changed)
@@ -788,6 +1009,20 @@ def main() -> int:
             warnings.append(
                 "proof.approved è stato invalidato perché il contenuto della prova è cambiato"
             )
+        if (
+            proof is not None
+            and proof.get("style_system_verified") is True
+            and changed
+            and not bind_approved_proof
+        ):
+            proof["style_system_verified"] = False
+            changed.append("proof.style_system_verified")
+            warnings.append(
+                "proof.style_system_verified è stato invalidato perché la prova è cambiata"
+            )
+        if proof is not None and "browser" in proof and changed and not bind_approved_proof:
+            proof.pop("browser")
+            changed.append("proof.browser")
 
         approval_slides = [
             {
@@ -805,6 +1040,32 @@ def main() -> int:
             warnings.extend(approval_issues)
 
         if bind_approved_proof:
+            expected_proof_slide_ids = canonical_proof_slide_ids(
+                new_items, outro_enabled=new_outro is not None
+            )
+            received_proof_slide_ids = feedback.get("proof_slide_ids")
+            if received_proof_slide_ids != expected_proof_slide_ids:
+                raise ValueError(
+                    "proof_slide_ids non coincide con il campione canonico della prova"
+                )
+            if feedback.get("style_system_verified") is not True:
+                raise ValueError(
+                    "La prova visuale richiede style_system_verified: true"
+                )
+            proof_browser = validated_proof_browser(feedback.get("proof_browser"))
+            if proof is None:
+                proof = {}
+                manifest["proof"] = proof
+            if proof.get("slide_ids") != expected_proof_slide_ids:
+                proof["slide_ids"] = expected_proof_slide_ids
+                if "proof.slide_ids" not in changed:
+                    changed.append("proof.slide_ids")
+            if proof.get("style_system_verified") is not True:
+                proof["style_system_verified"] = True
+                changed.append("proof.style_system_verified")
+            if proof.get("browser") != proof_browser:
+                proof["browser"] = proof_browser
+                changed.append("proof.browser")
             candidate_manifest = copy.deepcopy(manifest)
             candidate_manifest["cover_title"] = new_cover
             candidate_manifest["cover_subtitle"] = new_cover_subtitle
@@ -823,22 +1084,29 @@ def main() -> int:
                 raise ValueError(
                     "Il fingerprint del batch non coincide con il render finale applicabile"
                 )
-            if proof is None:
-                proof = {}
-                manifest["proof"] = proof
             if proof.get("render_fingerprint") != final_render_fingerprint:
                 proof["render_fingerprint"] = final_render_fingerprint
                 changed.append("proof.render_fingerprint")
             if proof.get("approved") is not True:
                 proof["approved"] = True
                 changed.append("proof.approved")
+        elif any(
+            key in feedback
+            for key in ("proof_slide_ids", "style_system_verified", "proof_browser")
+        ):
+            raise ValueError(
+                "I metadati della prova sono consentiti soltanto per la prova visuale"
+            )
 
+        applied_revision = revision + 1 if changed else revision
         review = dict(existing_review)
         review.update(
             {
                 "mode": "visual",
                 "last_feedback_id": feedback_id,
                 "last_action": action,
+                "last_feedback_sha256": feedback_sha256,
+                "applied_manifest_revision": applied_revision,
                 "approval_requested": action == "approve",
                 "comments_pending": len(feedback.get("comments", [])),
                 "updated_at": now_iso(),
@@ -874,12 +1142,17 @@ def main() -> int:
             manifest["review"] = review
             atomic_write_json(manifest_path, manifest, private=False)
 
-        applied_revision = manifest.get("revision", revision)
+        applied_revision = validated_revision(manifest.get("revision", revision))
+        manifest_sha256 = sha256_json(manifest)
         state.update(
             {
                 "applied_feedback_id": feedback_id,
                 "applied_at": now_iso(),
                 "manifest_revision": applied_revision,
+                "applied_feedback_action": action,
+                "applied_feedback_sha256": feedback_sha256,
+                "applied_manifest_revision": applied_revision,
+                "applied_manifest_sha256": manifest_sha256,
             }
         )
         atomic_write_json(state_path, state, private=True)

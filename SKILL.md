@@ -5,7 +5,7 @@ description: Trasforma URL, articoli, newsletter, note e testi in caroselli edit
 
 # Carousel Builder
 
-Versione: **2.8.10**
+Versione: **2.8.11**
 
 Creare caroselli editoriali separando fonte, profilo visivo, revisione editoriale, approvazione dei testi e produzione grafica. Adattare la superficie di revisione alle capacità effettive della sessione, mantenendo invariati metodo editoriale e checkpoint.
 
@@ -30,10 +30,10 @@ Se l'ambiente espone esplicitamente le proprie capacità, usarle. Altrimenti ver
 
 ## Fase 0: preflight e orientamento
 
-1. Leggere [references/production-qa.md](references/production-qa.md), risolvere prima gli eventuali runtime e librerie già configurati o inclusi nell'ambiente e determinare quali risultati sono realisticamente producibili nella sessione: immagini di copertina, card con tipografia controllata, PNG, PDF o solo layout dettagliato. Non assumere che l'interprete Python predefinito rappresenti tutte le capacità disponibili.
+1. Leggere [references/runtime-preflight.md](references/runtime-preflight.md), risolvere prima gli eventuali runtime e librerie già configurati o inclusi nell'ambiente e determinare quali risultati sono realisticamente producibili nella sessione: immagini di copertina, card con tipografia controllata, PNG, PDF o solo layout dettagliato. Non caricare ancora l'intero QA di produzione: resta obbligatorio prima della prova visuale e dell'export.
 2. Descrivere i risultati previsti in una frase, senza esporre nomi tecnici degli strumenti.
-3. Leggere [references/brand-onboarding.md](references/brand-onboarding.md) e [references/visual-systems.md](references/visual-systems.md). Se la richiesta è incompleta, mostrare l'introduzione operativa prevista. Se contiene già fonte e profilo JSON, brand pack, tema neutro o indicazioni visive sufficienti, evitare l'introduzione estesa e procedere.
-4. Selezionare `local-editor` o `conversation` con le regole precedenti. Leggere [references/visual-review.md](references/visual-review.md) per il percorso locale. Dichiarare il fallback conversazionale quando il percorso locale non è disponibile.
+3. Se la richiesta è incompleta, leggere [references/brand-onboarding.md](references/brand-onboarding.md) e mostrare l'introduzione operativa prevista. Se contiene già fonte e profilo JSON, brand pack, tema neutro o indicazioni visive sufficienti, non caricare l'onboarding esteso e procedere.
+4. Selezionare `local-editor` o `conversation` con le regole precedenti. Leggere [references/visual-review.md](references/visual-review.md) soltanto per il percorso locale. Dichiarare il fallback conversazionale quando il percorso locale non è disponibile.
 
 ## Fase 1: fonte, brand e anteprima
 
@@ -48,7 +48,7 @@ Se l'ambiente espone esplicitamente le proprie capacità, usarle. Altrimenti ver
    - `narrative`: una tesi sviluppata in passaggi dipendenti;
    - `sectional`: sezioni o notizie autonome, comprensibili anche isolate.
    Non confondere la modalità della fonte con quella della sequenza: un articolo è normalmente narrativo, ma può essere sezionale se la struttura della fonte lo richiede.
-4. Risolvere il profilo di brand:
+4. Risolvere il profilo di brand. Leggere [references/brand-profile.md](references/brand-profile.md) quando occorre validare o costruire un profilo e [references/brand-onboarding.md](references/brand-onboarding.md) soltanto se serve configurarne uno nuovo:
    - validare e usare il profilo JSON o il brand pack fornito;
    - usare il profilo approvato nel lavoro corrente;
    - configurare un nuovo profilo con il percorso rapido o guidato di [references/brand-onboarding.md](references/brand-onboarding.md);
@@ -65,7 +65,7 @@ Se l'ambiente espone esplicitamente le proprie capacità, usarle. Altrimenti ver
    - chiusura esatta, quando prevista;
    - ogni frase compiuta su una nuova riga.
 10. Mostrare soltanto contenuti destinati alle slide, oltre alle informazioni minime su profilo, formato, fonte, `sequence_mode` e approvazione. Non esporre manifest, prompt visuali o note tecniche.
-11. Mostrare le tre prove di [references/visual-systems.md](references/visual-systems.md) con lo stesso contenuto rappresentativo e la stessa identità approvata. Preselezionare il sistema risolto dal manifest o dal profilo, consentire il confronto e salvare la scelta del singolo carosello in `visual_style_system`. Considerare valida una prova soltanto quando rende visibile la firma strutturale obbligatoria del sistema, non quando ne mostra soltanto nome, palette o tipografia.
+11. A questo punto leggere [references/visual-systems.md](references/visual-systems.md) e mostrare le tre prove con lo stesso contenuto rappresentativo e la stessa identità approvata. Preselezionare il sistema risolto dal manifest o dal profilo, consentire il confronto e salvare la scelta del singolo carosello in `visual_style_system`. Considerare valida una prova soltanto quando rende visibile la firma strutturale obbligatoria del sistema, non quando ne mostra soltanto nome, palette o tipografia.
 12. Se è selezionato `local-editor`, creare il manifest in stato `bozza` e completare il preflight visuale descritto in [references/visual-review.md](references/visual-review.md) prima di consegnare l'editor: ogni riassunto generato con titolo deve contenere al massimo 180 caratteri, ogni riassunto generato senza titolo al massimo 320 caratteri e nessuna slide iniziale deve mostrare avvisi di densità o overflow in uno dei tre sistemi proposti. Correggere o dividere il copy finché limiti e fit reale sono puliti, senza ridurre il carattere oltre l'8%. Poi avviare l'editor e aprirlo immediatamente nel browser. Mostrare nell'editor le varianti di logo realmente disponibili, una sintesi dei caratteri usati e i comandi contestuali per grassetto, corsivo, sottolineatura, evidenziatore e commento. Non limitarsi a stampare il codice HTML nella chat e non duplicare l'intera anteprima, salvo richiesta dell'utente o fallback.
 13. Nell'editor invitare l'utente a scegliere `Invia correzioni` oppure `Approva profilo e testi`. Dichiarare chiaramente che la copertina finale sarà mostrata in una prova visuale separata soltanto dopo l'approvazione dei testi e potrà usare un'immagine generata, un'immagine fornita o una composizione tipografica. Trattare l'invio delle correzioni come feedback, mai come approvazione implicita. Nel percorso `local-editor`, non terminare il turno e non chiedere all'utente di tornare in chat con messaggi come «fatto»: mantenere il task in ascolto dell'evento del server secondo [references/visual-review.md](references/visual-review.md).
 14. Appena il server segnala il batch, dare subito un riscontro nella chat: per `Invia correzioni`, confermare che le correzioni sono state ricevute e si stanno applicando; per `Approva profilo e testi`, confermare che l'approvazione è stata ricevuta e che seguono i controlli prima della prova visuale. Usare il percorso append-only restituito dall'evento quando disponibile, applicare poi le modifiche dirette con `scripts/apply_review.py`, esaminare e risolvere tutti i commenti ricevuti e comunicare in chat l'esito e il prossimo checkpoint. Conservare esattamente il testo scritto dall'utente salvo incompatibilità dichiarata con fonte, modalità `verbatim` o vincoli di produzione.

@@ -832,7 +832,14 @@
   }
 
   function viewedStorageKey() {
-    return `${storageKey}:viewed:${model?.revision ?? ""}`;
+    return [
+      storageKey,
+      "viewed",
+      model?.revision ?? "",
+      model?.approval_checkpoint || "",
+      model?.render_fingerprint || "",
+      selectedVisualSystem || "",
+    ].join(":");
   }
 
   function visualSystemStorageKey() {
@@ -850,6 +857,24 @@
 
   function selectedVisualProof() {
     return visualProofOptions().find((option) => option?.id === selectedVisualSystem) || null;
+  }
+
+  function requiredProofSlideIds() {
+    const values = model?.proof?.required_slide_ids;
+    return Array.isArray(values) ? values.filter((id) => typeof id === "string") : [];
+  }
+
+  function browserProofDescriptor() {
+    const userAgent = navigator.userAgent || "";
+    const candidates = [
+      ["chromium", /(?:Chrome|Chromium|CriOS|Edg|OPR)\/(\d+)/],
+    ];
+    for (const [engine, pattern] of candidates) {
+      const match = userAgent.match(pattern);
+      const major = match ? Number.parseInt(match[1], 10) : 0;
+      if (major >= 1 && major <= 999) return { engine, major };
+    }
+    return null;
   }
 
   function resolvedCoverMode() {
@@ -932,6 +957,7 @@
     recordUndo("sistema visivo");
     selectedVisualSystem = next;
     safeStorageSet(visualSystemStorageKey(), next);
+    loadViewState();
     renderVisualSystemPicker({ focusSystem: focus ? next : "" });
     renderBrand();
     renderSlides();
@@ -2419,12 +2445,14 @@
       typography: clone(typography()),
       brand: clone(previewBrand()),
       cover_visual: clone(selectedVisualProof()?.cover_visual || model?.cover_visual || {}),
+      proof: clone(model?.proof || {}),
+      production: clone(model?.production || {}),
     };
   }
 
   function getRenderContract() {
     return {
-      contract: "approved-preview-dom-v1",
+      contract: "approved-preview-dom-v2",
       production: productionRender,
       revision: model?.revision ?? null,
       workflowState: model?.workflow_state || "",
@@ -2493,7 +2521,7 @@
       const blocking = collectApprovalIssues();
       if (blocking.length) throw new Error(`Produzione bloccata: ${blocking.map((issue) => issue.slideId || issue.key).join(", ")}.`);
       window.carouselBuilderPreview = Object.freeze({
-        contract: "approved-preview-dom-v1",
+        contract: "approved-preview-dom-v2",
         production: productionRender,
         styleSystem: selectedVisualSystem,
         getRenderContract,
@@ -2560,8 +2588,8 @@
         ? `Confermi composizione, ${coverLabel}, gerarchia tipografica, sito e firma. Il rendering completo inizierà soltanto dopo questa approvazione.`
         : `Le modifiche e i commenti saranno inviati insieme. L’agente eseguirà ancora i controlli editoriali prima di avanzare lo stato. Dopo l’approvazione dei testi verrà mostrata una prova visuale separata con ${coverLabel}.`;
     }
-    loadViewState();
     selectedVisualSystem = resolveVisualSystem();
+    loadViewState();
     renderVisualSystemPicker();
     currentSlideId = currentSlideId && draftSlides.some((slide) => slide.id === currentSlideId) ? currentSlideId : draftSlides[0]?.id || null;
     renderBrand();
@@ -2669,6 +2697,59 @@
       slideId: cover.id,
       targetId: `field-${cover.id}-summary`,
     });
+    const requiresFreshVisualProof = model?.approval_checkpoint === "visual_proof"
+      && model?.proof_approved !== true
+      && !productionRender;
+    if (requiresFreshVisualProof) {
+      const draftChanged = JSON.stringify(normalizedSlides(draftSlides)) !== JSON.stringify(normalizedSlides(baselineSlides));
+      if (draftChanged || selectedVisualSystem !== modelVisualSystem() || logoMode !== initialLogoMode()) issues.push({
+        key: "proof-draft-changed",
+        message: "Invia prima le correzioni grafiche o testuali, poi riapri e visualizza la nuova prova prima di approvarla.",
+        targetId: "visual-system-picker",
+      });
+      const missingProofIds = requiredProofSlideIds().filter(
+        (slideId) => !viewedSlideIds.has(slideId),
+      );
+      for (const slideId of missingProofIds) {
+        const slide = draftSlides.find((candidate) => candidate.id === slideId);
+        issues.push({
+          key: `proof-unseen-${slideId}`,
+          message: `${displayLabel(slide || { id: slideId, kind: "item" }, draftSlides.indexOf(slide))}: visualizza la slide campione prima di approvare la prova.`,
+          slideId,
+          targetId: `field-${slideId}-summary`,
+        });
+      }
+      const expectedWidth = model?.proof?.preview_width;
+      const expectedHeight = model?.format?.preview_height;
+      for (const slideId of requiredProofSlideIds()) {
+        const preview = elements.slides?.querySelector(
+          `[data-slide-id="${selectorValue(slideId)}"] .slide-preview`,
+        );
+        const bounds = preview?.getBoundingClientRect();
+        if (
+          !bounds
+          || Math.abs(bounds.width - expectedWidth) > 0.5
+          || Math.abs(bounds.height - expectedHeight) > 0.5
+        ) {
+          issues.push({
+            key: `proof-size-${slideId}`,
+            message: "Allarga la finestra: la prova visuale deve essere vista realmente a 480×600 px.",
+            slideId,
+            targetId: `field-${slideId}-summary`,
+          });
+        }
+      }
+      if (!browserProofDescriptor()) issues.push({
+        key: "proof-browser",
+        message: "Apri la prova in un browser Chromium con versione verificabile prima di approvarla.",
+        targetId: "visual-system-picker",
+      });
+      if (model?.proof?.preview_width !== 480) issues.push({
+        key: "proof-preview-width",
+        message: "La prova visuale deve dichiarare una verifica a 480 px.",
+        targetId: "visual-system-picker",
+      });
+    }
     issues.push(...collectPaletteContrastIssues());
     const unique = new Map();
     for (const issue of issues) if (!unique.has(issue.key)) unique.set(issue.key, issue);
@@ -2936,6 +3017,11 @@
     if (action === "approve") {
       payload.render_fingerprint = model.render_fingerprint || "";
       payload.base_workflow_state = model.workflow_state || "";
+      if (model.approval_checkpoint === "visual_proof") {
+        payload.proof_slide_ids = requiredProofSlideIds();
+        payload.style_system_verified = true;
+        payload.proof_browser = browserProofDescriptor();
+      }
     }
     pendingSubmission = { feedback_id: feedbackId, action, payload };
     awaitingFeedbackId = feedbackId;

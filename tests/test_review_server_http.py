@@ -166,8 +166,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
         write_json(self.manifest_path, manifest)
         status, model = json_request(self.api("/api/session"))
         self.assertEqual(status, 200, model)
-        return json.dumps(
-            {
+        payload = {
                 "action": "approve",
                 "base_revision": model["revision"],
                 "base_workflow_state": model["workflow_state"],
@@ -176,7 +175,15 @@ class ReviewServerHTTPTest(unittest.TestCase):
                 "comments": [],
                 "overall_note": "",
             }
-        ).encode("utf-8")
+        if model["approval_checkpoint"] == "visual_proof":
+            payload.update(
+                {
+                    "proof_slide_ids": model["proof"]["required_slide_ids"],
+                    "style_system_verified": True,
+                    "proof_browser": {"engine": "chromium", "major": 140},
+                }
+            )
+        return json.dumps(payload).encode("utf-8")
 
     def test_serves_the_editor_with_a_valid_token(self) -> None:
         status, payload = request(self.url)
@@ -220,6 +227,22 @@ class ReviewServerHTTPTest(unittest.TestCase):
             status, payload = request(f"{self.origin}{path}")
             self.assertEqual(status, 200, path)
             self.assertTrue(payload)
+
+    def test_static_assets_support_conditional_get_without_stale_caching(self) -> None:
+        url = f"{self.origin}/assets/app.js"
+        with urllib.request.urlopen(url, timeout=10) as response:
+            etag = response.headers["ETag"]
+            self.assertTrue(etag.startswith('"sha256-'))
+            self.assertEqual(response.headers["Cache-Control"], "private, no-cache")
+        conditional = urllib.request.Request(url, headers={"If-None-Match": etag})
+        try:
+            urllib.request.urlopen(conditional, timeout=10)
+        except urllib.error.HTTPError as error:
+            self.assertEqual(error.code, 304)
+            self.assertEqual(error.headers["ETag"], etag)
+            self.assertEqual(error.read(), b"")
+        else:
+            self.fail("Il conditional GET doveva restituire 304")
 
     def test_serves_every_font_declared_by_the_editor_stylesheet(self) -> None:
         status, stylesheet = request(f"{self.origin}/assets/styles.css")
@@ -371,6 +394,35 @@ class ReviewServerHTTPTest(unittest.TestCase):
         )
         self.assertEqual(status, 422)
         self.assertIn("Costante JSON", payload["error"])
+
+    def test_rejects_unhashable_json_fields_without_dropping_the_connection(self) -> None:
+        cases = []
+        action = json.loads(self.batch())
+        action["action"] = ["feedback"]
+        cases.append(action)
+
+        slide_id = json.loads(self.batch())
+        slide_id["slides"][1]["id"] = ["item-1"]
+        cases.append(slide_id)
+
+        comment_kind = json.loads(self.batch())
+        comment_kind["comments"] = [
+            {"kind": ["slide"], "slide_id": "item-1", "feedback": "Nota"}
+        ]
+        cases.append(comment_kind)
+
+        for index, value in enumerate(cases):
+            status, payload = json_request(
+                self.api("/api/submit"),
+                method="POST",
+                body=json.dumps(value).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with self.subTest(index=index):
+                self.assertEqual(status, 422)
+                self.assertIsInstance(payload.get("error"), str)
+                self.assertTrue(payload["error"])
+                self.assertIsNone(self.process.poll())
 
     def test_accepts_a_batch_and_writes_the_session_files(self) -> None:
         status, payload = json_request(
@@ -667,7 +719,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         self.assertFalse(manifest["proof"]["approved"])
 
-    def test_visual_approve_and_edit_rebinds_without_false_invalidation_warning(self) -> None:
+    def test_visual_approve_and_edit_requires_feedback_before_reapproval(self) -> None:
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         manifest["workflow_state"] = "testi_approvati"
         manifest.pop("cover_title_serif", None)
@@ -679,6 +731,8 @@ class ReviewServerHTTPTest(unittest.TestCase):
             {
                 "approved": True,
                 "render_fingerprint": initial["render_fingerprint"],
+                "style_system_verified": True,
+                "browser": {"engine": "chromium", "major": 140},
             }
         )
         write_json(self.manifest_path, manifest)
@@ -687,7 +741,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
         slides = approved["slides"]
         slides[1]["summary"] = "Testo visuale approvato e aggiornato."
         slides[1]["summary_serif"] = []
-        status, submitted = json_request(
+        status, rejected = json_request(
             self.api("/api/submit"),
             method="POST",
             body=json.dumps(
@@ -699,34 +753,16 @@ class ReviewServerHTTPTest(unittest.TestCase):
                     "slides": slides,
                     "comments": [],
                     "overall_note": "",
+                    "proof_slide_ids": approved["proof"]["required_slide_ids"],
+                    "style_system_verified": True,
+                    "proof_browser": {"engine": "chromium", "major": 140},
                 }
             ).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
-        self.assertEqual(status, 200, submitted)
-        applied = subprocess.run(
-            [
-                sys.executable,
-                str(SCRIPTS / "apply_review.py"),
-                str(self.manifest_path),
-                submitted["archive_path"],
-                "--session-dir",
-                str(self.session_dir),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        self.assertEqual(applied.returncode, 0, applied.stderr)
-        result = json.loads(applied.stdout)
-        self.assertNotIn("proof.approved", result["changed"])
-        self.assertFalse(
-            any("invalidato" in warning for warning in result["warnings"])
-        )
-        status, rebound = json_request(self.api("/api/session"))
-        self.assertEqual(status, 200, rebound)
-        self.assertTrue(rebound["proof_approved"])
+        self.assertEqual(status, 422, rejected)
+        self.assertIn("proof_slide_ids", rejected["error"])
+        self.assertFalse((self.session_dir / "feedback.json").exists())
 
     def test_stale_profile_approval_cannot_cross_the_visual_checkpoint(self) -> None:
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
@@ -919,6 +955,16 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.assertEqual(payload["approval_checkpoint"], "profile_text")
         self.assertFalse(payload["feedback_pending"])
         self.assertIsNone(payload["last_action"])
+
+    def test_session_and_status_report_filesystem_failures_as_json_500(self) -> None:
+        self.manifest_path.unlink()
+        self.manifest_path.mkdir()
+        for route in ("/api/session", "/api/status"):
+            with self.subTest(route=route):
+                status, payload = json_request(self.api(route))
+                self.assertEqual(status, 500, payload)
+                self.assertIsInstance(payload.get("error"), str)
+                self.assertTrue(payload["error"])
 
     def test_session_exposes_the_three_visual_proof_options(self) -> None:
         status, payload = json_request(self.api("/api/session"))
