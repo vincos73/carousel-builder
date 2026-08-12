@@ -21,7 +21,7 @@ python3 <skill>/scripts/review_server.py <manifest.json> --session-dir <session-
 
 Il server deve restare vincolato a `127.0.0.1`, usare un token casuale e servire soltanto gli asset inclusi e il modello editoriale ricavato dal manifest.
 
-`/api/session` espone anche `render_fingerprint`, calcolato sullo snapshot visuale, sul checkpoint grossolano di approvazione, sul bundle HTML/JavaScript/CSS del renderer e sui byte effettivi di cover, loghi e font. Per un'azione `approve` il browser invia questo valore e `base_workflow_state` come eco della base mostrata; il server deriva `approval_stage` dallo stato corrente, calcola il fingerprint candidato dopo le modifiche e lo salva nel batch. Il client non decide autonomamente lo stage. Il passaggio da `bozza` a `testi_approvati` cambia il checkpoint e invalida un click rimasto aperto, mentre gli stati successivi alla prova visuale condividono lo stesso checkpoint. `/api/status` espone stato e checkpoint anche quando la revisione numerica non cambia, così l'editor può ricaricare una base pulita o preservare una bozza locale prima di bloccarla.
+`/api/session` espone anche `render_fingerprint` e lo stato durevole del feedback (`last_feedback_id`, `applied_feedback_id`, `feedback_pending`), letti sotto gli stessi lock della transazione. Il fingerprint è calcolato sullo snapshot visuale, sul checkpoint grossolano di approvazione, sul contratto di produzione/output, sul bundle HTML/JavaScript/CSS del renderer e sui byte effettivi di cover, loghi e font. Per un'azione `approve` il browser invia questo valore e `base_workflow_state` come eco della base mostrata; il server deriva `approval_stage` dallo stato corrente, calcola il fingerprint candidato dopo le modifiche e lo salva nel batch. Il client non decide autonomamente lo stage. Il passaggio da `bozza` a `testi_approvati` cambia il checkpoint e invalida un click rimasto aperto, mentre gli stati successivi alla prova visuale condividono lo stesso checkpoint. `/api/status` espone stato e checkpoint anche quando la revisione numerica non cambia, così l'editor può ricaricare una base pulita o preservare una bozza locale prima di bloccarla.
 
 Nel checkpoint visuale il server espone anche il campione canonico `proof.required_slide_ids`: copertina, card interna più densa e chiusura quando presente. L'editor lega lo stato “visto” a revisione, checkpoint, fingerprint e sistema visivo, richiede che tutte le card del campione siano state osservate e invia `proof_slide_ids`, `style_system_verified: true` e la major Chromium effettiva. Se testi, ordine, sistema o logo sono stati modificati localmente, inviare prima le correzioni e riaprire la prova: non approvare nello stesso batch una composizione diversa da quella attestata. La prova visuale destinata all'export locale va quindi aperta in Chromium; altri motori restano utilizzabili per la revisione dei testi ma non possono firmare il proof esportabile.
 
@@ -29,32 +29,7 @@ La modalità `?render=production` è riservata all'export dopo l'approvazione vi
 
 ## Interazioni dell'editor
 
-L'editor consente di:
-
-- modificare copertina, titoli sezionali, corpi e chiusura;
-- selezionare una locuzione e applicare o rimuovere grassetto, corsivo, sottolineatura ed evidenziatore adattivo, anche con `Cmd/Ctrl+B`, `Cmd/Ctrl+I`, `Cmd/Ctrl+U` e `Cmd/Ctrl+Maiusc+H`;
-- vedere sotto ogni campo una riga compatta con le locuzioni che hanno già un formato e rimuovere direttamente ciascun trattamento senza dover riselezionare il testo;
-- selezionare anche una parte di una locuzione già formattata per riconoscere e rimuovere il trattamento completo; impedire una nuova applicazione quando la selezione si sovrappone a un formato esistente, spiegando come rimuoverlo;
-- spostare le slide interne in alto o in basso;
-- eliminare una slide interna;
-- commentare una selezione testuale;
-- aggiungere un commento all'intera slide; nella copertina suggerire `Aggiungi un disegno coerente col titolo`, nelle altre slide usare un esempio pertinente alla revisione del contenuto;
-- aggiungere una nota generale;
-- annullare l'ultima modifica locale prima dell'invio;
-- inviare correzioni oppure richiedere esplicitamente l'approvazione.
-- vedere le varianti di logo disponibili, scegliere `Logo automatico` oppure `Logo nascosto` per l'intero carosello e controllare quale variante viene usata sui diversi fondi.
-
-Nella card di copertina e nella conferma di approvazione, chiarire che la copertina finale non è ancora inclusa: dopo l'approvazione dei testi sarà mostrata in una prova visuale separata con immagine generata, immagine fornita o composizione tipografica.
-
-La copertina resta libera dagli elementi strutturali dei sistemi visivi: non mostrare cornice Editoriale, costellazione Geometrica o indice e guida Istituzionali. Conservare titolo, eventuale sottotitolo, numerazione, logo, firma e sito secondo il profilo, senza sovrapporli al visuale.
-
-Prima della conferma mostrare un riepilogo verificabile con numero complessivo di grassetti, corsivi, sottolineature ed evidenziazioni applicati, modalità del logo e disponibilità delle varianti per fondo chiaro e scuro.
-
-Mantenere l'interfaccia orientata alle azioni: mostrare normalmente palette, varianti del logo, una sintesi tipografica concisa (`Titoli e testi · Inter`, oppure ruoli separati) e controlli di revisione. Non elencare percorsi dei file, sorgenti o altri metadati tecnici; segnalare il fallback tipografico soltanto se un carattere non si carica. Usare esempi concreti nelle note generali e nelle istruzioni.
-
-Non consentire di eliminare copertina o chiusura. Non inserire Markdown nei campi: i comandi tipografici aggiornano `*_bold`, `*_italic`, `*_underline` e `*_accent`. La rimozione di tutti i grassetti non genera avvisi e non blocca l'approvazione. Consentire più trattamenti nello stesso testo quando riguardano parole o locuzioni distinte. Consentire l'invio di correzioni con avvisi transitori, ma bloccare la richiesta di approvazione se la stessa unità usa più stili, due selezioni si sovrappongono, il corsivo non è disponibile oppure una locuzione è ambigua.
-
-Mostrare un solo messaggio per conflitto. Se la stessa locuzione ha più trattamenti, nominarla una volta e chiedere di sceglierne uno.
+L'interfaccia rende disponibili modifica, riordino, commenti, enfasi tipografiche, scelta del sistema visivo e modalità del logo. Nel percorso normale affidarsi ai controlli e ai messaggi dell'editor. Leggere [editor-capabilities.md](editor-capabilities.md) soltanto se l'utente chiede istruzioni su questi comandi o se occorre diagnosticare un blocco dell'interfaccia.
 
 ## Ricezione e applicazione
 
@@ -72,7 +47,7 @@ Applicare le modifiche dirette con:
 python3 <skill>/scripts/apply_review.py <manifest.json> <feedback-path> --session-dir <session-dir>
 ```
 
-Lo script deve accettare soltanto l'alias `feedback.json` o un batch archiviato in `feedback-batches/` appartenente alla cartella di sessione e al manifest associato. Quando esiste il batch append-only, l'alias deve coincidere esattamente. Lo script aggiorna soltanto i campi editoriali consentiti, preserva un backup atomico nella cartella di sessione, incrementa `revision` quando cambia il testo o l'ordine e non modifica automaticamente `workflow_state`. Per `approval_stage: visual_proof` ricontrolla il fingerprint dopo l'applicazione e lega atomicamente `proof.approved` al render finale; per `profile_text` lascia la proof non approvata.
+Lo script deve accettare soltanto l'alias `feedback.json` o un batch archiviato in `feedback-batches/` appartenente alla cartella di sessione e al manifest associato. Quando esiste il batch append-only, l'alias deve coincidere esattamente. Lo script aggiorna soltanto i campi consentiti, preserva un backup atomico nella cartella di sessione e incrementa `revision` quando cambia contenuto, prova o composizione. Non avanza mai il workflow; se un feedback modifica copy/ordine/profilo o contiene una richiesta non classificabile dopo un checkpoint, riapre atomicamente `bozza` e azzera le ricevute. Se cambia soltanto sistema visivo/logo, riapre `testi_approvati` conservando la ricevuta editoriale. Per `approval_stage: visual_proof` ricontrolla il fingerprint dopo l'applicazione e lega atomicamente `proof.approved` al render finale; per `profile_text` lascia la proof non approvata.
 
 Lo script riallinea inoltre i riferimenti derivati dai testi:
 
@@ -80,7 +55,7 @@ Lo script riallinea inoltre i riferimenti derivati dai testi:
 - ricostruisce `accessibility.reading_order` secondo la sequenza risultante;
 - ricostruisce `proof.slide_ids` come copertina, card più densa e chiusura opzionale, elencando in `proof_slide_ids_pruned` gli ID non più inclusi.
 
-Leggere sempre `warnings`, `stale_alt_text` e `stale_transcript` nell'output. Lo script non riscrive i testi descrittivi: gli `alt_text` delle slide modificate e la trascrizione di accessibilità restano invariati e vanno rigenerati dall'agente prima della produzione. Se il batch cambia contenuto, ordine, sistema visivo o modalità del logo, lo script invalida atomicamente `proof.approved` e `proof.style_system_verified`, rimuove il binding del browser e segnala che serve una nuova prova.
+Leggere sempre `warnings`, `stale_alt_text` e `stale_transcript` nell'output. Lo script non riscrive i testi descrittivi: gli `alt_text` delle slide modificate e la trascrizione di accessibilità restano invariati e vanno rigenerati dall'agente prima della produzione. Se un batch di correzione cambia contenuto, ordine, sistema visivo o modalità del logo, lo script invalida atomicamente `proof.approved` e `proof.style_system_verified`, rimuove il binding del browser e segnala che serve una nuova prova. Un batch visuale `approve` non può includere modifiche editoriali; un feedback vuoto non può riaprire un checkpoint già approvato.
 
 L'editor carica separatamente `display` per copertina e titoli e `body` per testi e metadati. Nei profili legacy usa `sans` per entrambi. Risolve `emphasis_italic` secondo [brand-profile.md](brand-profile.md), ne mostra il nome nell'interfaccia e non sintetizza un corsivo mancante. Espone inoltre `cover_subtitle` come campo opzionale e lo rende nello stesso ruolo corsivo.
 
@@ -88,12 +63,8 @@ Per l'anteprima dei logo servire soltanto asset raster autorizzati. Quando il ma
 
 Esaminare poi `comments` e `overall_note`. I commenti sono richieste da interpretare, non modifiche già effettuate. Applicare le correzioni necessarie al manifest, ripetere i controlli editoriali e aggiornare la revisione se occorre.
 
-Se `action` è `approve`, trattarla come richiesta esplicita di approvazione. Impostare `workflow_state: testi_approvati` soltanto dopo aver risolto i commenti e superato i controlli. In caso contrario mantenere `bozza`.
+Se `action` è `approve`, trattarla come richiesta esplicita di approvazione, non come avanzamento di stato. Dopo aver risolto i commenti e superato i controlli, eseguire la transizione richiesta con `scripts/advance_workflow.py`, passando la stessa `--session-dir`, secondo [workflow-state.md](workflow-state.md). Non modificare `workflow_state` o `workflow_receipts` a mano; se un gate fallisce mantenere il checkpoint corrente.
 
 ## Ripresa e chiusura
 
-Il browser conserva la bozza e l'ID idempotente prima di inviare il batch. Ogni scheda usa una chiave primaria distinta e mantiene le recovery append-only condivise; al primo avvio la 2.8.9 migra senza perdita la chiave unica usata dalla 2.8.8. Prima della POST crea inoltre una copia durevole del pending, rimossa soltanto quando lo stesso `feedback_id` risulta applicato. Il server conserva ogni batch in `feedback-batches/`, mantiene `feedback.json` come alias verificato dell'ultimo, riemette all'avvio un batch ancora pendente e rifiuta un secondo processo sulla stessa sessione. Se la risposta HTTP si perde, il browser riconcilia il proprio ID con lo stato senza duplicare l'invio. Un pending appartenente a un'altra scheda non deve cancellare le modifiche locali: l'editor le conserva come recovery esportabile prima di ricaricare. Se il processo si interrompe, riavviarlo con gli stessi manifest e cartella di sessione: un journal completa l'eventuale commit interrotto di feedback e stato prima di accettare nuovi invii.
-
-Dopo aver applicato il batch, lo script registra l'esito in `session-state.json`; l'editor rileva il nuovo stato e ricarica il manifest aggiornato. L'editor confronta anche la revisione del manifest con quella che sta mostrando: quando l'agente incrementa `revision` risolvendo i commenti, la pagina si aggiorna da sola se non ci sono modifiche locali in sospeso, altrimenti blocca l'invio e propone il ricarico. Non chiedere all'utente di aggiornare la pagina a mano. Chiudere il processo del server quando la revisione è terminata o l'utente interrompe il lavoro.
-
-Se il server, il browser o l'applicazione del batch falliscono, non modificare lo stato del workflow. Offrire la revisione conversazionale come fallback dichiarato.
+Dopo l'applicazione il server registra l'esito in `session-state.json` e l'editor ricarica la base aggiornata senza refresh manuale. Chiudere il server quando la revisione termina o l'utente interrompe il lavoro. Se una risposta si perde, il processo si interrompe o compare un conflitto fra basi o schede, leggere [review-recovery.md](review-recovery.md) prima di agire.

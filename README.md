@@ -34,7 +34,8 @@ Se preferisci installarla dalla riga di comando, trovi il comando nella sezione 
 - offre un editor locale per correggere, riordinare, commentare e approvare le slide quando l'ambiente lo consente (con ChatGPT desktop e Claude Code);
 - usa la revisione conversazionale come fallback negli altri ambienti;
 - produce PNG, PDF o un layout dettagliato, secondo gli strumenti messi a disposizione dall'ambiente di lavoro;
-- controlla leggibilità, contrasto, font, ritagli e corrispondenza con i testi approvati.
+- controlla leggibilità, contrasto, font, ritagli e corrispondenza con i testi approvati;
+- nel percorso locale lega approvazioni, export e QA a revisione, fingerprint e digest degli artefatti, con recovery coordinato dopo un'interruzione.
 
 ## Un'unica skill, due modalità
 
@@ -52,7 +53,7 @@ In un ambiente agentivo compatibile, come ChatGPT Desktop e Claude Code, può ap
 1. **Fonte**: tu gli dai un URL, un testo o un file e gli chiedi di creare un carosello
 2. **Brand**: la skill ti chiederà quali sono le caratteristiche del tuo brand (puoi anche caricare file di brand identity)
 3. **Anteprima editoriale**: si aprirà un editor che ti farà vedere e modificare il carosello.
-4. **Produzione**: dopo le tue modifiche il sistema genererà il carosello in formato .png e .pdf
+4. **Produzione**: dopo le due approvazioni il sistema genera gli output disponibili e li consegna soltanto dopo il QA
 
 ## Modalità editoriali
 
@@ -76,7 +77,7 @@ Tre i modelli di carosello disponibili:
 - prova obbligatoria a **480×600 px**;
 - adattamento tipografico automatico massimo: **8%**;
 - immagine generata in copertina (solo su ChatGPT o su chatbot che possono richiamare modelli per la creazione di immagini);
-- numerazione progressiva nell'angolo superiore destro per le sequenze narrative;
+- numerazione progressiva nell'angolo superiore destro su ogni pagina;
 - font e pesi derivati dal profilo approvato, senza imporre un carattere fisso.
 
 ## Installazione locale
@@ -100,7 +101,7 @@ Il contenuto di `agent-plugin/skills/carousel-builder/` è una copia esatta dell
 
 ## Sviluppo
 
-I tre script del percorso `local-editor` sono coperti da test automatici. Server ed applicazione del feedback usano la sola libreria standard Python; l'esportatore PDF usa le librerie Node già disponibili nell'ambiente:
+I quattro script del percorso `local-editor` sono coperti da test automatici. Il server, l'applicazione del feedback e l'avanzamento verificato del workflow usano la sola libreria standard Python; l'esportatore PDF usa le librerie Node già disponibili nell'ambiente. L'export può pubblicare un risultato JSON con digest degli artefatti, poi legato alle ricevute di stato e al report QA:
 
 ```bash
 python3 -m unittest discover -s tests -t tests -v

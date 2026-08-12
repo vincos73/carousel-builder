@@ -59,6 +59,7 @@ jobs:
           PYTHONPATH: tests
         run: |
           python -B -m unittest -v \
+            test_advance_workflow \
             test_apply_review \
             test_quick_validate \
             test_review_core \
@@ -71,6 +72,36 @@ jobs:
         run: >-
           python -B -m unittest -v
           test_review_server_http.ReviewServerHTTPTest.test_accepts_a_batch_and_writes_the_session_files
+
+  browser-smoke:
+    # Ubuntu 24.04 ships Chrome on the hosted image. The smoke uses a small,
+    # mature CDP subset through Node built-ins: no npm package, npx, browser
+    # download, floating JavaScript dependency or Playwright cache. The run
+    # records the hosted Chrome/Python versions and pins the Node runtime.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      CHROME_PATH: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.23.1"
+      - name: Verify hosted browser-smoke runtimes
+        run: |
+          test -x "$CHROME_PATH"
+          "$CHROME_PATH" --version
+          python --version
+          node --version
+      - name: Check browser smoke syntax
+        run: node --check tests/test_browser_smoke.cjs
+      - name: Run mandatory real-browser contract smoke
+        env:
+          PYTHON: python
+        run: node --test tests/test_browser_smoke.cjs
 
   node-export:
     runs-on: ubuntu-latest

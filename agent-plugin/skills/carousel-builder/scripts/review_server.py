@@ -9,6 +9,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import sys
 import threading
 from datetime import datetime, timezone
@@ -22,6 +23,13 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from review_core import (  # noqa: E402
+    CANONICAL_WORKFLOW_STATES,
+    LEGACY_PROFILE_TEXT_WORKFLOW_STATES,
+    LEGACY_VISUAL_PROOF_WORKFLOW_STATES,
+    LOGO_MODES,
+    VISUAL_STYLE_IDS,
+    InterprocessLock,
+    LockUnavailableError,
     approval_stage_for_workflow,
     append_only_json,
     atomic_write_json as core_atomic_write_json,
@@ -31,7 +39,9 @@ from review_core import (  # noqa: E402
     feedback_archive_path,
     feedback_request_fingerprint,
     new_feedback_id,
-    open_private_lock_file,
+    normalized_logo_mode,
+    normalized_proof_browser,
+    normalized_visual_style_system,
     render_context_fingerprint,
     render_snapshot_fingerprint,
     safe_feedback_id,
@@ -41,45 +51,28 @@ from review_core import (  # noqa: E402
     strict_json_text,
     valid_sha256,
     validate_emphasis_values,
+    validate_workflow_receipts,
 )
-
-if os.name == "nt":
-    import msvcrt
-else:
-    import fcntl
 
 
 MAX_BODY_BYTES = 1_000_000
 MAX_SLIDES = 50
 MAX_COMMENTS = 200
 MAX_TEXT = 20_000
-EDITOR_VERSION = "2.8.11"
+EDITOR_VERSION = "2.8.12"
 RENDER_CONTRACT = "approved-preview-dom-v2"
-CURRENT_SCHEMA_VERSION = (1, 3)
+CURRENT_SCHEMA_VERSION = (1, 4)
 SUPPORTED_SCHEMA_MAJOR = 1
 ITEM_ID_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_-]{0,63})\Z")
 RESERVED_SLIDE_IDS = {"cover", "outro"}
 SOURCE_TYPES = {"newsletter", "article", "notes", "verbatim", "rework", "social"}
 SEQUENCE_MODES = {"narrative", "sectional"}
-WORKFLOW_STATES = {
-    "bozza",
-    "testi_approvati",
-    "prova_visuale_approvata",
-    "rendering",
-    "qa",
-    "consegnato",
-    # Stati legacy documentati e già riconosciuti dal core.
-    "draft",
-    "in_revisione",
-    "in_revisione_editoriale",
-    "in_review",
-    "feedback",
-    "approvato",
-    "approved",
-    "pubblicato",
-    "published",
-}
+WORKFLOW_STATES = frozenset(CANONICAL_WORKFLOW_STATES) | (
+    LEGACY_PROFILE_TEXT_WORKFLOW_STATES | LEGACY_VISUAL_PROOF_WORKFLOW_STATES
+)
 PRODUCTION_MODES = {"renderer", "adapter", "layout"}
+PRODUCTION_OUTPUTS = {"pdf", "png", "contact_sheet"}
+PRODUCTION_OUTPUT_ALIASES = {"contact-sheet": "contact_sheet"}
 TYPOGRAPHY_DEFAULTS = {
     "cover_px": 112,
     "cover_subtitle_px": 56,
@@ -130,33 +123,13 @@ PALETTE_COLOR_FIELDS = (
     "text_on_dark",
     "accent",
 )
-LOGO_MODES = {"auto", "hidden"}
 VISUAL_STYLE_SYSTEMS = {
     "editorial-frame": "Editoriale",
     "editorial-halftone": "Geometrico",
     "corporate-modular": "Istituzionale",
 }
-VISUAL_STYLE_ALIASES = {
-    "editorial": "editorial-frame",
-    "editorial_frame": "editorial-frame",
-    "editorialframe": "editorial-frame",
-    "halftone": "editorial-halftone",
-    "editorial_halftone": "editorial-halftone",
-    "campo-cromatico": "editorial-halftone",
-    "campo_cromatico": "editorial-halftone",
-    "color-field": "editorial-halftone",
-    "costellazione": "editorial-halftone",
-    "constellation": "editorial-halftone",
-    "geometrico": "editorial-halftone",
-    "geometric": "editorial-halftone",
-    "corporate": "corporate-modular",
-    "corporate_modular": "corporate-modular",
-    "modulare-quieto": "corporate-modular",
-    "modulare_quieto": "corporate-modular",
-    "quiet-modular": "corporate-modular",
-    "istituzionale": "corporate-modular",
-    "institutional": "corporate-modular",
-}
+if frozenset(VISUAL_STYLE_SYSTEMS) != VISUAL_STYLE_IDS:
+    raise RuntimeError("Le etichette dei sistemi visivi non coincidono con review_core")
 
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
@@ -166,58 +139,8 @@ def valid_session_token(value: object) -> str | None:
     return value if isinstance(value, str) and TOKEN_RE.fullmatch(value) else None
 
 
-class LockUnavailableError(RuntimeError):
-    """Raised when another process owns a non-blocking review lock."""
-
-
 class IdempotencyConflictError(RuntimeError):
     """Raised when a client reuses a feedback UUID for different content."""
-
-
-class InterprocessLock:
-    """Cross-platform, non-blocking advisory lock backed by a persistent file."""
-
-    def __init__(self, path: Path):
-        self.path = path
-        self._stream = None
-
-    def acquire(self) -> "InterprocessLock":
-        stream = open_private_lock_file(self.path)
-        stream.seek(0, os.SEEK_END)
-        if stream.tell() == 0:
-            stream.write(b"\0")
-            stream.flush()
-        stream.seek(0)
-        try:
-            if os.name == "nt":
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            stream.close()
-            raise LockUnavailableError(f"Risorsa già in uso: {self.path}") from exc
-        self._stream = stream
-        return self
-
-    def release(self) -> None:
-        stream = self._stream
-        if stream is None:
-            return
-        try:
-            stream.seek(0)
-            if os.name == "nt":
-                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
-        finally:
-            stream.close()
-            self._stream = None
-
-    def __enter__(self) -> "InterprocessLock":
-        return self.acquire()
-
-    def __exit__(self, *_args: object) -> None:
-        self.release()
 
 
 def now_iso() -> str:
@@ -233,6 +156,118 @@ def read_json(path: Path) -> dict:
         raise ValueError(f"JSON non valido in {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise ValueError(f"Il contenuto di {path} deve essere un oggetto JSON")
+    return value
+
+
+def absolute_input_path(path: Path) -> Path:
+    """Return an absolute path without dereferencing any path component."""
+    return Path(os.path.abspath(os.fspath(path.expanduser())))
+
+
+def directory_is_user_controlled(path: Path) -> bool:
+    """Return whether the current user can create or replace entries in a directory."""
+    if os.name == "nt":
+        return os.access(path, os.W_OK)
+    path_stat = os.stat(path)
+    effective_uid = getattr(os, "geteuid", lambda: -1)()
+    if path_stat.st_uid == effective_uid or path_stat.st_mode & stat.S_IWOTH:
+        return True
+    groups = set(getattr(os, "getgroups", lambda: [])())
+    return bool(path_stat.st_mode & stat.S_IWGRP and path_stat.st_gid in groups)
+
+
+def reject_symlink_path(path: Path, *, field: str) -> None:
+    """Reject symlinks in every existing component before any mutation."""
+    absolute = absolute_input_path(path)
+    current = Path(absolute.anchor) if absolute.anchor else Path()
+    parts = absolute.parts[1:] if absolute.anchor else absolute.parts
+    for part in parts:
+        current /= part
+        try:
+            path_stat = os.lstat(current)
+        except FileNotFoundError:
+            break
+        if stat.S_ISLNK(path_stat.st_mode) and (
+            current == absolute or directory_is_user_controlled(current.parent)
+        ):
+            raise ValueError(
+                f"{field} non può attraversare un collegamento simbolico: {current}"
+            )
+
+
+def path_entry_exists(path: Path) -> bool:
+    """Report directory-entry existence without following a final symlink."""
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _stable_stat_signature(path_stat: os.stat_result) -> tuple[int, ...]:
+    return (
+        path_stat.st_dev,
+        path_stat.st_ino,
+        path_stat.st_size,
+        path_stat.st_mtime_ns,
+        path_stat.st_ctime_ns,
+        path_stat.st_nlink,
+    )
+
+
+def _validate_private_file_stat(path: Path, path_stat: os.stat_result) -> None:
+    if stat.S_ISLNK(path_stat.st_mode):
+        raise ValueError(f"Il file di sessione non può essere un collegamento simbolico: {path}")
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise ValueError(f"Il file di sessione deve essere un file regolare: {path}")
+    if path_stat.st_nlink != 1:
+        raise ValueError(f"Il file di sessione non può essere un hard link: {path}")
+
+
+def read_private_json(path: Path) -> dict:
+    """Read a private session JSON through a stable, no-follow descriptor."""
+    descriptor = None
+    try:
+        before = os.lstat(path)
+        _validate_private_file_stat(path, before)
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        _validate_private_file_stat(path, opened)
+        if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ValueError(f"Il file di sessione è cambiato durante l'apertura: {path}")
+
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+
+        after_descriptor = os.fstat(descriptor)
+        after_path = os.lstat(path)
+        _validate_private_file_stat(path, after_descriptor)
+        _validate_private_file_stat(path, after_path)
+        expected = _stable_stat_signature(before)
+        if any(
+            _stable_stat_signature(candidate) != expected
+            for candidate in (opened, after_descriptor, after_path)
+        ):
+            raise ValueError(f"Il file di sessione è cambiato durante la lettura: {path}")
+        raw = b"".join(chunks).decode("utf-8")
+    except FileNotFoundError as exc:
+        raise ValueError(f"File non trovato: {path}") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+    try:
+        value = strict_json_loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"JSON non valido in {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} deve contenere un oggetto JSON")
     return value
 
 
@@ -370,9 +405,9 @@ def recover_feedback_commit(
     state_path: Path,
     manifest_path: Path,
 ) -> dict | None:
-    if not journal_path.exists():
+    if not path_entry_exists(journal_path):
         return None
-    journal = read_json(journal_path)
+    journal = read_private_json(journal_path)
     journal_version = journal.get("version")
     if (
         not isinstance(journal_version, int)
@@ -415,7 +450,7 @@ def recover_feedback_commit(
     if set(state_patch) - allowed_patch:
         raise ValueError("Journal feedback contiene campi di stato non consentiti")
 
-    current_state = read_json(state_path)
+    current_state = read_private_json(state_path)
     validate_state_manifest(current_state, manifest_path)
     stored_action = current_state.get("last_action")
     before_action = state_before.get("last_action")
@@ -500,28 +535,10 @@ def required_proof_slide_ids(items: list[dict], *, outro_enabled: bool) -> list[
     return ["cover", densest_item_id(items)] + (["outro"] if outro_enabled else [])
 
 
-def normalized_proof_browser(value: object, *, required: bool = False) -> dict | None:
-    if value is None and not required:
-        return None
-    if not isinstance(value, dict) or set(value) != {"engine", "major"}:
-        raise ValueError("proof.browser deve contenere soltanto engine e major")
-    engine = value.get("engine")
-    major = value.get("major")
-    if engine != "chromium":
-        raise ValueError("proof.browser.engine deve essere chromium")
-    if (
-        not isinstance(major, int)
-        or isinstance(major, bool)
-        or not 1 <= major <= 999
-    ):
-        raise ValueError("proof.browser.major deve essere un intero tra 1 e 999")
-    return {"engine": engine, "major": major}
-
-
 def validate_manifest_contract(manifest: dict) -> dict:
     """Validate structural and cross-field invariants before building a model.
 
-    Schema 1.3 is strict. Earlier and unversioned manifests keep documented
+    Schema 1.4 is strict. Earlier and unversioned manifests keep documented
     compatibility defaults, but unsafe/future versions and identity collisions
     always fail closed.
     """
@@ -540,6 +557,16 @@ def validate_manifest_contract(manifest: dict) -> dict:
     workflow_state = manifest.get("workflow_state", "bozza")
     if not isinstance(workflow_state, str) or workflow_state not in WORKFLOW_STATES:
         raise ValueError(f"workflow_state non valido: {workflow_state!r}")
+    if current and workflow_state not in CANONICAL_WORKFLOW_STATES:
+        raise ValueError(
+            f"workflow_state non valido per schema 1.4: {workflow_state!r}"
+        )
+    if current or "workflow_receipts" in manifest:
+        validate_workflow_receipts(
+            manifest.get("workflow_receipts", []),
+            current_state=workflow_state,
+            require_complete=current,
+        )
 
     cover_title = text(manifest.get("cover_title"), field="cover_title")
     if not cover_title.strip():
@@ -635,13 +662,33 @@ def validate_manifest_contract(manifest: dict) -> dict:
             )
         if normalized not in supported_styles:
             supported_styles.append(normalized)
-    expected_outputs = production.get("expected_outputs", [])
-    if expected_outputs is not None and (
-        not isinstance(expected_outputs, list)
-        or any(not isinstance(output, str) or not output.strip() for output in expected_outputs)
-        or len(expected_outputs) != len(set(expected_outputs))
+    expected_value = production.get("expected_outputs", [])
+    if not isinstance(expected_value, list):
+        raise ValueError("production.expected_outputs deve essere una lista")
+    expected_outputs: list[str] = []
+    for index, output in enumerate(expected_value):
+        if not isinstance(output, str) or not output.strip():
+            raise ValueError(
+                f"production.expected_outputs[{index}] deve essere una stringa valida"
+            )
+        normalized_output = PRODUCTION_OUTPUT_ALIASES.get(
+            output.strip(), output.strip()
+        )
+        if normalized_output not in PRODUCTION_OUTPUTS:
+            raise ValueError(
+                f"production.expected_outputs[{index}] non è un output supportato"
+            )
+        if normalized_output in expected_outputs:
+            raise ValueError(
+                "production.expected_outputs contiene duplicati dopo la normalizzazione"
+            )
+        expected_outputs.append(normalized_output)
+    if current and production_mode == "renderer" and (
+        not expected_outputs or "pdf" not in expected_outputs
     ):
-        raise ValueError("production.expected_outputs deve essere una lista di stringhe univoche")
+        raise ValueError(
+            "production.expected_outputs deve includere almeno pdf per il renderer locale"
+        )
     selected_style_supported = selected_style in supported_styles
     if current and production_mode in {"renderer", "adapter"} and not selected_style_supported:
         raise ValueError(
@@ -702,7 +749,7 @@ def validate_manifest_contract(manifest: dict) -> dict:
                 isinstance(expected, int) and isinstance(format_data.get(field), bool)
             ):
                 raise ValueError(
-                    f"format.{field} deve essere {expected!r} nello schema 1.3"
+                    f"format.{field} deve essere {expected!r} nello schema 1.4"
                 )
     preview_width = format_data.get("preview_width", 480)
     if not isinstance(preview_width, int) or isinstance(preview_width, bool) or preview_width != 480:
@@ -724,6 +771,7 @@ def validate_manifest_contract(manifest: dict) -> dict:
             "producer": producer,
             "supported_style_systems": supported_styles,
             "selected_style_supported": selected_style_supported,
+            "expected_outputs": expected_outputs,
         },
         "proof": {
             "slide_ids": raw_proof_ids,
@@ -822,22 +870,6 @@ def validate_emphasis_overlap(values: dict[str, list[str]], content: str, *, fie
                         f"{field}: i trattamenti su “{other_phrase}” e “{phrase}” si sovrappongono. Correggi le selezioni oppure mantienine uno solo"
                     )
             ranges.append((start, end, role, phrase))
-
-
-def normalized_logo_mode(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    mode = value.strip().casefold()
-    return mode if mode in LOGO_MODES else None
-
-
-def normalized_visual_style_system(value: object) -> str | None:
-    """Return a canonical visual system, accepting a few legacy spellings."""
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip().casefold()
-    normalized = VISUAL_STYLE_ALIASES.get(normalized, normalized)
-    return normalized if normalized in VISUAL_STYLE_SYSTEMS else None
 
 
 def resolved_visual_style_system(manifest: dict) -> str:
@@ -1543,6 +1575,9 @@ def manifest_model(
         "cover_visual": model["cover_visual"],
         "cover_mode": model["cover_mode"],
         "sequence_mode": model["sequence_mode"],
+        # The approved proof is bound to the exact producer/output contract.
+        # Changing delivery targets after approval must invalidate the proof.
+        "production": model["production"],
         # Only the coarse approval checkpoint belongs to the render identity:
         # entering visual proof invalidates a stale profile/text approval, while
         # later visual workflow states keep the same approved proof valid.
@@ -1754,6 +1789,28 @@ def validate_feedback(
             logo_mode=logo_mode,
         )
         if approval_stage == "visual_proof":
+            selected_style = (
+                visual_style_system
+                or model["visual_proofs"]["selected_style_system"]
+            )
+            current_slides = []
+            for slide in model["slides"]:
+                normalized = {
+                    "id": slide["id"],
+                    "kind": slide["kind"],
+                    "title": slide.get("title", ""),
+                    "summary": slide.get("summary", ""),
+                }
+                for field in ("title", "summary"):
+                    for role in EMPHASIS_ROLES:
+                        normalized[f"{field}_{role}"] = slide.get(
+                            f"{field}_{role}", []
+                        )
+                current_slides.append(normalized)
+            if normalized_slides != current_slides:
+                raise ValueError(
+                    "Le modifiche editoriali devono essere inviate e riapprovate prima della prova visuale"
+                )
             proof_slide_ids = payload.get("proof_slide_ids")
             required_ids = required_proof_ids_for_slides(normalized_slides)
             if proof_slide_ids != required_ids:
@@ -1768,9 +1825,6 @@ def validate_feedback(
             proof_browser = normalized_proof_browser(
                 payload.get("proof_browser"), required=True
             )
-            selected_style = visual_style_system or model["visual_proofs"][
-                "selected_style_system"
-            ]
             production = model.get("production", {})
             if production.get("mode") not in {"renderer", "adapter"}:
                 raise ValueError(
@@ -1821,10 +1875,12 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        manifest_path = args.manifest.expanduser().resolve()
-        session_dir = args.session_dir.expanduser().resolve()
+        manifest_path = absolute_input_path(args.manifest)
+        session_dir = absolute_input_path(args.session_dir)
+        reject_symlink_path(manifest_path, field="Il manifest")
+        reject_symlink_path(session_dir, field="La cartella di sessione")
         ensure_private_directory(session_dir)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         print(
             json.dumps({"error": f"Impossibile preparare la sessione: {exc}"}),
             file=sys.stderr,
@@ -1836,12 +1892,23 @@ def main() -> int:
         print(json.dumps({"error": f"Asset editor mancante: {index_path}"}), file=sys.stderr)
         return 2
     server_lock = InterprocessLock(session_dir / ".review-server.lock")
+    manifest_server_lock = InterprocessLock(
+        manifest_path.with_name(f".{manifest_path.name}.review-server.lock")
+    )
     try:
         server_lock.acquire()
+        manifest_server_lock.acquire()
     except (LockUnavailableError, OSError) as exc:
+        manifest_server_lock.release()
+        server_lock.release()
         print(
             json.dumps(
-                {"error": f"La cartella di sessione è già in uso: {exc}"},
+                {
+                    "error": (
+                        "La cartella di sessione o il manifest è già servito "
+                        f"da un altro editor: {exc}"
+                    )
+                },
                 ensure_ascii=False,
             ),
             file=sys.stderr,
@@ -1863,8 +1930,8 @@ def main() -> int:
             for lock in startup_locks:
                 lock.acquire()
             initial_model = manifest_model(manifest_path)
-            if state_path.exists():
-                state = read_json(state_path)
+            if path_entry_exists(state_path):
+                state = read_private_json(state_path)
                 validate_state_manifest(state, manifest_path)
                 token = valid_session_token(state.get("token")) or secrets.token_urlsafe(24)
             else:
@@ -1873,14 +1940,14 @@ def main() -> int:
             # Recovery must observe exactly the pre-commit state recorded in the
             # journal. Updating revision/start metadata first can make a valid
             # interrupted commit look like unrelated state corruption.
-            if state_path.exists():
+            if path_entry_exists(state_path):
                 recovered_event = recover_feedback_commit(
                     journal_path=journal_path,
                     feedback_path=feedback_path,
                     state_path=state_path,
                     manifest_path=manifest_path,
                 )
-                state = read_json(state_path)
+                state = read_private_json(state_path)
             state.update(
                 {
                     "token": token,
@@ -1891,7 +1958,7 @@ def main() -> int:
             )
             atomic_write_json(state_path, state)
             if recovered_event is None:
-                current_state = read_json(state_path)
+                current_state = read_private_json(state_path)
                 last_feedback_id = current_state.get("last_feedback_id")
                 applied_feedback_id = current_state.get("applied_feedback_id")
                 if last_feedback_id:
@@ -1899,9 +1966,9 @@ def main() -> int:
                     archive_path = feedback_archive_path(session_dir, last_feedback_id)
                     persisted_feedback = None
                     for candidate in (archive_path, feedback_path):
-                        if not candidate.exists():
+                        if not path_entry_exists(candidate):
                             continue
-                        candidate_feedback = read_json(candidate)
+                        candidate_feedback = read_private_json(candidate)
                         if candidate_feedback.get("feedback_id") == last_feedback_id:
                             persisted_feedback = candidate_feedback
                             break
@@ -1937,10 +2004,41 @@ def main() -> int:
             for lock in reversed(locals().get("startup_locks", [])):
                 lock.release()
     except (KeyError, LockUnavailableError, OSError, TypeError, ValueError) as exc:
+        manifest_server_lock.release()
         server_lock.release()
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2
     submit_lock = threading.Lock()
+
+    def live_session_snapshot(*, include_model: bool) -> dict:
+        """Read manifest and durable feedback state under the shared lock order."""
+        locks = [
+            InterprocessLock(manifest_lock_path),
+            InterprocessLock(transaction_lock_path),
+        ]
+        with submit_lock:
+            try:
+                for lock in locks:
+                    lock.acquire()
+                current_state = read_private_json(state_path)
+                validate_state_manifest(current_state, manifest_path)
+                value = (
+                    manifest_model(manifest_path)
+                    if include_model
+                    else manifest_status(manifest_path)
+                )
+                last_id = current_state.get("last_feedback_id")
+                applied_id = current_state.get("applied_feedback_id")
+                return {
+                    **value,
+                    "last_feedback_id": last_id,
+                    "last_action": current_state.get("last_action"),
+                    "applied_feedback_id": applied_id,
+                    "feedback_pending": bool(last_id and last_id != applied_id),
+                }
+            finally:
+                for lock in reversed(locks):
+                    lock.release()
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "CarouselReviewLab/0.1"
@@ -2179,7 +2277,10 @@ def main() -> int:
                     self.send_json(HTTPStatus.FORBIDDEN, {"error": "Sessione non autorizzata"})
                     return
                 try:
-                    model = manifest_model(manifest_path)
+                    model = live_session_snapshot(include_model=True)
+                except LockUnavailableError as exc:
+                    self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+                    return
                 except ValueError as exc:
                     self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
                     return
@@ -2196,8 +2297,12 @@ def main() -> int:
                     self.send_json(HTTPStatus.FORBIDDEN, {"error": "Sessione non autorizzata"})
                     return
                 try:
-                    current_state = read_json(state_path)
-                    validate_state_manifest(current_state, manifest_path)
+                    current_manifest_status = live_session_snapshot(
+                        include_model=False
+                    )
+                except LockUnavailableError as exc:
+                    self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+                    return
                 except ValueError as exc:
                     self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
                     return
@@ -2207,29 +2312,7 @@ def main() -> int:
                         {"error": f"Impossibile leggere lo stato della sessione: {exc}"},
                     )
                     return
-                try:
-                    current_manifest_status = manifest_status(manifest_path)
-                except ValueError as exc:
-                    self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
-                    return
-                except OSError as exc:
-                    self.send_json(
-                        HTTPStatus.INTERNAL_SERVER_ERROR,
-                        {"error": f"Impossibile leggere il manifest: {exc}"},
-                    )
-                    return
-                last_id = current_state.get("last_feedback_id")
-                applied_id = current_state.get("applied_feedback_id")
-                self.send_json(
-                    HTTPStatus.OK,
-                    {
-                        **current_manifest_status,
-                        "last_feedback_id": last_id,
-                        "last_action": current_state.get("last_action"),
-                        "applied_feedback_id": applied_id,
-                        "feedback_pending": bool(last_id and last_id != applied_id),
-                    },
-                )
+                self.send_json(HTTPStatus.OK, current_manifest_status)
                 return
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "Risorsa non trovata"})
 
@@ -2281,7 +2364,7 @@ def main() -> int:
                             state_path=state_path,
                             manifest_path=manifest_path,
                         )
-                        current_state = read_json(state_path)
+                        current_state = read_private_json(state_path)
                         validate_state_manifest(current_state, manifest_path)
                         last_feedback_id = current_state.get("last_feedback_id")
                         applied_feedback_id = current_state.get("applied_feedback_id")
@@ -2290,8 +2373,8 @@ def main() -> int:
                             requested_archive = feedback_archive_path(
                                 session_dir, requested_feedback_id
                             )
-                            if requested_archive.exists():
-                                archived_feedback = read_json(requested_archive)
+                            if path_entry_exists(requested_archive):
+                                archived_feedback = read_private_json(requested_archive)
                                 if (
                                     archived_feedback.get("feedback_id") != requested_feedback_id
                                     or archived_feedback.get("request_fingerprint")
@@ -2371,6 +2454,7 @@ def main() -> int:
     try:
         server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     except OSError as exc:
+        manifest_server_lock.release()
         server_lock.release()
         print(
             json.dumps(
@@ -2402,6 +2486,7 @@ def main() -> int:
         pass
     finally:
         server.server_close()
+        manifest_server_lock.release()
         server_lock.release()
     return 0
 

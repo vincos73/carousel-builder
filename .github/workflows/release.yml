@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
@@ -29,7 +29,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "22.23.1"
 
       - name: Verifica ref, tag, commit e versione
         id: version
@@ -80,6 +80,8 @@ jobs:
           node --check agent-plugin/skills/carousel-builder/scripts/export_review_pdf.cjs
           node --check agent-plugin/skills/carousel-builder/assets/review-editor/app.js
           node --test tests/test_export_review_pdf.cjs
+          test -x /usr/bin/google-chrome
+          PYTHON=python CHROME_PATH=/usr/bin/google-chrome node --test tests/test_browser_smoke.cjs
 
       - name: Verifica il mirror Agent Plugin
         shell: bash
@@ -158,6 +160,11 @@ jobs:
         run: |
           set -euo pipefail
           expected_assets="SHA256SUMS,carousel-builder-agent-plugin.zip,carousel-builder.zip"
+          expected_asset_names=(
+            SHA256SUMS
+            carousel-builder-agent-plugin.zip
+            carousel-builder.zip
+          )
           load_matching_release_ids() {
             mapfile -t matching_release_ids < <(gh api \
               -H "Accept: application/vnd.github+json" \
@@ -220,11 +227,52 @@ jobs:
           fi
           test "$(jq -r '.prerelease' <<<"$release_json")" = "false"
           test "$(jq -r '.target_commitish' <<<"$release_json")" = "$TAG_COMMIT"
+
+          # Una gh release create interrotta può lasciare una draft con un
+          # sottoinsieme degli asset. Accetta soltanto nomi previsti, univoci,
+          # uploaded e byte-identici al pacchetto appena ricostruito; solo in
+          # quel caso completa i mancanti senza mai sovrascrivere.
+          declare -A verified_assets=()
+          while IFS=$'\t' read -r asset_id asset_name asset_state asset_size; do
+            case ",$expected_assets," in
+              *",$asset_name,"*) ;;
+              *)
+                echo "::error::La draft contiene un asset inatteso: $asset_name"
+                exit 1
+                ;;
+            esac
+            if [ -n "${verified_assets[$asset_name]+present}" ]; then
+              echo "::error::La draft contiene due asset chiamati $asset_name."
+              exit 1
+            fi
+            test "$asset_state" = "uploaded"
+            test "$asset_size" -gt 0
+            gh api \
+              -H "Accept: application/octet-stream" \
+              "/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              > "$download_dir/$asset_name"
+            cmp "dist/$asset_name" "$download_dir/$asset_name"
+            verified_assets["$asset_name"]=1
+          done < <(jq -r '.assets[] | [.id, .name, .state, .size] | @tsv' <<<"$release_json")
+
+          if [ "$resume_draft" = "true" ]; then
+            echo "Riprendo la release draft $TAG dopo aver verificato ogni asset presente."
+            for asset_name in "${expected_asset_names[@]}"; do
+              if [ -z "${verified_assets[$asset_name]+present}" ]; then
+                gh release upload "$TAG" "dist/$asset_name"
+              fi
+            done
+          fi
+
+          release_json=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$GITHUB_REPOSITORY/releases/$release_id")
+          test "$(jq -r '.tag_name' <<<"$release_json")" = "$TAG"
+          test "$(jq -r '.draft' <<<"$release_json")" = "true"
+          test "$(jq -r '.prerelease' <<<"$release_json")" = "false"
+          test "$(jq -r '.target_commitish' <<<"$release_json")" = "$TAG_COMMIT"
           test "$(jq -r '[.assets[].name] | sort | join(",")' <<<"$release_json")" = "$expected_assets"
           test "$(jq -r 'all(.assets[]; .state == "uploaded" and .size > 0)' <<<"$release_json")" = "true"
-          if [ "$resume_draft" = "true" ]; then
-            echo "Riprendo la release draft $TAG e ne riverifico integralmente gli asset."
-          fi
           while IFS=$'\t' read -r asset_id asset_name; do
             gh api \
               -H "Accept: application/octet-stream" \

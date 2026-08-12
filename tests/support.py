@@ -8,11 +8,44 @@ import sys
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+WORKFLOW_STATES = (
+    "bozza",
+    "testi_approvati",
+    "prova_visuale_approvata",
+    "rendering",
+    "qa",
+    "consegnato",
+)
+
+
+def workflow_receipts_for_state(state: str, *, revision: int = 1) -> list[dict]:
+    """Build a structurally valid complete ledger for isolated test fixtures."""
+    stop = WORKFLOW_STATES.index(state)
+    return [
+        {
+            "from": current,
+            "to": WORKFLOW_STATES[index + 1],
+            "revision": revision,
+            "render_fingerprint": f"{index + 1:x}" * 64,
+            "evidence_sha256": f"{index + 7:x}" * 64,
+            "advanced_at": f"2026-08-12T12:0{index}:00+00:00",
+        }
+        for index, current in enumerate(WORKFLOW_STATES[:stop])
+    ]
+
+
+def set_workflow_state(manifest: dict, state: str) -> dict:
+    manifest["workflow_state"] = state
+    if manifest.get("schema_version") == "1.4":
+        manifest["workflow_receipts"] = workflow_receipts_for_state(
+            state, revision=manifest.get("revision", 1)
+        )
+    return manifest
 
 
 def base_manifest() -> dict:
     return {
-        "schema_version": "1.3",
+        "schema_version": "1.4",
         "source_type": "article",
         "sequence_mode": "narrative",
         "workflow_state": "bozza",
@@ -110,6 +143,12 @@ def sync_derived_contract(manifest: dict) -> dict:
             + len(str(item.get("summary", "")).strip()),
         )["id"]
         manifest["proof"]["slide_ids"] = ["cover", dense] + (["outro"] if outro_enabled else [])
+    if manifest.get("schema_version") == "1.4" and "workflow_receipts" not in manifest:
+        state = manifest.get("workflow_state", "bozza")
+        if state in WORKFLOW_STATES:
+            manifest["workflow_receipts"] = workflow_receipts_for_state(
+                state, revision=manifest.get("revision", 1)
+            )
     return manifest
 
 

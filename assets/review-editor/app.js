@@ -68,6 +68,14 @@
     return `${sharedKey}:tab:${tabId}`;
   }
 
+  function previewReadyForApproval(dataset) {
+    return dataset?.previewReady === "true" && !dataset.productionError;
+  }
+
+  function fontAssetRequiresVerifiedLoad(asset) {
+    return Boolean(asset && asset.available === true);
+  }
+
   const FONT_ROLE_WEIGHT_RANGES = Object.freeze({
     display: "700 900",
     body: "100 699",
@@ -85,9 +93,11 @@
   if (typeof module === "object" && module.exports) {
     module.exports = {
       collectPaletteDeclarationIssues,
+      fontAssetRequiresVerifiedLoad,
       fontAssetDescriptors,
       geometryPartIsHidden,
       mergePreviewBrand,
+      previewReadyForApproval,
       tabDraftStorageKey,
     };
     return;
@@ -961,7 +971,6 @@
     renderVisualSystemPicker({ focusSystem: focus ? next : "" });
     renderBrand();
     renderSlides();
-    publishPreviewContract(configurePreviewTypography());
     persistDraft();
     schedulePreviewMeasure();
   }
@@ -1038,7 +1047,9 @@
     if (elements.sendButton) elements.sendButton.disabled = count === 0 || waiting;
     if (elements.approveButton) {
       const approvalComplete = ["prova_visuale_approvata", "rendering", "qa", "consegnato"].includes(model.workflow_state);
-      elements.approveButton.disabled = waiting || approvalComplete;
+      elements.approveButton.disabled = waiting
+        || approvalComplete
+        || !previewReadyForApproval(document.documentElement.dataset);
     }
     if (elements.sendButton) elements.sendButton.textContent = waiting ? "Correzioni inviate" : "Invia correzioni";
     if (elements.workflowBadge) {
@@ -1266,7 +1277,7 @@
   function loadFontAsset(asset, descriptors) {
     const key = fontAssetKey(asset, descriptors);
     if (!fontLoadCache.has(key)) {
-      fontLoadCache.set(key, (async () => {
+      const pending = (async () => {
         const face = new FontFace(
           asset.family,
           `url("${api(asset.endpoint).replace(/"/g, "%22")}")`,
@@ -1276,22 +1287,28 @@
         document.fonts.add(face);
         loadedFontKeys.add(key);
         return asset.family;
-      })());
+      })();
+      fontLoadCache.set(key, pending);
+      // A rejected load is not a durable cache entry: a fixed/replaced local
+      // asset must be retryable on the next preview publication.
+      pending.catch(() => {
+        if (fontLoadCache.get(key) === pending) fontLoadCache.delete(key);
+      });
     }
     return fontLoadCache.get(key);
   }
 
-  function setFontStatus(_message, error = false) {
+  function setFontStatus(message, error = false) {
     if (!elements.fontStatus) return;
     elements.fontStatus.hidden = !error;
     elements.fontStatus.textContent = error
-      ? "Un carattere non si è caricato: l’anteprima sta usando un’alternativa."
+      ? message || "Un carattere dichiarato non si è caricato: l’anteprima non può essere approvata."
       : "";
     elements.fontStatus.setAttribute("role", error ? "alert" : "status");
     elements.fontStatus.setAttribute("aria-live", error ? "assertive" : "polite");
   }
 
-  async function configurePreviewTypography() {
+  async function configurePreviewTypography(run) {
     const brand = previewBrand();
     const assets = brand.font_assets && typeof brand.font_assets === "object" ? brand.font_assets : {};
     const sansFallback = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
@@ -1303,18 +1320,29 @@
     const italicAvailableBefore = hasRealItalicFont();
     for (const kind of ["display", "body", "serif", "italic"]) {
       const asset = kind === "italic" ? resolvedItalic : assets[kind] || (kind === "body" ? assets.sans : null);
-      if (!asset || asset.available !== true || !asset.family || !asset.endpoint || typeof FontFace === "undefined") {
+      if (!fontAssetRequiresVerifiedLoad(asset)) {
         outcomes.push(`${labels[kind]}: fallback dichiarato`);
         continue;
       }
       try {
+        if (!asset.family || !asset.endpoint || typeof FontFace === "undefined") {
+          throw new Error("metadati o API FontFace non disponibili");
+        }
         const style = kind === "serif" || kind === "italic" ? "italic" : "normal";
         loaded[kind] = await loadFontAsset(asset, fontAssetDescriptors(kind, style));
         outcomes.push(`${labels[kind]}: ${asset.family}`);
       } catch (_error) {
-        outcomes.push(`${labels[kind]}: fallback dichiarato (caricamento non riuscito)`);
+        if (run !== previewContractRun) return false;
+        const failure = new Error(
+          `Font approvato non caricabile (${labels[kind]}: ${asset.family || "famiglia non dichiarata"}). Correggi l’asset e riprova.`,
+        );
+        failure.code = "FONT_ASSET_LOAD_FAILED";
+        throw failure;
       }
     }
+    // Font loads are shared and cannot be cancelled. A superseded publisher may
+    // populate the cache, but it must never mutate or rebuild the current DOM.
+    if (run !== previewContractRun) return false;
     document.documentElement.style.setProperty("--preview-display", fontStack(loaded.display, fallbacks.display));
     document.documentElement.style.setProperty("--preview-body", fontStack(loaded.body, fallbacks.body));
     document.documentElement.style.setProperty("--preview-sans", fontStack(loaded.body, fallbacks.body));
@@ -1324,8 +1352,12 @@
       `Tipografia anteprima — ${outcomes.join(" · ")} · Non verifica immagini o crop finali.`,
       outcomes.some((outcome) => outcome.includes("non riuscito")),
     );
-    if (italicAvailableBefore !== hasRealItalicFont() && elements.slides?.childElementCount) renderSlides();
+    if (italicAvailableBefore !== hasRealItalicFont() && elements.slides?.childElementCount) {
+      // The publisher awaiting this typography pass will certify the rebuilt DOM.
+      renderSlides({ publishContract: false });
+    }
     schedulePreviewMeasure();
+    return true;
   }
 
   function typography() {
@@ -2085,8 +2117,6 @@
     const row = elements.slides?.querySelector(`[data-slide-id="${selectorValue(slideId)}"]`);
     if (!row) return;
     currentSlideId = slideId;
-    markSlideSeen(slideId);
-    applyViewedClasses();
     row.scrollIntoView({ behavior: "smooth", block: "start" });
     renderSequenceNav();
   }
@@ -2127,13 +2157,13 @@
     observer = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (!entry.isIntersecting || entry.intersectionRatio < 0.5) continue;
-        currentSlideId = entry.target.dataset.slideId;
+        currentSlideId = entry.target.closest(".slide-row")?.dataset.slideId || "";
         markSlideSeen(currentSlideId);
-        applyViewedClasses();
-        renderSequenceNav();
       }
     }, { threshold: [0.5] });
-    for (const row of elements.slides.querySelectorAll(".slide-row")) observer.observe(row);
+    for (const preview of elements.slides.querySelectorAll(".slide-row > .slide-preview")) {
+      observer.observe(preview);
+    }
   }
 
   function measurePreviews(slideIds = null) {
@@ -2179,8 +2209,19 @@
     if (validationMode) refreshApprovalValidation();
   }
 
-  function renderSlides() {
+  function invalidatePreviewContract({ cancelPending = true } = {}) {
+    if (cancelPending) previewContractRun += 1;
+    delete document.documentElement.dataset.previewReady;
+    delete document.documentElement.dataset.productionReady;
+    delete document.documentElement.dataset.productionError;
+    delete window.carouselBuilderPreview;
+    if (elements.approveButton) elements.approveButton.disabled = true;
+    syncMobileActions();
+  }
+
+  function renderSlides({ publishContract = true } = {}) {
     if (!elements.slides) return;
+    invalidatePreviewContract({ cancelPending: publishContract });
     const focusSnapshot = captureFocus(elements.slides);
     fitWarnings.clear();
     elements.slides.replaceChildren();
@@ -2363,6 +2404,7 @@
     setupObserver();
     restoreFocus(focusSnapshot, elements.slides);
     schedulePreviewMeasure();
+    if (publishContract) publishPreviewContract();
   }
 
   function roundedMetric(value) {
@@ -2450,9 +2492,14 @@
     };
   }
 
+  function renderContractId() {
+    const value = model?.render_contract;
+    return typeof value === "string" && value.trim() ? value.trim() : "";
+  }
+
   function getRenderContract() {
     return {
-      contract: "approved-preview-dom-v2",
+      contract: renderContractId(),
       production: productionRender,
       revision: model?.revision ?? null,
       workflowState: model?.workflow_state || "",
@@ -2505,23 +2552,26 @@
     })));
   }
 
-  async function publishPreviewContract(typographyReady) {
+  async function publishPreviewContract() {
     const run = ++previewContractRun;
-    delete document.documentElement.dataset.previewReady;
-    delete document.documentElement.dataset.productionReady;
-    delete document.documentElement.dataset.productionError;
+    invalidatePreviewContract({ cancelPending: false });
     try {
-      await typographyReady;
+      if (!(await configurePreviewTypography(run))) return;
+      if (run !== previewContractRun) return;
       if (document.fonts?.ready) await document.fonts.ready;
       await waitForPreviewImages();
       await nextPaint();
       flushPreviewMeasurements();
       await nextPaint();
       if (run !== previewContractRun) return;
-      const blocking = collectApprovalIssues();
+      const blocking = collectApprovalIssues({
+        requirePreviewReady: false,
+        includeProofInteraction: false,
+      });
       if (blocking.length) throw new Error(`Produzione bloccata: ${blocking.map((issue) => issue.slideId || issue.key).join(", ")}.`);
+      if (!renderContractId()) throw new Error("Contratto renderer non disponibile.");
       window.carouselBuilderPreview = Object.freeze({
-        contract: "approved-preview-dom-v2",
+        contract: renderContractId(),
         production: productionRender,
         styleSystem: selectedVisualSystem,
         getRenderContract,
@@ -2530,9 +2580,14 @@
       });
       document.documentElement.dataset.previewReady = "true";
       if (productionRender) document.documentElement.dataset.productionReady = "true";
+      updateChangeSummary();
+      refreshApprovalValidation();
     } catch (error) {
       if (run !== previewContractRun) return;
+      if (error?.code === "FONT_ASSET_LOAD_FAILED") setFontStatus(error.message, true);
       document.documentElement.dataset.productionError = error?.message || "Anteprima non pronta";
+      updateChangeSummary();
+      refreshApprovalValidation();
     }
   }
 
@@ -2604,7 +2659,6 @@
     if (hasPendingLock()) lockEditing();
     updateChangeSummary();
     renderValidationState();
-    publishPreviewContract(configurePreviewTypography());
   }
 
   async function loadSession() {
@@ -2674,8 +2728,23 @@
     return issues;
   }
 
-  function collectApprovalIssues() {
+  function collectApprovalIssues({
+    requirePreviewReady = true,
+    includeProofInteraction = true,
+  } = {}) {
     const issues = collectStructureIssues();
+    if (
+      requirePreviewReady
+      && !previewReadyForApproval(document.documentElement.dataset)
+    ) {
+      issues.push({
+        key: "preview-not-ready",
+        message: document.documentElement.dataset.productionError
+          ? "L’anteprima non è pronta: correggi l’errore di rendering prima di approvare."
+          : "Attendi che font, immagini e misure dell’anteprima siano pronti prima di approvare.",
+        targetId: "visual-system-picker",
+      });
+    }
     for (const slide of draftSlides) {
       const warning = fitWarnings.get(slide.id) || {
         schema: schemaWarning(slide),
@@ -2700,7 +2769,7 @@
     const requiresFreshVisualProof = model?.approval_checkpoint === "visual_proof"
       && model?.proof_approved !== true
       && !productionRender;
-    if (requiresFreshVisualProof) {
+    if (includeProofInteraction && requiresFreshVisualProof) {
       const draftChanged = JSON.stringify(normalizedSlides(draftSlides)) !== JSON.stringify(normalizedSlides(baselineSlides));
       if (draftChanged || selectedVisualSystem !== modelVisualSystem() || logoMode !== initialLogoMode()) issues.push({
         key: "proof-draft-changed",

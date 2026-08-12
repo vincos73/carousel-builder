@@ -8,6 +8,7 @@ import copy
 import json
 import os
 import secrets
+import stat
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,72 +18,32 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from review_core import (  # noqa: E402
+    CANONICAL_WORKFLOW_STATES,
+    InterprocessLock,
+    LockUnavailableError,
     approval_stage_for_workflow,
     atomic_write_json as core_atomic_write_json,
     copy_limit_issues,
     ensure_private_directory,
     feedback_archive_path,
     fsync_directory,
-    open_private_lock_file,
+    normalized_logo_mode,
+    normalized_visual_style_system,
     safe_feedback_id,
     sentence_line_breaks,
     sha256_json,
     strict_json_loads,
     valid_sha256,
+    validated_proof_browser,
     validate_emphasis_values,
 )
 
-from review_server import manifest_model as server_manifest_model  # noqa: E402
-
-if os.name == "nt":
-    import msvcrt
-else:
-    import fcntl
-
-
-class LockUnavailableError(RuntimeError):
-    """Raised when another process is updating the same review session."""
-
-
-class InterprocessLock:
-    """Cross-platform, non-blocking advisory lock backed by a persistent file."""
-
-    def __init__(self, path: Path):
-        self.path = path
-        self._stream = None
-
-    def acquire(self) -> "InterprocessLock":
-        stream = open_private_lock_file(self.path)
-        stream.seek(0, os.SEEK_END)
-        if stream.tell() == 0:
-            stream.write(b"\0")
-            stream.flush()
-        stream.seek(0)
-        try:
-            if os.name == "nt":
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            stream.close()
-            raise LockUnavailableError(f"Risorsa già in uso: {self.path}") from exc
-        self._stream = stream
-        return self
-
-    def release(self) -> None:
-        stream = self._stream
-        if stream is None:
-            return
-        try:
-            stream.seek(0)
-            if os.name == "nt":
-                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
-        finally:
-            stream.close()
-            self._stream = None
-
+from review_server import (  # noqa: E402
+    absolute_input_path,
+    manifest_model as server_manifest_model,
+    read_private_json,
+    reject_symlink_path,
+)
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -115,16 +76,19 @@ def atomic_copy(source: Path, destination: Path) -> None:
     descriptor = None
     try:
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with source.open("rb") as source_stream, os.fdopen(descriptor, "wb") as target_stream:
-            descriptor = None
+        with source.open("rb") as source_stream, os.fdopen(
+            os.dup(descriptor), "wb"
+        ) as target_stream:
             while True:
                 chunk = source_stream.read(1024 * 1024)
                 if not chunk:
                     break
                 target_stream.write(chunk)
             target_stream.flush()
-            os.fsync(target_stream.fileno())
-        os.chmod(temporary, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        verify_temporary_copy(temporary, descriptor)
         os.replace(temporary, destination)
         fsync_directory(destination.parent)
     finally:
@@ -136,12 +100,47 @@ def atomic_copy(source: Path, destination: Path) -> None:
             pass
 
 
+def verify_temporary_copy(path: Path, descriptor: int) -> None:
+    """Require a publish pathname to remain bound to the open copied file."""
+    try:
+        opened = os.fstat(descriptor)
+        current = path.lstat()
+    except OSError as exc:
+        raise ValueError(f"Copia temporanea cambiata prima della pubblicazione: {path}") from exc
+    stable_fields = (
+        "st_mode",
+        "st_dev",
+        "st_ino",
+        "st_nlink",
+        "st_size",
+        "st_mtime_ns",
+        "st_ctime_ns",
+    )
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or not stat.S_ISREG(current.st_mode)
+        or opened.st_nlink != 1
+        or current.st_nlink != 1
+        or any(
+            getattr(opened, field) != getattr(current, field)
+            for field in stable_fields
+        )
+    ):
+        raise ValueError(f"Copia temporanea non sicura: {path}")
+
+
 def canonical_path(path: Path | str) -> str:
     return os.path.normcase(os.path.realpath(os.fspath(path)))
 
 
 def same_path(left: Path | str, right: Path | str) -> bool:
     return canonical_path(left) == canonical_path(right)
+
+
+def same_lexical_path(left: Path | str, right: Path | str) -> bool:
+    return os.path.normcase(os.path.abspath(os.fspath(left))) == os.path.normcase(
+        os.path.abspath(os.fspath(right))
+    )
 
 
 def validate_state_manifest(state: dict, manifest_path: Path) -> None:
@@ -276,48 +275,6 @@ EMPHASIS_KEYS = {
 EMPHASIS_ROLES = ("bold", "italic", "serif", "accent", "underline")
 MAX_SLIDES = 50
 RESERVED_SLIDE_IDS = {"cover", "outro"}
-BROWSER_ENGINES = {"chromium"}
-LOGO_MODES = {"auto", "hidden"}
-VISUAL_STYLE_SYSTEMS = {
-    "editorial-frame",
-    "editorial-halftone",
-    "corporate-modular",
-}
-VISUAL_STYLE_ALIASES = {
-    "editorial": "editorial-frame",
-    "editorial_frame": "editorial-frame",
-    "editorialframe": "editorial-frame",
-    "halftone": "editorial-halftone",
-    "editorial_halftone": "editorial-halftone",
-    "campo-cromatico": "editorial-halftone",
-    "campo_cromatico": "editorial-halftone",
-    "color-field": "editorial-halftone",
-    "costellazione": "editorial-halftone",
-    "constellation": "editorial-halftone",
-    "geometrico": "editorial-halftone",
-    "geometric": "editorial-halftone",
-    "corporate": "corporate-modular",
-    "corporate_modular": "corporate-modular",
-    "modulare-quieto": "corporate-modular",
-    "modulare_quieto": "corporate-modular",
-    "quiet-modular": "corporate-modular",
-    "istituzionale": "corporate-modular",
-    "institutional": "corporate-modular",
-}
-def normalized_visual_style_system(value: object) -> str | None:
-    """Validate the persisted carousel override without mutating brand defaults."""
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip().casefold()
-    normalized = VISUAL_STYLE_ALIASES.get(normalized, normalized)
-    return normalized if normalized in VISUAL_STYLE_SYSTEMS else None
-
-
-def normalized_logo_mode(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    mode = value.strip().casefold()
-    return mode if mode in LOGO_MODES else None
 
 
 def emphasis_phrases(container: dict, field: str) -> list[tuple[str, str]]:
@@ -529,18 +486,6 @@ def canonical_proof_slide_ids(items: list[dict], *, outro_enabled: bool) -> list
     return ["cover", str(dense_item["id"])] + (["outro"] if outro_enabled else [])
 
 
-def validated_proof_browser(value: object) -> dict[str, object]:
-    if not isinstance(value, dict) or set(value) != {"engine", "major"}:
-        raise ValueError("proof_browser deve contenere soltanto engine e major")
-    engine = value.get("engine")
-    major = value.get("major")
-    if engine not in BROWSER_ENGINES:
-        raise ValueError("proof_browser.engine non valido")
-    if not isinstance(major, int) or isinstance(major, bool) or not (1 <= major <= 999):
-        raise ValueError("proof_browser.major deve essere un intero tra 1 e 999")
-    return {"engine": engine, "major": major}
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("manifest", type=Path)
@@ -548,37 +493,29 @@ def main() -> int:
     parser.add_argument("--session-dir", type=Path, required=True)
     args = parser.parse_args()
 
-    manifest_path = args.manifest.expanduser().resolve()
-    feedback_input = Path(os.path.abspath(os.fspath(args.feedback.expanduser())))
-    feedback_path = feedback_input.resolve()
-    session_dir = args.session_dir.expanduser().resolve()
-    state_path = session_dir / "session-state.json"
-    expected_feedback_path = (session_dir / "feedback.json").resolve()
-    archive_dir_input = session_dir / "feedback-batches"
-    archive_dir = archive_dir_input.resolve()
     locks: list[InterprocessLock] = []
 
     try:
+        manifest_path = absolute_input_path(args.manifest)
+        feedback_path = absolute_input_path(args.feedback)
+        session_dir = absolute_input_path(args.session_dir)
+        reject_symlink_path(manifest_path, field="Il manifest")
+        reject_symlink_path(session_dir, field="La cartella di sessione")
+        reject_symlink_path(feedback_path, field="Il feedback")
         ensure_private_directory(session_dir)
-        if feedback_input.is_symlink():
-            raise ValueError("Il feedback non può essere un collegamento simbolico")
-        is_legacy_alias = same_path(feedback_path, expected_feedback_path)
+        state_path = session_dir / "session-state.json"
+        expected_feedback_path = session_dir / "feedback.json"
+        archive_dir = session_dir / "feedback-batches"
+        reject_symlink_path(archive_dir, field="La cartella dei batch")
+        is_legacy_alias = same_lexical_path(feedback_path, expected_feedback_path)
         is_direct_archive = (
-            feedback_path.parent == archive_dir
-            and not archive_dir_input.is_symlink()
+            same_path(feedback_path.parent, archive_dir)
             and feedback_path.suffix == ".json"
         )
         if not (is_legacy_alias or is_direct_archive):
             raise ValueError(
                 "Il feedback deve essere <session-dir>/feedback.json oppure un batch diretto in <session-dir>/feedback-batches"
             )
-        for private_file in (feedback_path, state_path):
-            if private_file.exists():
-                if private_file.is_symlink():
-                    raise ValueError(
-                        f"Il file di sessione non può essere un collegamento simbolico: {private_file.name}"
-                    )
-                private_file.chmod(0o600)
         locks = [
             InterprocessLock(
                 manifest_path.with_name(f".{manifest_path.name}.review.lock")
@@ -589,8 +526,8 @@ def main() -> int:
             lock.acquire()
 
         manifest = read_json(manifest_path)
-        feedback = read_json(feedback_path)
-        state = read_json(state_path)
+        feedback = read_private_json(feedback_path)
+        state = read_private_json(state_path)
         validate_state_manifest(state, manifest_path)
         feedback_id = safe_feedback_id(feedback.get("feedback_id"))
         if is_direct_archive and feedback_path.name != f"{feedback_id}.json":
@@ -612,7 +549,7 @@ def main() -> int:
         if expected_archive_path.is_symlink():
             raise ValueError("Il batch append-only non può essere un collegamento simbolico")
         if is_legacy_alias and expected_archive_path.exists():
-            canonical_feedback = read_json(expected_archive_path)
+            canonical_feedback = read_private_json(expected_archive_path)
             if canonical_feedback != feedback:
                 raise ValueError(
                     "feedback.json non coincide con il batch append-only canonico"
@@ -980,12 +917,56 @@ def main() -> int:
                 new_proof_ids = canonical_ids
                 changed.append("proof.slide_ids")
 
-        editorial_changed = bool(changed)
+        editorial_changed = any(field != "logo_mode" for field in changed)
         if (
             selected_visual_style is not None
             and manifest.get("visual_style_system") != selected_visual_style
         ):
             changed.append("visual_style_system")
+
+        visual_selection_changed = bool(
+            logo_mode_changed
+            or (
+                selected_visual_style is not None
+                and manifest.get("visual_style_system") != selected_visual_style
+            )
+        )
+
+        workflow_state = manifest.get("workflow_state", "bozza")
+        workflow_index = (
+            CANONICAL_WORKFLOW_STATES.index(workflow_state)
+            if workflow_state in CANONICAL_WORKFLOW_STATES
+            else -1
+        )
+        at_or_after_text_approval = workflow_index >= 1
+        post_visual_approval = workflow_index >= 2
+        has_review_note = bool(str(feedback.get("overall_note", "")).strip())
+        has_review_comments = bool(feedback.get("comments"))
+        substantive_request = bool(
+            editorial_changed
+            or visual_selection_changed
+            or has_review_comments
+            or has_review_note
+        )
+        if action == "feedback" and at_or_after_text_approval and not substantive_request:
+            raise ValueError(
+                "Un feedback vuoto non può riaprire un checkpoint già approvato"
+            )
+        if bind_approved_proof and editorial_changed:
+            raise ValueError(
+                "La prova visuale non può approvare modifiche editoriali: riapri prima il checkpoint testi"
+            )
+
+        rewind_target = None
+        if action == "feedback" and at_or_after_text_approval and substantive_request:
+            rewind_target = (
+                "bozza"
+                if editorial_changed or has_review_comments or has_review_note
+                else "testi_approvati"
+            )
+        elif bind_approved_proof and post_visual_approval and visual_selection_changed:
+            rewind_target = "testi_approvati"
+        review_reopened = rewind_target is not None
 
         stale_transcript = bool(
             editorial_changed
@@ -1001,7 +982,7 @@ def main() -> int:
         if (
             proof is not None
             and proof.get("approved") is True
-            and changed
+            and (changed or review_reopened)
             and (action == "feedback" or not bind_approved_proof)
         ):
             proof["approved"] = False
@@ -1012,7 +993,7 @@ def main() -> int:
         if (
             proof is not None
             and proof.get("style_system_verified") is True
-            and changed
+            and (changed or review_reopened)
             and not bind_approved_proof
         ):
             proof["style_system_verified"] = False
@@ -1020,7 +1001,12 @@ def main() -> int:
             warnings.append(
                 "proof.style_system_verified è stato invalidato perché la prova è cambiata"
             )
-        if proof is not None and "browser" in proof and changed and not bind_approved_proof:
+        if (
+            proof is not None
+            and "browser" in proof
+            and (changed or review_reopened)
+            and not bind_approved_proof
+        ):
             proof.pop("browser")
             changed.append("proof.browser")
 
@@ -1098,6 +1084,48 @@ def main() -> int:
                 "I metadati della prova sono consentiti soltanto per la prova visuale"
             )
 
+        # Corrections never advance the workflow, but they may atomically
+        # reopen the last still-valid checkpoint. Editorial requests return to
+        # bozza; a purely visual selection preserves the durable text receipt.
+        workflow_state_changed = bool(
+            rewind_target is not None and rewind_target != workflow_state
+        )
+        if rewind_target == "bozza":
+            if "workflow_receipts" in manifest:
+                manifest.pop("workflow_receipts", None)
+                changed.append("workflow_receipts")
+            if workflow_state_changed:
+                manifest["workflow_state"] = "bozza"
+                changed.append("workflow_state")
+            warnings.append(
+                "Il workflow è tornato a bozza: profilo e testi devono essere riapprovati"
+            )
+        elif rewind_target == "testi_approvati":
+            receipts = manifest.get("workflow_receipts")
+            if manifest.get("schema_version") == "1.4":
+                if (
+                    not isinstance(receipts, list)
+                    or not receipts
+                    or receipts[0].get("from") != "bozza"
+                    or receipts[0].get("to") != "testi_approvati"
+                ):
+                    raise ValueError(
+                        "Manca la ricevuta durevole dei testi approvati"
+                    )
+                preserved_receipts = receipts[:1]
+                if receipts != preserved_receipts:
+                    manifest["workflow_receipts"] = preserved_receipts
+                    changed.append("workflow_receipts")
+            elif "workflow_receipts" in manifest:
+                manifest.pop("workflow_receipts", None)
+                changed.append("workflow_receipts")
+            if workflow_state_changed:
+                manifest["workflow_state"] = "testi_approvati"
+                changed.append("workflow_state")
+            warnings.append(
+                "Il workflow è tornato ai testi approvati: serve una nuova prova visuale"
+            )
+
         applied_revision = revision + 1 if changed else revision
         review = dict(existing_review)
         review.update(
@@ -1140,6 +1168,7 @@ def main() -> int:
                     manifest["logo_mode"] = selected_logo_mode
                 manifest["revision"] = revision + 1
             manifest["review"] = review
+            server_manifest_model(manifest_path, manifest=manifest)
             atomic_write_json(manifest_path, manifest, private=False)
 
         applied_revision = validated_revision(manifest.get("revision", revision))
@@ -1166,7 +1195,7 @@ def main() -> int:
             "overall_note": feedback.get("overall_note", ""),
             "approval_requested": action == "approve",
             "approval_stage": approval_stage,
-            "workflow_state_changed": False,
+            "workflow_state_changed": workflow_state_changed,
             "emphasis_dropped": emphasis_dropped,
             "proof_slide_ids_pruned": pruned_proof_ids,
             "stale_alt_text": stale_alt_text,

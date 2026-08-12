@@ -2,7 +2,8 @@
 "use strict";
 
 const fs = require("node:fs/promises");
-const { constants: fsConstants } = require("node:fs");
+const fsNative = require("node:fs");
+const { constants: fsConstants } = fsNative;
 const os = require("node:os");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
@@ -16,6 +17,12 @@ const CONTACT_SHEET_GAP = 24;
 const CONTACT_SHEET_MARGIN = 24;
 const CONTACT_SHEET_THUMB_WIDTH = 360;
 const CONTACT_SHEET_THUMB_HEIGHT = 450;
+const DETERMINISTIC_PDF_DATE = new Date("2000-01-01T00:00:00.000Z");
+const CURRENT_SCHEMA_VERSION = "1.4";
+const EXPORT_WORKFLOW_STATE = "rendering";
+const LIVE_SESSION_TIMEOUT_MS = 10_000;
+const MAX_SIDECAR_BYTES = 64 * 1024;
+const ACTIVE_EXPORT_RUN_IDS = new Set();
 const ALLOWED_ARGS = new Set([
   "url",
   "output",
@@ -23,17 +30,9 @@ const ALLOWED_ARGS = new Set([
   "chrome",
   "png-dir",
   "contact-sheet",
+  "result-json",
 ]);
-const APPROVED_WORKFLOW_STATES = new Set([
-  "prova_visuale_approvata",
-  "rendering",
-  "qa",
-  "consegnato",
-  "approvato",
-  "approved",
-  "pubblicato",
-  "published",
-]);
+const APPROVED_WORKFLOW_STATES = new Set([EXPORT_WORKFLOW_STATE]);
 const CONTENT_SNAPSHOT_KEYS = [
   "revision",
   "workflow_state",
@@ -62,21 +61,141 @@ function parseArgs(argv) {
     result[name] = value;
     index += 1;
   }
-  for (const required of ["url", "output", "node-modules"]) {
+  for (const required of ["url", "output", "node-modules", "result-json"]) {
     if (!result[required]) throw new Error(`Argomento obbligatorio mancante: --${required}`);
   }
   return result;
 }
 
+function pathApi(platform = process.platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
+function unicodeCaseFold(value) {
+  return String(value).normalize("NFC").toUpperCase().toLowerCase().normalize("NFC");
+}
+
+function normalizedPathIdentity(value, platform = process.platform) {
+  if (!value) return "";
+  let normalized = pathApi(platform).normalize(String(value)).normalize("NFC");
+  if (["darwin", "win32"].includes(platform)) normalized = unicodeCaseFold(normalized);
+  return normalized;
+}
+
 function samePath(left, right, platform = process.platform) {
   if (!left || !right) return false;
-  return platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+  return normalizedPathIdentity(left, platform) === normalizedPathIdentity(right, platform);
 }
 
 function pathContains(parent, child, platform = process.platform) {
   if (!parent || !child || samePath(parent, child, platform)) return false;
-  const relative = path.relative(parent, child);
-  return Boolean(relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  const platformPath = pathApi(platform);
+  const relative = platformPath.relative(
+    normalizedPathIdentity(parent, platform),
+    normalizedPathIdentity(child, platform),
+  );
+  return Boolean(
+    relative
+    && relative !== ".."
+    && !relative.startsWith(`..${platformPath.sep}`)
+    && !platformPath.isAbsolute(relative)
+  );
+}
+
+function canonicalTargetPath(
+  target,
+  {
+    platform = process.platform,
+    realpathSync = fsNative.realpathSync.native || fsNative.realpathSync,
+  } = {},
+) {
+  const platformPath = pathApi(platform);
+  const absolute = platformPath.resolve(target);
+  if (platform !== process.platform) return absolute.normalize("NFC");
+  const basename = platformPath.basename(absolute);
+  let parent = platformPath.dirname(absolute);
+  const missing = [];
+  while (true) {
+    try {
+      const realParent = realpathSync(parent);
+      return platformPath.join(realParent, ...missing, basename).normalize("NFC");
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      const next = platformPath.dirname(parent);
+      if (samePath(next, parent, platform)) throw error;
+      missing.unshift(platformPath.basename(parent));
+      parent = next;
+    }
+  }
+}
+
+function existingTargetIdentity(target, platform = process.platform) {
+  if (platform !== process.platform) return null;
+  try {
+    const metadata = fsNative.statSync(target);
+    const realpath = (fsNative.realpathSync.native || fsNative.realpathSync)(target);
+    return {
+      dev: metadata.dev,
+      ino: metadata.ino,
+      realpath: normalizedPathIdentity(realpath, platform),
+    };
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR"].includes(error?.code)) return null;
+    throw error;
+  }
+}
+
+function sameCanonicalTarget(left, right, platform = process.platform) {
+  if (!left || !right) return false;
+  const leftCanonical = canonicalTargetPath(left, { platform });
+  const rightCanonical = canonicalTargetPath(right, { platform });
+  if (platform === "darwin") {
+    const leftExisting = existingTargetIdentity(leftCanonical, platform);
+    const rightExisting = existingTargetIdentity(rightCanonical, platform);
+    if (leftExisting && rightExisting) {
+      return (
+        (leftExisting.dev === rightExisting.dev && leftExisting.ino === rightExisting.ino)
+        || leftExisting.realpath === rightExisting.realpath
+      );
+    }
+  }
+  return samePath(leftCanonical, rightCanonical, platform);
+}
+
+function assertNoAmbiguousDarwinTarget(target, platform = process.platform) {
+  if (platform !== "darwin" || platform !== process.platform) return;
+  if (existingTargetIdentity(target, platform)) return;
+  const parent = path.dirname(target);
+  let entries;
+  try {
+    entries = fsNative.readdirSync(parent);
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR"].includes(error?.code)) return;
+    throw error;
+  }
+  const requested = normalizedPathIdentity(path.basename(target), platform);
+  const ambiguous = entries.find(
+    (entry) => normalizedPathIdentity(entry, platform) === requested,
+  );
+  if (ambiguous) {
+    throw new Error(
+      `Target Darwin ambiguo per case-fold o normalizzazione Unicode: ${target} collide con ${ambiguous}.`,
+    );
+  }
+}
+
+function isReservedSidecarComponent(component) {
+  const normalized = String(component).normalize("NFC").toLowerCase();
+  return (
+    /^\..+\.export-staging\.json$/.test(normalized)
+    || /^\..+\.export-transaction\.json$/.test(normalized)
+    || /^\..+\.export-claim\.json$/.test(normalized)
+    || normalized.endsWith(".committed")
+  );
+}
+
+function usesReservedSidecarNamespace(target, platform = process.platform) {
+  return pathApi(platform).normalize(target).split(/[\\/]+/u).some(isReservedSidecarComponent);
 }
 
 function resolveOutputTargets(
@@ -87,41 +206,121 @@ function resolveOutputTargets(
     platform = process.platform,
   } = {},
 ) {
-  const output = path.resolve(cwd, args.output);
-  const pngDir = args["png-dir"] ? path.resolve(cwd, args["png-dir"]) : null;
-  const contactSheet = args["contact-sheet"] ? path.resolve(cwd, args["contact-sheet"]) : null;
+  const canonical = (value) => canonicalTargetPath(pathApi(platform).resolve(cwd, value), { platform });
+  const output = canonical(args.output);
+  const pngDir = args["png-dir"] ? canonical(args["png-dir"]) : null;
+  const contactSheet = args["contact-sheet"] ? canonical(args["contact-sheet"]) : null;
+  const resultJson = args["result-json"] ? canonical(args["result-json"]) : null;
   if (path.extname(output).toLowerCase() !== ".pdf") {
     throw new Error("Il percorso --output deve terminare con .pdf.");
   }
   if (contactSheet && path.extname(contactSheet).toLowerCase() !== ".png") {
     throw new Error("Il percorso --contact-sheet deve terminare con .png.");
   }
-  if (contactSheet && samePath(output, contactSheet, platform)) {
-    throw new Error("PDF e contact sheet devono usare percorsi distinti.");
+  if (resultJson && path.extname(resultJson).toLowerCase() !== ".json") {
+    throw new Error("Il percorso --result-json deve terminare con .json.");
   }
-  if (
-    contactSheet
-    && (pathContains(output, contactSheet, platform) || pathContains(contactSheet, output, platform))
-  ) {
-    throw new Error("PDF e contact sheet non possono contenersi reciprocamente nel percorso.");
+  const fileTargets = [output, contactSheet, resultJson].filter(Boolean);
+  const allTargets = [output, pngDir, contactSheet, resultJson].filter(Boolean);
+  for (const target of allTargets) {
+    if (usesReservedSidecarNamespace(target, platform)) {
+      throw new Error(
+        "I target di export non possono usare il namespace globale dei sidecar di staging, recovery o claim.",
+      );
+    }
+    assertNoAmbiguousDarwinTarget(target, platform);
+  }
+  for (let left = 0; left < fileTargets.length; left += 1) {
+    for (let right = left + 1; right < fileTargets.length; right += 1) {
+      if (
+        sameCanonicalTarget(fileTargets[left], fileTargets[right], platform)
+        || pathContains(fileTargets[left], fileTargets[right], platform)
+        || pathContains(fileTargets[right], fileTargets[left], platform)
+      ) {
+        throw new Error("PDF, contact sheet e result JSON devono usare percorsi distinti e non annidati.");
+      }
+    }
   }
   if (pngDir) {
-    const protectedDirectories = [path.parse(pngDir).root, path.resolve(cwd), home ? path.resolve(home) : null].filter(Boolean);
+    const protectedDirectories = [
+      pathApi(platform).parse(pngDir).root,
+      canonicalTargetPath(cwd, { platform }),
+      home ? canonicalTargetPath(home, { platform }) : null,
+    ].filter(Boolean);
     if (protectedDirectories.some((candidate) => samePath(pngDir, candidate, platform))) {
       throw new Error("La directory --png-dir non può essere la radice, la home o la directory di lavoro corrente.");
     }
     if (
-      samePath(pngDir, output, platform)
-      || samePath(pngDir, contactSheet, platform)
+      sameCanonicalTarget(pngDir, output, platform)
+      || sameCanonicalTarget(pngDir, contactSheet, platform)
+      || sameCanonicalTarget(pngDir, resultJson, platform)
       || pathContains(pngDir, output, platform)
       || pathContains(pngDir, contactSheet, platform)
+      || pathContains(pngDir, resultJson, platform)
       || pathContains(output, pngDir, platform)
       || pathContains(contactSheet, pngDir, platform)
+      || pathContains(resultJson, pngDir, platform)
     ) {
       throw new Error("PDF, contact sheet e --png-dir devono usare target separati e non annidati.");
     }
   }
-  return { output, pngDir, contactSheet };
+  return { output, pngDir, contactSheet, resultJson };
+}
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function exportArtifactDigests({ output, pdfBytes, pngDir, pngSlides = [], contactSheet, contactSheetBytes }) {
+  return [
+    { kind: "pdf", path: output, sha256: sha256(pdfBytes) },
+    ...(pngDir ? pngSlides.map((slide) => ({
+      kind: "png",
+      path: path.join(pngDir, slide.filename),
+      sha256: sha256(slide.bytes),
+    })) : []),
+    ...(contactSheet && contactSheetBytes ? [{
+      kind: "contact_sheet",
+      path: contactSheet,
+      sha256: sha256(contactSheetBytes),
+    }] : []),
+  ];
+}
+
+function buildExportResult({
+  output,
+  pngDir,
+  contactSheet,
+  resultJson,
+  contract,
+  browserLabel,
+  browser,
+  artifactSha256,
+}) {
+  return {
+    result_schema: "carousel-builder-export-v1",
+    status: "ok",
+    output,
+    slides: contract.frames.length,
+    width: EXPORT_WIDTH,
+    height: EXPORT_HEIGHT,
+    contract: CONTRACT,
+    revision: contract.revision,
+    workflow_state: contract.workflowState,
+    style_system: contract.styleSystem,
+    render_fingerprint: contract.contentSnapshot.render_fingerprint,
+    browser: browserLabel,
+    proof_browser: browser,
+    preview_production_parity: "exact",
+    pixel_comparison: "raw-rgba-1440x1800",
+    final_pixel_recheck: "production-digest-against-initial-parity",
+    live_session_verified: true,
+    approval_verified: true,
+    artifact_sha256: artifactSha256,
+    ...(pngDir ? { png_dir: pngDir, png_files: artifactSha256.filter(({ kind }) => kind === "png").length } : {}),
+    ...(contactSheet ? { contact_sheet: contactSheet } : {}),
+    ...(resultJson ? { result_json: resultJson } : {}),
+  };
 }
 
 function slidePngFilename(frame, index, total) {
@@ -202,8 +401,11 @@ function assertRenderContract(value, expectedProduction, label, currentBrowser =
   if (!Number.isInteger(value.revision) || value.revision < 0) {
     throw new Error(`La revisione del contratto ${label} non è valida.`);
   }
-  if (!APPROVED_WORKFLOW_STATES.has(value.workflowState)) {
-    throw new Error(`L’export richiede una prova visuale approvata; stato ricevuto: ${value.workflowState || "mancante"}.`);
+  if (value.workflowState !== EXPORT_WORKFLOW_STATE) {
+    throw new Error(
+      `L’export attestante schema ${CURRENT_SCHEMA_VERSION} richiede workflow_state=${EXPORT_WORKFLOW_STATE}; `
+      + `stato ricevuto: ${value.workflowState || "mancante"}.`,
+    );
   }
   if (value.proofApproved !== true) {
     throw new Error(`L’export richiede proof.approved=true nel contratto ${label}.`);
@@ -260,7 +462,7 @@ function assertRenderContract(value, expectedProduction, label, currentBrowser =
     !production
     || typeof production !== "object"
     || Array.isArray(production)
-    || !["renderer", "adapter"].includes(production.mode)
+    || production.mode !== "renderer"
     || production.producer !== CONTRACT
     || !Array.isArray(production.supported_style_systems)
     || !production.supported_style_systems.includes(value.styleSystem)
@@ -367,33 +569,141 @@ async function waitForContract(page, production) {
   });
 }
 
-async function fetchLiveSession(baseUrl, fetchImpl = globalThis.fetch) {
+async function fetchLiveSession(
+  baseUrl,
+  fetchImpl = globalThis.fetch,
+  {
+    timeoutMs = LIVE_SESSION_TIMEOUT_MS,
+    AbortControllerImpl = globalThis.AbortController,
+  } = {},
+) {
   if (typeof fetchImpl !== "function") {
     throw new Error("Il runtime Node non espone fetch per la verifica live della sessione.");
   }
-  const sessionUrl = new URL("/api/session", baseUrl);
-  sessionUrl.searchParams.set("token", baseUrl.searchParams.get("token"));
-  let response;
+  if (typeof AbortControllerImpl !== "function") {
+    throw new Error("Il runtime Node non espone AbortController per la verifica live della sessione.");
+  }
+  const authenticatedUrl = (pathname) => {
+    const value = new URL(pathname, baseUrl);
+    value.searchParams.set("token", baseUrl.searchParams.get("token"));
+    return value;
+  };
+  const sessionUrl = authenticatedUrl("/api/session");
+  const statusUrl = authenticatedUrl("/api/status");
+  const controller = new AbortControllerImpl();
+  let timeoutId;
+  let timedOut = false;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(new Error(`timeout totale di ${timeoutMs} ms`));
+    }, timeoutMs);
+  });
+  let phase = "request";
   try {
-    response = await fetchImpl(sessionUrl, {
+    const request = (url) => fetchImpl(url, {
       method: "GET",
       cache: "no-store",
+      signal: controller.signal,
       headers: {
         Accept: "application/json",
         "Cache-Control": "no-store",
         Pragma: "no-cache",
       },
     });
+    const responses = await Promise.race([
+      Promise.all([request(sessionUrl), request(statusUrl)]),
+      timeout,
+    ]);
+    for (const response of responses) {
+      if (!response?.ok) {
+        throw new Error(
+          `Verifica live della sessione rifiutata con HTTP ${response?.status || "sconosciuto"}.`,
+        );
+      }
+    }
+    phase = "body";
+    const [session, status] = await Promise.race([
+      Promise.all(responses.map((response) => response.json())),
+      timeout,
+    ]);
+    if (
+      !status
+      || typeof status !== "object"
+      || Array.isArray(status)
+      || status.workflow_state !== session?.workflow_state
+      || status.manifest_revision !== session?.revision
+    ) {
+      throw new Error("Sessione e stato live non coincidono.");
+    }
+    return { ...session, feedback_pending: status.feedback_pending };
   } catch (error) {
-    throw new Error(`Verifica live della sessione non riuscita: ${conciseError(error)}.`);
+    if (timedOut || error?.name === "AbortError") {
+      throw new Error(
+        `Verifica live della sessione scaduta dopo ${timeoutMs} ms (richiesta e body JSON).`,
+      );
+    }
+    if (String(error?.message || "").startsWith("Verifica live della sessione rifiutata")) {
+      throw error;
+    }
+    throw new Error(
+      phase === "body"
+        ? `Risposta live della sessione non valida: ${conciseError(error)}.`
+        : `Verifica live della sessione non riuscita: ${conciseError(error)}.`,
+    );
+  } finally {
+    clearTimeout(timeoutId);
+    controller.abort();
   }
-  if (!response?.ok) {
-    throw new Error(`Verifica live della sessione rifiutata con HTTP ${response?.status || "sconosciuto"}.`);
+}
+
+function expectedOutputsForTargets({ pngDir = null, contactSheet = null } = {}) {
+  return [
+    "pdf",
+    ...(pngDir ? ["png"] : []),
+    ...(contactSheet ? ["contact_sheet"] : []),
+  ].sort();
+}
+
+function assertExportPreflight(live, targets, label = "prima del browser") {
+  if (!live || typeof live !== "object" || Array.isArray(live)) {
+    throw new Error(`La sessione live ${label} non è valida.`);
   }
-  try {
-    return await response.json();
-  } catch (error) {
-    throw new Error(`Risposta live della sessione non valida: ${conciseError(error)}.`);
+  if (live.schema_version !== CURRENT_SCHEMA_VERSION) {
+    throw new Error(
+      `L’export attestante richiede schema_version=${CURRENT_SCHEMA_VERSION} ${label}.`,
+    );
+  }
+  if (live.workflow_state !== EXPORT_WORKFLOW_STATE) {
+    throw new Error(
+      `L’export attestante richiede workflow_state=${EXPORT_WORKFLOW_STATE} ${label}.`,
+    );
+  }
+  if (live.feedback_pending !== false) {
+    throw new Error(`La sessione live ${label} deve dichiarare feedback_pending=false.`);
+  }
+  if (live.proof_approved !== true) {
+    throw new Error(`La sessione live ${label} non conferma proof.approved=true.`);
+  }
+  const production = live.production;
+  if (
+    !production
+    || typeof production !== "object"
+    || Array.isArray(production)
+    || production.mode !== "renderer"
+    || production.producer !== CONTRACT
+  ) {
+    throw new Error(`La sessione live ${label} non usa il renderer locale ${CONTRACT}.`);
+  }
+  const expected = expectedOutputsForTargets(targets);
+  const declared = Array.isArray(production.expected_outputs)
+    ? [...production.expected_outputs].sort()
+    : null;
+  if (!declared || !sameJson(declared, expected)) {
+    throw new Error(
+      `production.expected_outputs ${label} deve coincidere esattamente con ${expected.join(", ")}.`,
+    );
   }
 }
 
@@ -404,8 +714,14 @@ function assertLiveSession(live, reference, production, label) {
   if (live.proof_approved !== true) {
     throw new Error(`La sessione live ${label} non conferma proof.approved=true.`);
   }
-  if (!APPROVED_WORKFLOW_STATES.has(live.workflow_state)) {
-    throw new Error(`La sessione live ${label} non è in uno stato esportabile.`);
+  if (live.schema_version !== CURRENT_SCHEMA_VERSION) {
+    throw new Error(`La sessione live ${label} non usa schema_version=${CURRENT_SCHEMA_VERSION}.`);
+  }
+  if (live.feedback_pending !== false) {
+    throw new Error(`La sessione live ${label} deve dichiarare feedback_pending=false.`);
+  }
+  if (live.workflow_state !== EXPORT_WORKFLOW_STATE) {
+    throw new Error(`La sessione live ${label} non è nello stato ${EXPORT_WORKFLOW_STATE}.`);
   }
   if (
     live.workflow_state !== reference.contentSnapshot.workflow_state
@@ -739,6 +1055,413 @@ function exportTransactionPaths(primaryOutput) {
   return { journalPath, commitPath: `${journalPath}.committed` };
 }
 
+function exportStagingPath(primaryOutput) {
+  return path.join(
+    path.dirname(primaryOutput),
+    `.${path.basename(primaryOutput)}.export-staging.json`,
+  );
+}
+
+function exportClaimPath(finalTarget) {
+  return path.join(
+    path.dirname(finalTarget),
+    `.${path.basename(finalTarget)}.export-claim.json`,
+  );
+}
+
+function stableStatSignature(metadata) {
+  return [
+    metadata.dev,
+    metadata.ino,
+    metadata.size,
+    metadata.mtimeMs,
+    metadata.ctimeMs,
+    metadata.nlink,
+  ];
+}
+
+function assertSecureSidecarMetadata(metadata, label, maxBytes) {
+  if (
+    !metadata
+    || !metadata.isFile()
+    || metadata.isSymbolicLink()
+    || metadata.nlink !== 1
+    || metadata.size < 1
+    || metadata.size > maxBytes
+  ) {
+    throw new Error(`${label} non sicuro.`);
+  }
+}
+
+function assertLinkedSidecarMetadata(metadata, label, maxBytes) {
+  if (
+    !metadata
+    || !metadata.isFile()
+    || metadata.isSymbolicLink()
+    || metadata.nlink !== 2
+    || metadata.size < 1
+    || metadata.size > maxBytes
+  ) {
+    throw new Error(`${label}: twin di publish non sicuro.`);
+  }
+}
+
+function sidecarOwnershipId(target, bytes, label) {
+  const basename = path.basename(target).normalize("NFC").toLowerCase();
+  let ownershipId = null;
+  if (basename.endsWith(".export-transaction.json.committed")) {
+    const value = bytes.toString("utf8");
+    if (/^[A-Za-z0-9_-]{1,128}\n$/.test(value)) ownershipId = value.slice(0, -1);
+  } else if (
+    basename.endsWith(".export-claim.json")
+    || basename.endsWith(".export-staging.json")
+    || basename.endsWith(".export-transaction.json")
+  ) {
+    try {
+      const value = JSON.parse(bytes.toString("utf8"));
+      ownershipId = basename.endsWith(".export-transaction.json")
+        ? value?.transaction_id
+        : value?.run_id;
+    } catch {
+      ownershipId = null;
+    }
+  }
+  if (typeof ownershipId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(ownershipId)) {
+    throw new Error(`${label} non sicuro: twin di publish privo di ownership valida.`);
+  }
+  return ownershipId;
+}
+
+function escapedRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function recoverDurablePublishTwin(
+  target,
+  {
+    fsApi = fs,
+    platform = process.platform,
+    label = "Sidecar export",
+    maxBytes = MAX_SIDECAR_BYTES,
+    expectedOwnershipId = null,
+  } = {},
+) {
+  let initial;
+  try {
+    initial = await fsApi.lstat(target);
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+  if (initial.nlink === 1) return false;
+  assertLinkedSidecarMetadata(initial, label, maxBytes);
+
+  const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0);
+  let targetHandle;
+  let twinHandle;
+  try {
+    targetHandle = await fsApi.open(target, flags);
+    const opened = await targetHandle.stat();
+    assertLinkedSidecarMetadata(opened, label, maxBytes);
+    if (opened.dev !== initial.dev || opened.ino !== initial.ino) {
+      throw new Error(`${label}: target cambiato durante il recupero del twin.`);
+    }
+    const targetBytes = await targetHandle.readFile();
+    const afterRead = await targetHandle.stat();
+    const afterPath = await fsApi.lstat(target);
+    for (const metadata of [opened, afterRead, afterPath]) {
+      assertLinkedSidecarMetadata(metadata, label, maxBytes);
+      if (!sameJson(stableStatSignature(metadata), stableStatSignature(initial))) {
+        throw new Error(`${label}: target instabile durante il recupero del twin.`);
+      }
+    }
+    if (targetBytes.length !== initial.size) {
+      throw new Error(`${label}: dimensione incoerente durante il recupero del twin.`);
+    }
+    const ownershipId = sidecarOwnershipId(target, targetBytes, label);
+    if (expectedOwnershipId !== null && ownershipId !== expectedOwnershipId) {
+      throw new Error(`${label}: ownership del twin non coincide con il run atteso.`);
+    }
+
+    const parent = path.dirname(target);
+    const basename = path.basename(target);
+    const candidatePattern = new RegExp(
+      `^${escapedRegExp(basename)}\\.[1-9][0-9]{0,9}\\.${escapedRegExp(ownershipId)}\\.tmp$`,
+    );
+    const candidates = (await fsApi.readdir(parent)).filter((entry) => candidatePattern.test(entry));
+    if (candidates.length !== 1) {
+      throw new Error(`${label}: ownership twin ambigua o mancante.`);
+    }
+    const twinPath = path.join(parent, candidates[0]);
+    twinHandle = await fsApi.open(twinPath, flags);
+    const twinOpened = await twinHandle.stat();
+    const twinPathStat = await fsApi.lstat(twinPath);
+    for (const metadata of [twinOpened, twinPathStat]) {
+      assertLinkedSidecarMetadata(metadata, label, maxBytes);
+      if (
+        metadata.dev !== initial.dev
+        || metadata.ino !== initial.ino
+        || !sameJson(stableStatSignature(metadata), stableStatSignature(initial))
+      ) {
+        throw new Error(`${label}: twin non appartiene al target pubblicato.`);
+      }
+    }
+    const twinBytes = await twinHandle.readFile();
+    const twinAfterRead = await twinHandle.stat();
+    assertLinkedSidecarMetadata(twinAfterRead, label, maxBytes);
+    if (
+      !sameJson(stableStatSignature(twinAfterRead), stableStatSignature(initial))
+      || !twinBytes.equals(targetBytes)
+    ) {
+      throw new Error(`${label}: contenuto o metadati del twin non coincidono.`);
+    }
+    await twinHandle.close();
+    twinHandle = null;
+    await targetHandle.close();
+    targetHandle = null;
+
+    const [beforeUnlinkTarget, beforeUnlinkTwin] = await Promise.all([
+      fsApi.lstat(target),
+      fsApi.lstat(twinPath),
+    ]);
+    for (const metadata of [beforeUnlinkTarget, beforeUnlinkTwin]) {
+      assertLinkedSidecarMetadata(metadata, label, maxBytes);
+      if (metadata.dev !== initial.dev || metadata.ino !== initial.ino) {
+        throw new Error(`${label}: twin cambiato prima della pulizia.`);
+      }
+    }
+    await fsApi.unlink(twinPath);
+    await fsyncDirectory(parent, { fsApi, platform });
+    const recovered = await fsApi.lstat(target);
+    assertSecureSidecarMetadata(recovered, label, maxBytes);
+    if (
+      recovered.dev !== initial.dev
+      || recovered.ino !== initial.ino
+      || recovered.size !== initial.size
+    ) {
+      throw new Error(`${label}: target incoerente dopo il recupero del twin.`);
+    }
+    return true;
+  } finally {
+    if (twinHandle) await twinHandle.close().catch(() => {});
+    if (targetHandle) await targetHandle.close().catch(() => {});
+  }
+}
+
+async function readStableSidecar(
+  target,
+  {
+    fsApi = fs,
+    label = "Sidecar export",
+    maxBytes = MAX_SIDECAR_BYTES,
+    withMetadata = false,
+  } = {},
+) {
+  let handle;
+  try {
+    await recoverDurablePublishTwin(target, {
+      fsApi,
+      label,
+      maxBytes,
+    });
+    const before = await fsApi.lstat(target);
+    assertSecureSidecarMetadata(before, label, maxBytes);
+    const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0);
+    handle = await fsApi.open(target, flags);
+    const opened = await handle.stat();
+    assertSecureSidecarMetadata(opened, label, maxBytes);
+    if (before.dev !== opened.dev || before.ino !== opened.ino) {
+      throw new Error(`${label} è cambiato durante l’apertura.`);
+    }
+    const bytes = await handle.readFile();
+    const afterHandle = await handle.stat();
+    const afterPath = await fsApi.lstat(target);
+    assertSecureSidecarMetadata(afterHandle, label, maxBytes);
+    assertSecureSidecarMetadata(afterPath, label, maxBytes);
+    const expected = stableStatSignature(before);
+    for (const metadata of [opened, afterHandle, afterPath]) {
+      if (!sameJson(stableStatSignature(metadata), expected)) {
+        throw new Error(`${label} è cambiato durante la lettura.`);
+      }
+    }
+    if (bytes.length !== before.size) {
+      throw new Error(`${label} ha una dimensione incoerente.`);
+    }
+    return withMetadata ? { bytes, metadata: afterHandle } : bytes;
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
+async function readStableJsonSidecar(target, options = {}) {
+  const label = options.label || "Sidecar JSON export";
+  try {
+    const result = await readStableSidecar(target, { ...options, label });
+    if (options.withMetadata) {
+      return {
+        value: JSON.parse(result.bytes.toString("utf8")),
+        metadata: result.metadata,
+      };
+    }
+    return JSON.parse(result.toString("utf8"));
+  } catch (error) {
+    if (String(error?.message || "").startsWith(label)) throw error;
+    throw new Error(`${label} non leggibile: ${conciseError(error)}.`);
+  }
+}
+
+function validateExportStagingOwnership(
+  marker,
+  primaryOutput,
+  expectedArtifacts,
+  platform = process.platform,
+) {
+  if (
+    !marker
+    || typeof marker !== "object"
+    || Array.isArray(marker)
+    || marker.version !== 1
+    || !sameCanonicalTarget(marker.primary_output, primaryOutput, platform)
+    || !Number.isSafeInteger(marker.pid)
+    || marker.pid < 1
+    || typeof marker.run_id !== "string"
+    || !/^[A-Za-z0-9_-]{1,128}$/.test(marker.run_id)
+    || !Array.isArray(marker.artifacts)
+    || marker.artifacts.length !== expectedArtifacts.length
+  ) {
+    throw new Error("Marker di staging export non valido.");
+  }
+  for (const [index, artifact] of marker.artifacts.entries()) {
+    const expected = expectedArtifacts[index];
+    const expectedTemporaryPath = path.join(
+      path.dirname(expected.finalPath),
+      `.${path.basename(expected.finalPath)}.${marker.pid}.${marker.run_id}.${index}.tmp`,
+    );
+    if (
+      !artifact
+      || artifact.kind !== expected.kind
+      || !sameCanonicalTarget(artifact.finalPath, expected.finalPath, platform)
+      || !sameCanonicalTarget(artifact.temporaryPath, expectedTemporaryPath, platform)
+    ) {
+      throw new Error(`Marker di staging export: artefatto ${index + 1} non valido.`);
+    }
+  }
+  return marker;
+}
+
+function processIsRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    if (error?.code === "EPERM") return true;
+    throw error;
+  }
+}
+
+async function readExportStagingOwnership(
+  markerPath,
+  primaryOutput,
+  expectedArtifacts,
+  { fsApi = fs, platform = process.platform } = {},
+) {
+  let marker;
+  try {
+    marker = await readStableJsonSidecar(markerPath, {
+      fsApi,
+      label: "Marker di staging export",
+    });
+  } catch (error) {
+    throw new Error(`Marker di staging export non leggibile: ${conciseError(error)}.`);
+  }
+  return validateExportStagingOwnership(marker, primaryOutput, expectedArtifacts, platform);
+}
+
+async function recoverExportStagingOwnership(
+  primaryOutput,
+  {
+    expectedArtifacts,
+    fsApi = fs,
+    platform = process.platform,
+    isProcessRunning = processIsRunning,
+    currentPid = process.pid,
+    recoverableRunIds = new Set(),
+    cleanup = true,
+  } = {},
+) {
+  const markerPath = exportStagingPath(primaryOutput);
+  if (!(await pathExists(markerPath, { fsApi }))) return false;
+  const marker = await readExportStagingOwnership(
+    markerPath,
+    primaryOutput,
+    expectedArtifacts,
+    { fsApi, platform },
+  );
+  const markerIsActive = marker.pid === currentPid
+    ? (
+      ACTIVE_EXPORT_RUN_IDS.has(marker.run_id)
+      || !recoverableRunIds.has(marker.run_id)
+    )
+    : isProcessRunning(marker.pid);
+  if (markerIsActive) {
+    throw new Error(`Un altro export è ancora attivo (PID ${marker.pid}).`);
+  }
+  if (!cleanup) return true;
+  for (const artifact of marker.artifacts) {
+    if (await pathExists(artifact.temporaryPath, { fsApi })) {
+      await assertCompatibleExistingTarget(artifact.temporaryPath, artifact.kind, { fsApi });
+      await removeKnownArtifact(artifact.temporaryPath, artifact.kind, { fsApi, platform });
+    }
+  }
+  await removeDurableEntry(markerPath, { fsApi, platform });
+  return true;
+}
+
+async function createExportStagingOwnership(
+  primaryOutput,
+  expectedArtifacts,
+  {
+    fsApi = fs,
+    randomId = randomUUID,
+    platform = process.platform,
+    pid = process.pid,
+    runId: requestedRunId = null,
+  } = {},
+) {
+  const runId = String(requestedRunId || randomId());
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(runId)) {
+    throw new Error("Identificatore dello staging export non valido.");
+  }
+  const marker = {
+    version: 1,
+    pid,
+    run_id: runId,
+    primary_output: primaryOutput,
+    artifacts: expectedArtifacts.map((artifact, index) => ({
+      ...artifact,
+      temporaryPath: path.join(
+        path.dirname(artifact.finalPath),
+        `.${path.basename(artifact.finalPath)}.${pid}.${runId}.${index}.tmp`,
+      ),
+    })),
+  };
+  validateExportStagingOwnership(marker, primaryOutput, expectedArtifacts, platform);
+  for (const artifact of marker.artifacts) {
+    if (await pathExists(artifact.temporaryPath, { fsApi })) {
+      throw new Error(`Il percorso riservato allo staging export esiste già: ${artifact.temporaryPath}`);
+    }
+  }
+  const markerPath = exportStagingPath(primaryOutput);
+  await writeDurableJsonExclusive(markerPath, marker, {
+    fsApi,
+    randomId,
+    platform,
+    ownershipId: runId,
+  });
+  return { marker, markerPath };
+}
+
 async function pathExists(target, { fsApi = fs } = {}) {
   try {
     await fsApi.lstat(target);
@@ -749,38 +1472,587 @@ async function pathExists(target, { fsApi = fs } = {}) {
   }
 }
 
+function exportClaimBinding(primaryOutput, expectedArtifacts, platform = process.platform) {
+  if (!Array.isArray(expectedArtifacts) || !expectedArtifacts.length || expectedArtifacts.length > 4) {
+    throw new Error("Set degli artefatti del claim export non valido.");
+  }
+  const primary = canonicalTargetPath(primaryOutput, { platform });
+  const artifacts = expectedArtifacts.map((artifact) => {
+    if (
+      !artifact
+      || !["file", "directory"].includes(artifact.kind)
+      || typeof artifact.finalPath !== "string"
+    ) {
+      throw new Error("Artefatto del claim export non valido.");
+    }
+    return {
+      kind: artifact.kind,
+      finalPath: canonicalTargetPath(artifact.finalPath, { platform }),
+    };
+  }).sort((left, right) => {
+    const byPath = normalizedPathIdentity(left.finalPath, platform)
+      .localeCompare(normalizedPathIdentity(right.finalPath, platform));
+    return byPath || left.kind.localeCompare(right.kind);
+  });
+  for (let left = 0; left < artifacts.length; left += 1) {
+    for (let right = left + 1; right < artifacts.length; right += 1) {
+      if (sameCanonicalTarget(artifacts[left].finalPath, artifacts[right].finalPath, platform)) {
+        throw new Error("Il set del claim export contiene target duplicati.");
+      }
+    }
+  }
+  if (!artifacts.some(
+    (artifact) => artifact.kind === "file" && sameCanonicalTarget(artifact.finalPath, primary, platform),
+  )) {
+    throw new Error("Il primary output non appartiene al set del claim export.");
+  }
+  const digestPayload = {
+    primary_output: normalizedPathIdentity(primary, platform),
+    artifacts: artifacts.map((artifact) => ({
+      kind: artifact.kind,
+      final_path: normalizedPathIdentity(artifact.finalPath, platform),
+    })),
+  };
+  return {
+    primaryOutput: primary,
+    artifacts,
+    digest: sha256(Buffer.from(JSON.stringify(digestPayload))),
+  };
+}
+
+function claimMatchesBinding(marker, binding, platform = process.platform) {
+  if (
+    !sameCanonicalTarget(marker.primary_output, binding.primaryOutput, platform)
+    || marker.artifact_set_sha256 !== binding.digest
+    || marker.artifacts.length !== binding.artifacts.length
+  ) {
+    return false;
+  }
+  return marker.artifacts.every((artifact, index) => (
+    artifact.kind === binding.artifacts[index].kind
+    && sameCanonicalTarget(artifact.final_path, binding.artifacts[index].finalPath, platform)
+  ));
+}
+
+function validateExportClaim(marker, finalTarget, platform = process.platform) {
+  if (
+    !marker
+    || typeof marker !== "object"
+    || Array.isArray(marker)
+    || marker.version !== 2
+    || !Number.isSafeInteger(marker.pid)
+    || marker.pid < 1
+    || typeof marker.run_id !== "string"
+    || !/^[A-Za-z0-9_-]{1,128}$/.test(marker.run_id)
+    || typeof marker.primary_output !== "string"
+    || !pathApi(platform).isAbsolute(marker.primary_output)
+    || typeof marker.target !== "string"
+    || !sameCanonicalTarget(marker.target, finalTarget, platform)
+    || !Array.isArray(marker.artifacts)
+    || !marker.artifacts.length
+    || marker.artifacts.length > 4
+    || typeof marker.artifact_set_sha256 !== "string"
+    || !/^[0-9a-f]{64}$/.test(marker.artifact_set_sha256)
+  ) {
+    throw new Error(`Claim export non valido per ${finalTarget}.`);
+  }
+  const artifacts = marker.artifacts.map((artifact) => {
+    if (
+      !artifact
+      || typeof artifact !== "object"
+      || Array.isArray(artifact)
+      || !["file", "directory"].includes(artifact.kind)
+      || typeof artifact.final_path !== "string"
+      || !pathApi(platform).isAbsolute(artifact.final_path)
+    ) {
+      throw new Error(`Claim export non valido per ${finalTarget}.`);
+    }
+    return { kind: artifact.kind, finalPath: artifact.final_path };
+  });
+  const binding = exportClaimBinding(marker.primary_output, artifacts, platform);
+  if (
+    !claimMatchesBinding(marker, binding, platform)
+    || !binding.artifacts.some((artifact) => sameCanonicalTarget(artifact.finalPath, finalTarget, platform))
+  ) {
+    throw new Error(`Claim export non valido per ${finalTarget}.`);
+  }
+  return marker;
+}
+
+async function readExportClaim(
+  claimPath,
+  finalTarget,
+  { fsApi = fs, platform = process.platform } = {},
+) {
+  const marker = await readStableJsonSidecar(claimPath, {
+    fsApi,
+    label: "Claim export",
+  });
+  return validateExportClaim(marker, finalTarget, platform);
+}
+
+async function readExportClaimRecord(
+  claimPath,
+  finalTarget,
+  { fsApi = fs, platform = process.platform } = {},
+) {
+  const record = await readStableJsonSidecar(claimPath, {
+    fsApi,
+    label: "Claim export",
+    withMetadata: true,
+  });
+  return {
+    marker: validateExportClaim(record.value, finalTarget, platform),
+    metadata: record.metadata,
+  };
+}
+
+async function restoreClaimReapFence(
+  claim,
+  { fsApi = fs, platform = process.platform } = {},
+) {
+  const parent = path.dirname(claim.claimPath);
+  const fencePattern = new RegExp(
+    `^${escapedRegExp(path.basename(claim.claimPath))}\\.[1-9][0-9]{0,9}\\.[A-Za-z0-9_-]{1,128}\\.reap$`,
+  );
+  const fences = (await fsApi.readdir(parent)).filter((entry) => fencePattern.test(entry));
+  if (!fences.length) return false;
+  if (fences.length !== 1) {
+    throw new Error(`Fence di recovery claim ambiguo per ${claim.finalTarget}.`);
+  }
+  const fencePath = path.join(parent, fences[0]);
+  const claimExists = await pathExists(claim.claimPath, { fsApi });
+  if (claimExists) {
+    const [current, fence] = await Promise.all([
+      fsApi.lstat(claim.claimPath),
+      fsApi.lstat(fencePath),
+    ]);
+    if (
+      current.isSymbolicLink()
+      || fence.isSymbolicLink()
+      || !current.isFile()
+      || !fence.isFile()
+    ) {
+      throw new Error(`Fence di recovery claim non sicuro per ${claim.finalTarget}.`);
+    }
+    if (current.dev === fence.dev && current.ino === fence.ino) {
+      if (current.nlink !== 2 || fence.nlink !== 2) {
+        throw new Error(`Fence di recovery claim incoerente per ${claim.finalTarget}.`);
+      }
+    } else {
+      if (current.nlink !== 1 || fence.nlink !== 1) {
+        throw new Error(`Fence di recovery claim incoerente per ${claim.finalTarget}.`);
+      }
+      const [currentMarker, fenceMarker] = await Promise.all([
+        readExportClaim(claim.claimPath, claim.finalTarget, { fsApi, platform }),
+        readExportClaim(fencePath, claim.finalTarget, { fsApi, platform }),
+      ]);
+      const currentBinding = bindingFromClaim(currentMarker, platform);
+      if (!claimMatchesBinding(fenceMarker, currentBinding, platform)) {
+        throw new Error(
+          `Fence di recovery claim associato a un set diverso per ${claim.finalTarget}.`,
+        );
+      }
+    }
+    const fenceBeforeRemove = await fsApi.lstat(fencePath);
+    if (fenceBeforeRemove.dev !== fence.dev || fenceBeforeRemove.ino !== fence.ino) {
+      throw new Error(`Fence di recovery claim cambiato per ${claim.finalTarget}.`);
+    }
+    await fsApi.unlink(fencePath);
+    await fsyncDirectory(parent, { fsApi, platform });
+    return true;
+  }
+
+  const marker = await readExportClaim(fencePath, claim.finalTarget, { fsApi, platform });
+  if (!marker) throw new Error(`Fence di recovery claim non valido per ${claim.finalTarget}.`);
+  const fenceBefore = await fsApi.lstat(fencePath);
+  if (
+    !fenceBefore.isFile()
+    || fenceBefore.isSymbolicLink()
+    || fenceBefore.nlink !== 1
+  ) {
+    throw new Error(`Fence di recovery claim non sicuro per ${claim.finalTarget}.`);
+  }
+  try {
+    await fsApi.link(fencePath, claim.claimPath);
+  } catch (error) {
+    if (error?.code === "EEXIST") return false;
+    throw error;
+  }
+  const [restored, fence] = await Promise.all([
+    fsApi.lstat(claim.claimPath),
+    fsApi.lstat(fencePath),
+  ]);
+  if (
+    restored.dev !== fence.dev
+    || restored.ino !== fence.ino
+    || restored.nlink !== 2
+    || fence.nlink !== 2
+  ) {
+    throw new Error(`Fence di recovery claim cambiato durante il ripristino per ${claim.finalTarget}.`);
+  }
+  await fsApi.unlink(fencePath);
+  await fsyncDirectory(parent, { fsApi, platform });
+  return true;
+}
+
+async function fenceStaleExportClaim(
+  claim,
+  record,
+  runId,
+  { fsApi = fs, platform = process.platform, pid = process.pid } = {},
+) {
+  const fencePath = `${claim.claimPath}.${pid}.${runId}.reap`;
+  await fsApi.link(claim.claimPath, fencePath);
+  let claimUnlinked = false;
+  try {
+    const [current, fence] = await Promise.all([
+      fsApi.lstat(claim.claimPath),
+      fsApi.lstat(fencePath),
+    ]);
+    if (
+      current.dev !== record.metadata.dev
+      || current.ino !== record.metadata.ino
+      || fence.dev !== record.metadata.dev
+      || fence.ino !== record.metadata.ino
+      || current.nlink !== 2
+      || fence.nlink !== 2
+    ) {
+      throw new Error(`Il claim export è cambiato durante il recupero: ${claim.finalTarget}.`);
+    }
+    await fsApi.unlink(claim.claimPath);
+    claimUnlinked = true;
+    await fsyncDirectory(path.dirname(claim.claimPath), { fsApi, platform });
+    return fencePath;
+  } catch (error) {
+    if (!claimUnlinked) {
+      await removeDurableEntry(fencePath, { fsApi, platform }).catch(() => {});
+    }
+    throw error;
+  }
+}
+
+function claimMarkerForTarget(binding, finalTarget, runId, pid) {
+  return {
+    version: 2,
+    pid,
+    run_id: runId,
+    target: finalTarget,
+    primary_output: binding.primaryOutput,
+    artifact_set_sha256: binding.digest,
+    artifacts: binding.artifacts.map((artifact) => ({
+      kind: artifact.kind,
+      final_path: artifact.finalPath,
+    })),
+  };
+}
+
+function bindingFromClaim(marker, platform = process.platform) {
+  return exportClaimBinding(
+    marker.primary_output,
+    marker.artifacts.map((artifact) => ({
+      kind: artifact.kind,
+      finalPath: artifact.final_path,
+    })),
+    platform,
+  );
+}
+
+async function claimRecoveryPending(
+  marker,
+  {
+    fsApi = fs,
+    platform = process.platform,
+    isProcessRunning = processIsRunning,
+  } = {},
+) {
+  const binding = bindingFromClaim(marker, platform);
+  const { journalPath, commitPath } = exportTransactionPaths(binding.primaryOutput);
+  if (await pathExists(journalPath, { fsApi })) return true;
+  if (await pathExists(commitPath, { fsApi })) return true;
+  const stagingPath = exportStagingPath(binding.primaryOutput);
+  if (!(await pathExists(stagingPath, { fsApi }))) return false;
+  try {
+    const staging = await readExportStagingOwnership(
+      stagingPath,
+      binding.primaryOutput,
+      binding.artifacts,
+      { fsApi, platform },
+    );
+    if (staging.run_id === marker.run_id) return true;
+    return !isProcessRunning(staging.pid);
+  } catch {
+    return true;
+  }
+}
+
+async function releaseExportClaims(
+  ownership,
+  {
+    fsApi = fs,
+    platform = process.platform,
+    isProcessRunning = processIsRunning,
+  } = {},
+) {
+  if (!ownership) return;
+  ACTIVE_EXPORT_RUN_IDS.delete(ownership.runId);
+  const probeMarker = claimMarkerForTarget(
+    ownership.binding,
+    ownership.binding.primaryOutput,
+    ownership.runId,
+    ownership.pid,
+  );
+  if (await claimRecoveryPending(probeMarker, { fsApi, platform, isProcessRunning })) {
+    return { released: false, pending: true };
+  }
+  for (const claim of [...ownership.claims].reverse()) {
+    if (!(await pathExists(claim.claimPath, { fsApi }))) continue;
+    const marker = await readExportClaim(claim.claimPath, claim.finalTarget, {
+      fsApi,
+      platform,
+    });
+    if (marker.run_id !== ownership.runId) {
+      throw new Error(`Claim export fenced da un altro run per ${claim.finalTarget}.`);
+    }
+    if (!claimMatchesBinding(marker, ownership.binding, platform)) {
+      throw new Error(`Claim export associato a un set diverso per ${claim.finalTarget}.`);
+    }
+    await removeDurableEntry(claim.claimPath, { fsApi, platform });
+  }
+  return { released: true, pending: false };
+}
+
+async function acquireExportClaims(
+  expectedArtifacts,
+  {
+    fsApi = fs,
+    randomId = randomUUID,
+    platform = process.platform,
+    pid = process.pid,
+    isProcessRunning = processIsRunning,
+  } = {},
+) {
+  const runId = String(randomId());
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(runId)) {
+    throw new Error("Identificatore del claim export non valido.");
+  }
+  const primaryOutput = expectedArtifacts?.[0]?.finalPath;
+  const binding = exportClaimBinding(primaryOutput, expectedArtifacts, platform);
+  const ordered = binding.artifacts
+    .map(({ finalPath }) => ({
+      finalTarget: finalPath,
+      claimPath: exportClaimPath(finalPath),
+    }))
+    .sort((left, right) => normalizedPathIdentity(left.finalTarget, platform)
+      .localeCompare(normalizedPathIdentity(right.finalTarget, platform)));
+  const ownership = {
+    runId,
+    pid,
+    binding,
+    claims: [],
+    recoveredRunIds: new Set(),
+  };
+  ACTIVE_EXPORT_RUN_IDS.add(runId);
+  try {
+    for (const claim of ordered) {
+      let staleFence = null;
+      await restoreClaimReapFence(claim, { fsApi, platform });
+      if (await pathExists(claim.claimPath, { fsApi })) {
+        const existing = await readExportClaimRecord(claim.claimPath, claim.finalTarget, {
+          fsApi,
+          platform,
+        });
+        const activeInThisProcess = (
+          existing.marker.pid === pid
+          && ACTIVE_EXPORT_RUN_IDS.has(existing.marker.run_id)
+        );
+        const activeInAnotherProcess = (
+          existing.marker.pid !== pid
+          && isProcessRunning(existing.marker.pid)
+        );
+        const existingBinding = bindingFromClaim(existing.marker, platform);
+        const sameBinding = claimMatchesBinding(existing.marker, binding, platform);
+        const pendingRecovery = await claimRecoveryPending(existing.marker, {
+          fsApi,
+          platform,
+          isProcessRunning,
+        });
+        if (activeInThisProcess || activeInAnotherProcess) {
+          throw new Error(`Il target export è già in uso: ${claim.finalTarget}.`);
+        }
+        if (
+          !sameBinding
+          && pendingRecovery
+        ) {
+          throw new Error(
+            `Il target export è vincolato al recovery pending di ${existingBinding.primaryOutput}: `
+            + claim.finalTarget,
+          );
+        }
+        ownership.recoveredRunIds.add(existing.marker.run_id);
+        staleFence = await fenceStaleExportClaim(claim, existing, runId, {
+          fsApi,
+          platform,
+          pid,
+        });
+      }
+      const marker = claimMarkerForTarget(binding, claim.finalTarget, runId, pid);
+      let claimPublished = false;
+      try {
+        await writeDurableJsonExclusive(claim.claimPath, marker, {
+          fsApi,
+          randomId,
+          platform,
+          ownershipId: runId,
+        });
+        claimPublished = true;
+      } finally {
+        if (staleFence && claimPublished) {
+          await removeDurableEntry(staleFence, { fsApi, platform });
+        }
+      }
+      ownership.claims.push(claim);
+    }
+    return ownership;
+  } catch (error) {
+    try {
+      await releaseExportClaims(ownership, {
+        fsApi,
+        platform,
+        isProcessRunning,
+      });
+    } catch (releaseError) {
+      throw new Error(
+        `Acquisizione claim export fallita (${conciseError(error)}); rilascio incompleto: `
+        + conciseError(releaseError),
+      );
+    }
+    throw error;
+  }
+}
+
 async function removeDurableEntry(target, { fsApi = fs, platform = process.platform } = {}) {
   await fsApi.rm(target, { force: true });
   await fsyncDirectory(path.dirname(target), { fsApi, platform });
 }
 
-async function writeDurableJsonExclusive(
+async function writeDurableBytesExclusive(
   target,
-  value,
-  { fsApi = fs, randomId = randomUUID, platform = process.platform } = {},
+  bytes,
+  {
+    fsApi = fs,
+    randomId = randomUUID,
+    platform = process.platform,
+    ownershipId: requestedOwnershipId = null,
+  } = {},
 ) {
-  const temporaryPath = `${target}.${process.pid}.${randomId()}.tmp`;
+  if (!bytes || !Number.isSafeInteger(bytes.length) || bytes.length < 1 || bytes.length > MAX_SIDECAR_BYTES) {
+    throw new Error("Payload del publish durevole non valido o troppo grande.");
+  }
+  if (requestedOwnershipId === null) {
+    throw new Error("Il publish durevole richiede un ownership id esplicito.");
+  }
+  const ownershipId = String(requestedOwnershipId);
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(ownershipId)) {
+    throw new Error("Identificatore del publish durevole non valido.");
+  }
+  await recoverDurablePublishTwin(target, {
+    fsApi,
+    platform,
+    expectedOwnershipId: ownershipId,
+  });
+  const temporaryPath = `${target}.${process.pid}.${ownershipId}.tmp`;
   let handle;
+  let targetPublished = false;
   try {
     handle = await fsApi.open(temporaryPath, "wx", 0o600);
-    await handle.writeFile(`${JSON.stringify(value)}\n`);
+    if (typeof handle.chmod === "function") await handle.chmod(0o600);
+    await handle.writeFile(bytes);
     if (typeof handle.sync === "function") await handle.sync();
-    await handle.close();
-    handle = null;
+    const [beforeLinkHandle, beforeLinkPath] = await Promise.all([
+      handle.stat(),
+      fsApi.lstat(temporaryPath),
+    ]);
+    for (const metadata of [beforeLinkHandle, beforeLinkPath]) {
+      if (
+        !metadata.isFile()
+        || metadata.isSymbolicLink()
+        || metadata.nlink !== 1
+        || metadata.size !== bytes.length
+      ) {
+        throw new Error("File temporaneo del publish durevole non sicuro.");
+      }
+    }
+    if (
+      beforeLinkHandle.dev !== beforeLinkPath.dev
+      || beforeLinkHandle.ino !== beforeLinkPath.ino
+      || !sameJson(stableStatSignature(beforeLinkHandle), stableStatSignature(beforeLinkPath))
+    ) {
+      throw new Error("File temporaneo del publish durevole instabile prima del link.");
+    }
     // A hard-link publish is atomic and exclusive: unlike a check-then-rename,
     // two exporters can never overwrite each other's durable journal.
     await fsApi.link(temporaryPath, target);
-    await fsApi.rm(temporaryPath, { force: true });
+    targetPublished = true;
+    const [linkedHandle, linkedTemporary, linkedTarget] = await Promise.all([
+      handle.stat(),
+      fsApi.lstat(temporaryPath),
+      fsApi.lstat(target),
+    ]);
+    for (const metadata of [linkedHandle, linkedTemporary, linkedTarget]) {
+      assertLinkedSidecarMetadata(metadata, "Publish durevole", MAX_SIDECAR_BYTES);
+      if (
+        metadata.dev !== beforeLinkHandle.dev
+        || metadata.ino !== beforeLinkHandle.ino
+        || metadata.size !== bytes.length
+      ) {
+        throw new Error("Target e twin del publish durevole non coincidono.");
+      }
+    }
+    if (
+      !sameJson(stableStatSignature(linkedHandle), stableStatSignature(linkedTemporary))
+      || !sameJson(stableStatSignature(linkedHandle), stableStatSignature(linkedTarget))
+    ) {
+      throw new Error("Target e twin del publish durevole sono instabili.");
+    }
+    await fsApi.unlink(temporaryPath);
     await fsyncDirectory(path.dirname(target), { fsApi, platform });
+    const published = await fsApi.lstat(target);
+    assertSecureSidecarMetadata(published, "Publish durevole", MAX_SIDECAR_BYTES);
+    if (
+      published.dev !== beforeLinkHandle.dev
+      || published.ino !== beforeLinkHandle.ino
+      || published.size !== bytes.length
+    ) {
+      throw new Error("Target del publish durevole incoerente dopo la pulizia del twin.");
+    }
   } finally {
     if (handle) await handle.close().catch(() => {});
     if (await pathExists(temporaryPath, { fsApi }).catch(() => false)) {
-      await removeDurableEntry(temporaryPath, { fsApi, platform }).catch(() => {});
+      if (targetPublished) {
+        await recoverDurablePublishTwin(target, {
+          fsApi,
+          platform,
+          expectedOwnershipId: ownershipId,
+        }).catch(() => {});
+      } else {
+        await removeDurableEntry(temporaryPath, { fsApi, platform }).catch(() => {});
+      }
     }
   }
 }
 
-function validateExportTransaction(journal, expectedPrimaryOutput, expectedArtifacts = null) {
+
+async function writeDurableJsonExclusive(target, value, options = {}) {
+  await writeDurableBytesExclusive(target, Buffer.from(`${JSON.stringify(value)}\n`), options);
+}
+
+function validateExportTransaction(
+  journal,
+  expectedPrimaryOutput,
+  expectedArtifacts = null,
+  platform = process.platform,
+) {
   if (
     !journal
     || typeof journal !== "object"
@@ -788,10 +2060,10 @@ function validateExportTransaction(journal, expectedPrimaryOutput, expectedArtif
     || journal.version !== 1
     || typeof journal.transaction_id !== "string"
     || !/^[A-Za-z0-9_-]{1,128}$/.test(journal.transaction_id)
-    || journal.primary_output !== expectedPrimaryOutput
+    || !sameCanonicalTarget(journal.primary_output, expectedPrimaryOutput, platform)
     || !Array.isArray(journal.artifacts)
     || !journal.artifacts.length
-    || journal.artifacts.length > 3
+    || journal.artifacts.length > 4
   ) {
     throw new Error("Journal della pubblicazione export non valido.");
   }
@@ -810,30 +2082,34 @@ function validateExportTransaction(journal, expectedPrimaryOutput, expectedArtif
       || !["file", "directory"].includes(artifact.kind)
       || typeof artifact.finalPath !== "string"
       || typeof artifact.temporaryPath !== "string"
+      || !pathApi(platform).isAbsolute(artifact.finalPath)
+      || !pathApi(platform).isAbsolute(artifact.temporaryPath)
       || typeof artifact.hadOriginal !== "boolean"
       || (artifact.hadOriginal && typeof artifact.backupPath !== "string")
+      || (artifact.hadOriginal && !pathApi(platform).isAbsolute(artifact.backupPath))
       || (!artifact.hadOriginal && artifact.backupPath !== null)
     ) {
       throw new Error(`Journal export: artefatto ${index + 1} non valido.`);
     }
-    const finalPath = path.resolve(artifact.finalPath);
-    const temporaryPath = path.resolve(artifact.temporaryPath);
-    const expectedBackup = path.join(
+    const platformPath = pathApi(platform);
+    const finalPath = canonicalTargetPath(artifact.finalPath, { platform });
+    const temporaryPath = canonicalTargetPath(artifact.temporaryPath, { platform });
+    const expectedBackup = platformPath.join(
       path.dirname(finalPath),
       `.${path.basename(finalPath)}.${journal.transaction_id}.previous`,
     );
     if (
-      finalPath !== artifact.finalPath
-      || temporaryPath !== artifact.temporaryPath
-      || path.dirname(temporaryPath) !== path.dirname(finalPath)
+      !sameCanonicalTarget(finalPath, artifact.finalPath, platform)
+      || !sameCanonicalTarget(temporaryPath, artifact.temporaryPath, platform)
+      || !samePath(path.dirname(temporaryPath), path.dirname(finalPath), platform)
       || !path.basename(temporaryPath).startsWith(`.${path.basename(finalPath)}.`)
       || !path.basename(temporaryPath).endsWith(".tmp")
-      || (artifact.hadOriginal && artifact.backupPath !== expectedBackup)
-      || (index === 0 && finalPath !== expectedPrimaryOutput)
+      || (artifact.hadOriginal && !sameCanonicalTarget(artifact.backupPath, expectedBackup, platform))
+      || (index === 0 && !sameCanonicalTarget(finalPath, expectedPrimaryOutput, platform))
       || (
         expectedArtifacts !== null
         && (
-          finalPath !== path.resolve(expectedArtifacts[index].finalPath)
+          !sameCanonicalTarget(finalPath, expectedArtifacts[index].finalPath, platform)
           || artifact.kind !== expectedArtifacts[index].kind
         )
       )
@@ -841,8 +2117,9 @@ function validateExportTransaction(journal, expectedPrimaryOutput, expectedArtif
       throw new Error(`Journal export: percorsi dell'artefatto ${index + 1} non validi.`);
     }
     for (const candidate of [finalPath, temporaryPath, artifact.backupPath].filter(Boolean)) {
-      if (paths.has(candidate)) throw new Error("Journal export: percorsi duplicati.");
-      paths.add(candidate);
+      const identity = normalizedPathIdentity(candidate, platform);
+      if (paths.has(identity)) throw new Error("Journal export: percorsi duplicati.");
+      paths.add(identity);
     }
   }
   return journal;
@@ -852,19 +2129,18 @@ async function readExportTransaction(
   journalPath,
   expectedPrimaryOutput,
   expectedArtifacts,
-  { fsApi = fs } = {},
+  { fsApi = fs, platform = process.platform } = {},
 ) {
-  const metadata = await fsApi.lstat(journalPath);
-  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 64 * 1024) {
-    throw new Error("Journal della pubblicazione export non sicuro.");
-  }
   let journal;
   try {
-    journal = JSON.parse(await fsApi.readFile(journalPath, "utf8"));
+    journal = await readStableJsonSidecar(journalPath, {
+      fsApi,
+      label: "Journal della pubblicazione export",
+    });
   } catch (error) {
     throw new Error(`Journal della pubblicazione export non leggibile: ${conciseError(error)}.`);
   }
-  return validateExportTransaction(journal, expectedPrimaryOutput, expectedArtifacts);
+  return validateExportTransaction(journal, expectedPrimaryOutput, expectedArtifacts, platform);
 }
 
 async function recoverExportTransaction(
@@ -883,13 +2159,21 @@ async function recoverExportTransaction(
     journalPath,
     primaryOutput,
     expectedArtifacts,
-    { fsApi },
+    { fsApi, platform },
   );
   const markerExists = await pathExists(commitPath, { fsApi });
   let committed = false;
   if (markerExists) {
-    const marker = (await fsApi.readFile(commitPath, "utf8")).trim();
-    if (marker !== journal.transaction_id) {
+    const marker = await readStableSidecar(commitPath, {
+      fsApi,
+      label: "Marker di commit export",
+      maxBytes: 129,
+    });
+    const markerText = marker.toString("utf8");
+    if (!/^[A-Za-z0-9_-]{1,128}\n$/.test(markerText)) {
+      throw new Error("Il marker di commit export ha formato non valido.");
+    }
+    if (markerText !== `${journal.transaction_id}\n`) {
       throw new Error("Il marker di commit export non coincide con il journal.");
     }
     committed = true;
@@ -932,7 +2216,7 @@ async function recoverExportTransaction(
           }
           await fsApi.rename(artifact.backupPath, artifact.finalPath);
           await fsyncDirectory(path.dirname(artifact.finalPath), { fsApi, platform });
-        } else if (!finalExists || !temporaryExists) {
+        } else if (!finalExists) {
           throw new Error(`Recovery export impossibile: backup precedente mancante per ${artifact.finalPath}.`);
         }
       } else if (temporaryExists && finalExists) {
@@ -940,7 +2224,8 @@ async function recoverExportTransaction(
       } else if (!temporaryExists && finalExists) {
         await removeKnownArtifact(artifact.finalPath, artifact.kind, { fsApi, platform });
       } else if (!temporaryExists && !finalExists) {
-        throw new Error(`Recovery export impossibile: target e staging mancanti per ${artifact.finalPath}.`);
+        // Una precedente recovery può aver già rimosso il nuovo target prima
+        // di fallire sulla pulizia del journal. Questo stato è già rollbackato.
       }
       if (temporaryExists && await pathExists(artifact.temporaryPath, { fsApi })) {
         await removeKnownArtifact(artifact.temporaryPath, artifact.kind, { fsApi, platform });
@@ -998,7 +2283,12 @@ async function publishStagedArtifactsAtomically(
       hadOriginal,
     })),
   };
-  await writeDurableJsonExclusive(journalPath, journal, { fsApi, randomId, platform });
+  await writeDurableJsonExclusive(journalPath, journal, {
+    fsApi,
+    randomId,
+    platform,
+    ownershipId: transactionId,
+  });
   try {
     for (const artifact of artifacts) {
       if (artifact.backupPath) {
@@ -1010,8 +2300,12 @@ async function publishStagedArtifactsAtomically(
       await fsApi.rename(artifact.temporaryPath, artifact.finalPath);
       await fsyncDirectory(path.dirname(artifact.finalPath), { fsApi, platform });
     }
-    await writeDurableFile(commitPath, Buffer.from(`${transactionId}\n`), { fsApi });
-    await fsyncDirectory(path.dirname(commitPath), { fsApi, platform });
+    await writeDurableBytesExclusive(commitPath, Buffer.from(`${transactionId}\n`), {
+      fsApi,
+      randomId,
+      platform,
+      ownershipId: transactionId,
+    });
   } catch (error) {
     try {
       await recoverExportTransaction(primaryOutput, { fsApi, platform, expectedArtifacts });
@@ -1033,28 +2327,83 @@ async function writeExportArtifactsAtomically({
   pngSlides = [],
   contactSheet = null,
   contactSheetBytes = null,
+  resultJson = null,
+  resultJsonBytes = null,
   beforeReplace,
   fsApi = fs,
   randomId = randomUUID,
   platform = process.platform,
+  pid = process.pid,
+  isProcessRunning = processIsRunning,
 }) {
+  output = canonicalTargetPath(output, { platform });
+  pngDir = pngDir ? canonicalTargetPath(pngDir, { platform }) : null;
+  contactSheet = contactSheet ? canonicalTargetPath(contactSheet, { platform }) : null;
+  resultJson = resultJson ? canonicalTargetPath(resultJson, { platform }) : null;
+  const expectedArtifacts = [
+    { kind: "file", finalPath: output },
+    ...(pngDir ? [{ kind: "directory", finalPath: pngDir }] : []),
+    ...(contactSheet ? [{ kind: "file", finalPath: contactSheet }] : []),
+    ...(resultJson ? [{ kind: "file", finalPath: resultJson }] : []),
+  ];
   const staged = [];
   let openHandle = null;
+  let ownership = null;
+  let claimOwnership = null;
   try {
-    await fsApi.mkdir(path.dirname(output), { recursive: true });
-    const pdfReservation = await createExclusiveTemporaryOutput(output, { fsApi, randomId });
-    openHandle = pdfReservation.handle;
+    for (const artifact of expectedArtifacts) {
+      await fsApi.mkdir(path.dirname(artifact.finalPath), { recursive: true });
+    }
+    claimOwnership = await acquireExportClaims(expectedArtifacts, {
+      fsApi,
+      randomId,
+      platform,
+      pid,
+      isProcessRunning,
+    });
+    await recoverExportStagingOwnership(output, {
+      fsApi,
+      platform,
+      expectedArtifacts,
+      isProcessRunning,
+      currentPid: pid,
+      recoverableRunIds: claimOwnership.recoveredRunIds,
+      cleanup: false,
+    });
+    await recoverExportTransaction(output, { fsApi, platform, expectedArtifacts });
+    await recoverExportStagingOwnership(output, {
+      fsApi,
+      platform,
+      expectedArtifacts,
+      isProcessRunning,
+      currentPid: pid,
+      recoverableRunIds: claimOwnership.recoveredRunIds,
+    });
+    ownership = await createExportStagingOwnership(output, expectedArtifacts, {
+      fsApi,
+      randomId,
+      platform,
+      pid,
+      runId: claimOwnership.runId,
+    });
+
+    let artifactIndex = 0;
+    const pdfArtifact = ownership.marker.artifacts[artifactIndex++];
+    const pngArtifact = pngDir ? ownership.marker.artifacts[artifactIndex++] : null;
+    const contactArtifact = contactSheet ? ownership.marker.artifacts[artifactIndex++] : null;
+    const resultArtifact = resultJson ? ownership.marker.artifacts[artifactIndex++] : null;
+    openHandle = await fsApi.open(pdfArtifact.temporaryPath, "wx", 0o600);
+    staged.push(pdfArtifact);
     await openHandle.writeFile(pdfBytes);
     if (typeof openHandle.sync === "function") await openHandle.sync();
     await openHandle.close();
     openHandle = null;
-    staged.push({ kind: "file", finalPath: output, temporaryPath: pdfReservation.temporaryPath });
-    await fsyncDirectory(path.dirname(pdfReservation.temporaryPath), { fsApi, platform });
+    await fsyncDirectory(path.dirname(pdfArtifact.temporaryPath), { fsApi, platform });
 
     if (pngDir) {
       if (!pngSlides.length) throw new Error("Nessun PNG disponibile per --png-dir.");
-      const temporaryDirectory = await createExclusiveTemporaryDirectory(pngDir, { fsApi, randomId });
-      staged.push({ kind: "directory", finalPath: pngDir, temporaryPath: temporaryDirectory });
+      await fsApi.mkdir(pngArtifact.temporaryPath, { mode: 0o700 });
+      staged.push(pngArtifact);
       const filenames = new Set();
       for (const slide of pngSlides) {
         if (
@@ -1067,32 +2416,53 @@ async function writeExportArtifactsAtomically({
           throw new Error("Nome PNG non sicuro o duplicato nella sequenza di export.");
         }
         filenames.add(slide.filename);
-        await writeDurableFile(path.join(temporaryDirectory, slide.filename), slide.bytes, { fsApi });
+        await writeDurableFile(path.join(pngArtifact.temporaryPath, slide.filename), slide.bytes, { fsApi });
       }
-      await fsyncDirectory(temporaryDirectory, { fsApi, platform });
-      await fsyncDirectory(path.dirname(temporaryDirectory), { fsApi, platform });
+      await fsyncDirectory(pngArtifact.temporaryPath, { fsApi, platform });
+      await fsyncDirectory(path.dirname(pngArtifact.temporaryPath), { fsApi, platform });
     }
 
     if (contactSheet) {
       if (!contactSheetBytes) throw new Error("Contact sheet non disponibile per la pubblicazione.");
-      await fsApi.mkdir(path.dirname(contactSheet), { recursive: true });
-      const reservation = await createExclusiveTemporaryOutput(contactSheet, { fsApi, randomId });
-      openHandle = reservation.handle;
+      openHandle = await fsApi.open(contactArtifact.temporaryPath, "wx", 0o600);
+      staged.push(contactArtifact);
       await openHandle.writeFile(contactSheetBytes);
       if (typeof openHandle.sync === "function") await openHandle.sync();
       await openHandle.close();
       openHandle = null;
-      staged.push({ kind: "file", finalPath: contactSheet, temporaryPath: reservation.temporaryPath });
-      await fsyncDirectory(path.dirname(reservation.temporaryPath), { fsApi, platform });
+      await fsyncDirectory(path.dirname(contactArtifact.temporaryPath), { fsApi, platform });
+    }
+
+    if (resultJson) {
+      if (!resultJsonBytes) throw new Error("Result JSON non disponibile per la pubblicazione.");
+      openHandle = await fsApi.open(resultArtifact.temporaryPath, "wx", 0o600);
+      staged.push(resultArtifact);
+      await openHandle.writeFile(resultJsonBytes);
+      if (typeof openHandle.sync === "function") await openHandle.sync();
+      await openHandle.close();
+      openHandle = null;
+      await fsyncDirectory(path.dirname(resultArtifact.temporaryPath), { fsApi, platform });
     }
 
     if (beforeReplace) await beforeReplace();
     await publishStagedArtifactsAtomically(staged, { fsApi, randomId, platform });
     staged.length = 0;
+    await removeDurableEntry(ownership.markerPath, { fsApi, platform });
+    ownership = null;
   } finally {
     if (openHandle) await openHandle.close().catch(() => {});
     for (const artifact of staged) {
       await removeKnownArtifact(artifact.temporaryPath, artifact.kind, { fsApi, platform }).catch(() => {});
+    }
+    if (ownership) {
+      await removeDurableEntry(ownership.markerPath, { fsApi, platform }).catch(() => {});
+    }
+    if (claimOwnership) {
+      await releaseExportClaims(claimOwnership, {
+        fsApi,
+        platform,
+        isProcessRunning,
+      });
     }
   }
 }
@@ -1171,7 +2541,6 @@ async function restoreSlideRows(page) {
 
 async function normalizedRgba(sharp, source) {
   const { data, info } = await sharp(source)
-    .resize(EXPORT_WIDTH, EXPORT_HEIGHT, { fit: "fill", kernel: sharp.kernel.lanczos3 })
     .ensureAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
@@ -1371,6 +2740,8 @@ async function buildPdf({
     const pdf = await PDFDocument.create();
     pdf.setTitle("Carousel Builder export");
     pdf.setProducer(`Carousel Builder ${CONTRACT}`);
+    pdf.setCreationDate(DETERMINISTIC_PDF_DATE);
+    pdf.setModificationDate(DETERMINISTIC_PDF_DATE);
     const pngSlides = [];
     const pixelDigests = await capturePixelParity({
       referencePage,
@@ -1412,8 +2783,9 @@ async function buildPdf({
       label: "prima del risultato",
     });
 
+    let publication = null;
     if (commitPdf) {
-      await commitPdf(bytes, async () => {
+      publication = await commitPdf(bytes, async () => {
         const beforeReplaceContracts = await readStableContracts({
           referencePage,
           productionPage,
@@ -1450,7 +2822,10 @@ async function buildPdf({
           afterPixelsContracts.production,
           "immediatamente prima della sostituzione atomica",
         );
-      }, pngSlides);
+      }, pngSlides, {
+        contract: resultContracts.production,
+        browserDescriptor: currentBrowser,
+      });
     }
 
     return {
@@ -1458,24 +2833,33 @@ async function buildPdf({
       contract: resultContracts.production,
       pngSlides,
       browserDescriptor: currentBrowser,
+      publication,
     };
   } finally {
     await context.close().catch(() => {});
   }
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
+async function main({
+  argv = process.argv.slice(2),
+  fetchImpl = globalThis.fetch,
+  loadDependenciesImpl = loadDependencies,
+  launchBrowserImpl = launchBrowser,
+  stdout = process.stdout,
+} = {}) {
+  const args = parseArgs(argv);
   const baseUrl = safeLocalUrl(args.url);
   const nodeModules = path.resolve(args["node-modules"]);
-  const { output, pngDir, contactSheet } = resolveOutputTargets(args);
-  const { chromium, sharp, PDFDocument } = loadDependencies(nodeModules);
-  const launchSession = await fetchLiveSession(baseUrl);
+  const targets = resolveOutputTargets(args);
+  const { output, pngDir, contactSheet, resultJson } = targets;
+  const launchSession = await fetchLiveSession(baseUrl, fetchImpl);
+  assertExportPreflight(launchSession, targets);
+  const { chromium, sharp, PDFDocument } = loadDependenciesImpl(nodeModules);
   const expectedBrowser = launchSession?.proof?.browser;
   if (!validBrowserDescriptor(expectedBrowser)) {
     throw new Error("La sessione live non contiene un browser valido associato alla prova visuale.");
   }
-  const { browser, browserLabel } = await launchBrowser(chromium, {
+  const { browser, browserLabel } = await launchBrowserImpl(chromium, {
     explicitPath: args.chrome,
     expectedBrowser,
   });
@@ -1486,8 +2870,27 @@ async function main() {
       browser,
       sharp,
       PDFDocument,
-      commitPdf: async (bytes, beforeReplace, pngSlides) => {
+      fetchImpl,
+      commitPdf: async (bytes, beforeReplace, pngSlides, metadata) => {
         const contactSheetBytes = contactSheet ? await buildContactSheet(sharp, pngSlides) : null;
+        const artifactSha256 = exportArtifactDigests({
+          output,
+          pdfBytes: bytes,
+          pngDir,
+          pngSlides,
+          contactSheet,
+          contactSheetBytes,
+        });
+        const resultPayload = buildExportResult({
+          output,
+          pngDir,
+          contactSheet,
+          resultJson,
+          contract: metadata.contract,
+          browserLabel,
+          browser: metadata.browserDescriptor,
+          artifactSha256,
+        });
         await writeExportArtifactsAtomically({
           output,
           pdfBytes: bytes,
@@ -1495,57 +2898,55 @@ async function main() {
           pngSlides,
           contactSheet,
           contactSheetBytes,
+          resultJson,
+          resultJsonBytes: resultJson ? Buffer.from(`${JSON.stringify(resultPayload)}\n`) : null,
           beforeReplace,
         });
+        return { artifactSha256, resultPayload };
       },
     });
   } finally {
     await browser.close().catch(() => {});
   }
-  process.stdout.write(`${JSON.stringify({
-    status: "ok",
-    output,
-    slides: result.contract.frames.length,
-    width: EXPORT_WIDTH,
-    height: EXPORT_HEIGHT,
-    contract: CONTRACT,
-    revision: result.contract.revision,
-    workflow_state: result.contract.workflowState,
-    style_system: result.contract.styleSystem,
-    browser: browserLabel,
-    proof_browser: result.browserDescriptor,
-    preview_production_parity: "exact",
-    pixel_comparison: "raw-rgba-1440x1800",
-    final_pixel_recheck: "production-digest-against-initial-parity",
-    live_session_verified: true,
-    approval_verified: true,
-    ...(pngDir ? { png_dir: pngDir, png_files: result.pngSlides.length } : {}),
-    ...(contactSheet ? { contact_sheet: contactSheet } : {}),
-  })}\n`);
+  stdout.write(`${JSON.stringify(result.publication.resultPayload)}\n`);
 }
 
 module.exports = {
   APPROVED_WORKFLOW_STATES,
   CONTENT_SNAPSHOT_KEYS,
   CONTRACT,
+  acquireExportClaims,
+  assertExportPreflight,
   browserDescriptor,
   browserCandidates,
+  buildExportResult,
   buildContactSheet,
   buildPdf,
+  canonicalTargetPath,
   createExclusiveTemporaryDirectory,
   createExclusiveTemporaryOutput,
+  exportClaimBinding,
+  exportArtifactDigests,
+  fetchLiveSession,
   fsyncDirectory,
   launchBrowser,
+  main,
   parseArgs,
   publishStagedArtifactsAtomically,
+  readStableSidecar,
+  recoverDurablePublishTwin,
   replaceFilePortable,
   resolveOutputTargets,
   safeLocalUrl,
+  sameCanonicalTarget,
+  samePath,
+  pathContains,
   sameJson,
   slidePngFilename,
   validateContract,
   validateStableContract,
   writeExportArtifactsAtomically,
+  writeDurableBytesExclusive,
   writePdfAtomically,
 };
 

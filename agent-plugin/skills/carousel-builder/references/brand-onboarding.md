@@ -116,7 +116,7 @@ Nel percorso guidato mostrare e far approvare il profilo prima dei testi.
 
 Quando non emerge una direzione riconoscibile, proporre al massimo:
 
-1. `Editoriale geometrico`: forme pulite e metafore essenziali;
+1. `Grafico astratto`: forme pulite e metafore essenziali; è una tecnica per il visual di copertina, distinta dai sistemi Editoriale, Geometrico e Istituzionale del carosello;
 2. `Fotografico`: scene credibili e materiali realistici;
 3. `Illustrato o collage`: texture, stratificazione e segno espressivo.
 
