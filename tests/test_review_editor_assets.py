@@ -154,17 +154,24 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         self.assertIn('response.status === 422 && rejectedAction === "approve"', self.source)
         self.assertIn("await loadSession()", self.source)
 
-    def test_visual_approval_binds_viewed_proof_sample_and_browser(self) -> None:
+    def test_visual_approval_keeps_editorial_advisories_non_blocking(self) -> None:
         submit = self.source.split("async function submit(action)", 1)[1].split("function schedulePoll", 1)[0]
-        gate = self.source.split("function collectApprovalIssues(", 1)[1].split("function validationTarget", 1)[0]
+        gate = self.source.split("function collectApprovalIssues(", 1)[1].split("function collectApprovalAdvisories", 1)[0]
         snapshot = self.source.split("function canonicalContentSnapshot()", 1)[1].split("function getRenderContract", 1)[0]
-        self.assertIn("requiredProofSlideIds()", gate)
-        self.assertIn("viewedSlideIds.has(slideId)", gate)
+        advisories = self.source.split("function collectApprovalAdvisories()", 1)[1].split("function validationTarget", 1)[0]
+        self.assertIn("requiredProofSlideIds()", advisories)
+        self.assertNotIn("viewedSlideIds.has(slideId)", gate)
         self.assertIn("model?.proof_approved !== true", gate)
         self.assertIn("!productionRender", gate)
         self.assertIn('model?.proof?.preview_width !== 480', gate)
-        self.assertIn("Math.abs(bounds.width - expectedWidth) > 0.5", gate)
-        self.assertIn("Math.abs(bounds.height - expectedHeight) > 0.5", gate)
+        self.assertNotIn("proof-unseen-", gate)
+        self.assertNotIn("proof-size-", gate)
+        self.assertIn("proof-unseen-", advisories)
+        self.assertIn("proof-size-", advisories)
+        self.assertNotIn("warning.schema", gate)
+        self.assertNotIn("warning.emphasis", gate)
+        self.assertNotIn("collectPaletteContrastIssues()", gate)
+        self.assertIn("collectPaletteContrastIssues()", advisories)
         self.assertIn("payload.proof_slide_ids = requiredProofSlideIds()", submit)
         self.assertIn("payload.style_system_verified = true", submit)
         self.assertIn("payload.proof_browser = browserProofDescriptor()", submit)
@@ -175,6 +182,7 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         self.assertIn('engine, major', self.source)
         self.assertNotIn('["firefox",', self.source)
         self.assertNotIn('["webkit",', self.source)
+        self.assertIn("Gli avvisi editoriali e le slide non ancora viste non bloccano", self.source)
 
     def test_slide_is_seen_only_after_half_of_the_preview_is_observed(self) -> None:
         jump = self.source.split("function jumpToSlide(slideId)", 1)[1].split(
@@ -274,13 +282,16 @@ assert.equal(previewReadyForApproval({ previewReady: "false" }), false);
         self.assertIn("awaitingFeedbackId = serverFeedbackId", self.source)
         self.assertNotIn("setInterval(pollStatus", self.source)
 
-    def test_approval_uses_one_blocking_gate_with_inline_focusable_errors(self) -> None:
+    def test_approval_uses_one_technical_gate_with_editorial_advisories(self) -> None:
         self.assertIn("function runApprovalGate", self.source)
         self.assertGreaterEqual(self.source.count("runApprovalGate()"), 2)
         self.assertIn("collectPaletteContrastIssues", self.source)
-        self.assertIn("warning.schema", self.source)
+        gate = self.source.split("function collectApprovalIssues(", 1)[1].split("function collectApprovalAdvisories", 1)[0]
+        advisories = self.source.split("function collectApprovalAdvisories()", 1)[1].split("function validationTarget", 1)[0]
+        self.assertNotIn("warning.schema", gate)
         self.assertIn("warning.overflow", self.source)
-        self.assertIn("warning.emphasis", self.source)
+        self.assertIn("warning.schema", advisories)
+        self.assertIn("warning.emphasis", advisories)
         self.assertIn('target.setAttribute("aria-invalid", "true")', self.source)
         self.assertIn('id="validation-summary"', self.html)
         self.assertIn('id="validation-list"', self.html)
@@ -490,6 +501,32 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         self.assertNotIn("background: var(--vincos-navy);", stylesheet)
         self.assertNotIn('id="change-label"', html)
 
+    def test_visual_choice_is_progressive_and_cover_visual_is_a_clean_split(self) -> None:
+        self.assertIn("Sistema visivo consigliato", self.html)
+        self.assertIn('id="compare-visual-systems"', self.html)
+        self.assertIn('id="show-advanced-visual-system"', self.html)
+        self.assertIn('data-cover-choice="typographic"', self.html)
+        self.assertIn('data-cover-choice="visual"', self.html)
+        picker = self.source.split("function renderVisualSystemPicker", 1)[1].split(
+            "function setVisualSystem", 1
+        )[0]
+        self.assertIn("visualAlternativeExpanded && system.id === alternate", picker)
+        self.assertIn('advancedVisualExpanded && system.id === "editorial-halftone"', picker)
+        self.assertIn('preview.classList.add("cover-split")', self.source)
+        self.assertIn('coverMedia.className = "preview-cover-media"', self.source)
+        self.assertIn("inset: 0 0 0 55%;", self.stylesheet)
+        self.assertIn("width: 45%;", self.stylesheet)
+        self.assertIn(
+            '.slide-preview.cover-split[data-kind="cover"] .preview-copy',
+            self.stylesheet,
+        )
+        self.assertIn("width: 49%;", self.stylesheet)
+        split_page = self.stylesheet.split(
+            '.slide-preview.cover-split[data-kind="cover"] .preview-page', 1
+        )[1].split("}", 1)[0]
+        self.assertIn("right: 51%;", split_page)
+        self.assertNotIn("Titolo sopra l’immagine", self.source)
+
     def test_applied_formats_are_compact_visible_and_directly_removable(self) -> None:
         stylesheet = (EDITOR_DIR / "styles.css").read_text(encoding="utf-8")
         self.assertIn('active ? "true" : mixed ? "mixed" : "false"', self.source)
@@ -517,7 +554,7 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
     def test_agent_recovers_durable_editor_events_at_every_checkpoint(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         visual_review = (ROOT / "references" / "visual-review.md").read_text(encoding="utf-8")
-        self.assertIn("anche in questo checkpoint e in ogni prova successiva", skill)
+        self.assertIn("restare in attesa attiva a ogni prova", skill)
         self.assertIn("in ogni checkpoint dell'editor", visual_review)
         self.assertIn("session-state.json", visual_review)
         self.assertIn("last_feedback_id", visual_review)
@@ -537,11 +574,11 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         visual_review = (ROOT / "references" / "visual-review.md").read_text(encoding="utf-8")
         self.assertIn("nessuna slide iniziale deve mostrare avvisi di densità o overflow", skill)
         self.assertIn("`local-editor` è obbligatorio", skill)
-        self.assertIn("al massimo 180 caratteri", skill)
-        self.assertIn("al massimo 320 caratteri", skill)
+        self.assertIn("massimo 180 caratteri", skill)
+        self.assertIn("320 senza", skill)
         self.assertIn("una prima proposta già impaginabile", workflow)
         self.assertIn("trattare le soglie come limiti rigidi", workflow)
-        self.assertIn("ciascuno dei tre sistemi visivi", visual_review)
+        self.assertIn("sistema consigliato", visual_review)
         self.assertIn("l'apertura dell'editor è obbligatoria", visual_review)
 
     def test_vincos_logo_is_the_approved_outlined_lockup(self) -> None:

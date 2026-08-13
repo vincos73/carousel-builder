@@ -48,6 +48,8 @@ QA_REQUIRED_CHECKS = frozenset(
         "fonts",
         "preview_production_parity",
         "no_incomplete_outputs",
+        "automated_all_slides",
+        "human_sample_review",
     }
 )
 ARTIFACT_KIND_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
@@ -471,6 +473,27 @@ def validate_qa_report(
         missing = sorted(QA_REQUIRED_CHECKS - set(checks or {}))
         suffix = f"; mancanti: {', '.join(missing)}" if missing else ""
         raise ValueError(f"Il qa-report non supera tutti i controlli obbligatori{suffix}")
+
+    known_slide_ids = {
+        slide.get("id") for slide in model.get("slides", []) if isinstance(slide, dict)
+    }
+    sample_ids = report.get("human_sample_slide_ids")
+    flagged_ids = report.get("flagged_slide_ids", [])
+    if (
+        not isinstance(sample_ids, list)
+        or not sample_ids
+        or len(sample_ids) != len(set(sample_ids))
+        or any(not isinstance(value, str) or value not in known_slide_ids for value in sample_ids)
+        or not isinstance(flagged_ids, list)
+        or len(flagged_ids) != len(set(flagged_ids))
+        or any(not isinstance(value, str) or value not in known_slide_ids for value in flagged_ids)
+    ):
+        raise ValueError("Il campione umano del qa-report non contiene ID slide validi")
+    required_sample = set(model.get("proof", {}).get("required_slide_ids", []))
+    if not (required_sample | set(flagged_ids)).issubset(sample_ids):
+        raise ValueError(
+            "Il campione umano deve includere copertina, card più densa, chiusura e anomalie segnalate"
+        )
 
     expected = expected_output_kinds(manifest)
     report_artifacts = validated_artifact_records(

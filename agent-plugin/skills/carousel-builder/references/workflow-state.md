@@ -23,6 +23,17 @@ Il JSON espone schema, revisione, stato, checkpoint, proof corrente, fingerprint
 
 ## Transizioni
 
+Per i due checkpoint di approvazione usare normalmente il batch durevole dell'editor:
+
+```bash
+<python> <skill>/scripts/process_review.py "<manifest.json>" "<feedback-path>" \
+  --session-dir "<session-dir>"
+```
+
+Lo script applica il batch e avanza soltanto `bozza -> testi_approvati` oppure `testi_approvati -> prova_visuale_approvata` quando `action: approve` e i gate del checkpoint passano. Un batch `feedback` non avanza. `approval_blocked` lascia lo stato invariato e include lo status da diagnosticare. `apply_review.py` resta disponibile per recovery mirati, ma nel percorso normale non va seguito manualmente da status e advance.
+
+Dopo l'approvazione editoriale, se `cover_mode` è `generated` o `provided`, collegare l'asset con `attach_cover_asset.py` e la revisione corrente. L'operazione è ammessa soltanto in `testi_approvati`, usa il canale append-only della sessione, conserva la ricevuta editoriale e invalida la proof. Non modificare i campi della cover a mano.
+
 Usare percorsi assoluti e sostituire `N` con la `revision` corrente:
 
 ```bash
@@ -51,6 +62,17 @@ Usare percorsi assoluti e sostituire `N` con la `revision` corrente:
   --qa-report "<qa-report.json>"
 ```
 
+Dopo l'export e l'ispezione, preferire il wrapper unico per le ultime due transizioni:
+
+```bash
+<python> <skill>/scripts/finalize_delivery.py "<manifest.json>" \
+  --session-dir "<session-dir>" \
+  --render-result "<render-result.json>" \
+  --qa-report "<qa-report.json>"
+```
+
+Se parte da `rendering`, il wrapper valida il risultato e avanza a `qa`, poi valida il report e avanza a `consegnato`. Se il secondo gate fallisce, conserva correttamente `qa` e la ricevuta già valida.
+
 I gate sono cumulativi:
 
 - `bozza -> testi_approvati`: batch `approve` applicato alla revisione corrente, stage `profile_text`, digest del feedback valido e zero commenti pendenti;
@@ -59,7 +81,7 @@ I gate sono cumulativi:
 - `rendering -> qa`: `render-result` corrente e artefatti esistenti con digest SHA-256 coincidenti;
 - `qa -> consegnato`: lo stesso `render-result` già legato alla ricevuta, report QA positivo e gli stessi artefatti ancora presenti.
 
-Qualunque modifica a copy, ordine, profilo, sistema, logo, asset o composizione può cambiare revisione o fingerprint e invalidare la proof. `apply_review.py` non avanza mai: una correzione editoriale o una nota non classificabile riapre atomicamente `bozza` e azzera la catena; una modifica esclusivamente a sistema visivo, logo o enfasi tipografica riapre `testi_approvati` e conserva soltanto la ricevuta reale `bozza -> testi_approvati`. Una modifica alle sole enfasi non rende stale alt text o trascrizione. Gli asset della cover devono essere già presenti quando nasce la sessione locale: non inserirli direttamente dopo l'approvazione dei testi. Dopo ogni `apply_review.py`, rieseguire `carousel_status.py` e usare la revisione corrente restituita, non quella precedente al batch. Ripartire dal checkpoint risultante e non ricostruire le ricevute a mano.
+Qualunque modifica a copy, ordine, profilo, sistema, logo, asset o composizione può cambiare revisione o fingerprint e invalidare la proof. `apply_review.py` non avanza mai: una correzione editoriale o una nota non classificabile riapre atomicamente `bozza` e azzera la catena; una modifica esclusivamente a sistema visivo, logo, cover o enfasi tipografica riapre o mantiene `testi_approvati` e conserva soltanto la ricevuta reale `bozza -> testi_approvati`. Una modifica alle sole enfasi non rende stale alt text o trascrizione. Gli asset della cover possono essere collegati dopo l'approvazione dei testi soltanto tramite `attach_cover_asset.py`. Dopo un uso diretto di `apply_review.py` per recovery, rieseguire `carousel_status.py` e usare la revisione corrente restituita, non quella precedente al batch. Ripartire dal checkpoint risultante e non ricostruire le ricevute a mano.
 
 ## Risultato di export
 
@@ -84,7 +106,7 @@ Creare `qa-report.json` soltanto dopo aver aperto e ispezionato gli artefatti se
   "workflow_state": "qa",
   "render_fingerprint": "<sha256 corrente>",
   "proof_browser": {"engine": "chromium", "major": 151},
-  "render_evidence_sha256": "<evidence_sha256 dell'ultima ricevuta rendering -> qa>",
+  "render_evidence_sha256": "auto",
   "checks": {
     "manifest_content_match": true,
     "slide_count_order": true,
@@ -92,15 +114,19 @@ Creare `qa-report.json` soltanto dopo aver aperto e ispezionato gli artefatti se
     "files_open": true,
     "fonts": true,
     "preview_production_parity": true,
-    "no_incomplete_outputs": true
+    "no_incomplete_outputs": true,
+    "automated_all_slides": true,
+    "human_sample_review": true
   },
+  "human_sample_slide_ids": ["cover", "item-2", "outro"],
+  "flagged_slide_ids": [],
   "artifacts": [
     {"kind": "pdf", "path": "/percorso/carousel.pdf", "sha256": "<sha256>"}
   ]
 }
 ```
 
-Usare la revisione, il fingerprint e il browser correnti. Copiare `render_evidence_sha256` dall'ultima `workflow_receipts` dopo `rendering -> qa`: è il digest canonico dell'oggetto `render-result`, non necessariamente il digest dei byte del file JSON. In `artifacts` ripetere l'insieme completo e i digest correnti del risultato di export; l'esempio mostra il solo caso `expected_outputs: ["pdf"]`.
+Usare la revisione, il fingerprint e il browser correnti. `automated_all_slides` attesta che i controlli deterministici hanno coperto l'intera sequenza; `human_sample_review` attesta l'ispezione umana dell'intera contact sheet e, a dimensione leggibile, almeno copertina, card più densa, chiusura se presente e tutte le slide elencate in `flagged_slide_ids`. `human_sample_slide_ids` deve contenere questi ID senza duplicati. Con `finalize_delivery.py`, lasciare `render_evidence_sha256: "auto"`: dopo `rendering -> qa` il wrapper crea una copia privata e immutata negli altri campi, sostituendo soltanto questo valore con il digest durevole dell'oggetto `render-result`. Se si usa direttamente `advance_workflow.py`, copiare invece quel digest dall'ultima ricevuta. In `artifacts` ripetere l'insieme completo e i digest correnti del risultato di export; l'esempio mostra il solo caso `expected_outputs: ["pdf"]`.
 
 ## Ricevute durevoli
 

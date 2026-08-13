@@ -2,7 +2,9 @@
 
 Leggere questa reference soltanto quando l'utente chiede come usare l'editor o quando occorre diagnosticare un controllo dell'interfaccia. Il percorso normale di revisione è descritto in [visual-review.md](visual-review.md).
 
-L'editor consente di modificare copertina, titoli, corpi e chiusura; spostare o eliminare le sole slide interne; aggiungere commenti a una selezione, a una slide o all'intera sequenza; annullare l'ultima modifica locale; scegliere il sistema visivo e la modalità globale del logo.
+L'editor consente di modificare copertina, titoli, corpi e chiusura; spostare o eliminare le sole slide interne; aggiungere commenti a una selezione, a una slide o all'intera sequenza; annullare l'ultima modifica locale; scegliere la modalità globale del logo e se la copertina sarà tipografica o con visuale.
+
+Mostra inizialmente soltanto il sistema visivo consigliato. `Confronta un'alternativa` aggiunge una seconda direzione standard; `Mostra Geometrico` espone l'opzione avanzata. La scelta `Con visuale` registra l'intenzione ma non genera l'immagine né blocca l'approvazione dei testi. Dopo l'approvazione, la copertina visuale usa titolo a sinistra e immagine verticale a destra, senza sovrapposizione o trasparenza.
 
 Su una locuzione selezionata applica o rimuove grassetto, corsivo, sottolineatura ed evidenziatore adattivo. Le scorciatoie sono `Cmd/Ctrl+B`, `Cmd/Ctrl+I`, `Cmd/Ctrl+U` e `Cmd/Ctrl+Maiusc+H`. I controlli aggiornano i campi `*_bold`, `*_italic`, `*_underline` e `*_accent`, senza inserire Markdown. Una selezione parziale di una locuzione già formattata può rimuovere il trattamento completo.
 
@@ -12,4 +14,4 @@ Copertina e chiusura non sono eliminabili. La copertina non mostra cornice Edito
 
 Prima della conferma l'editor riepiloga quantità dei trattamenti tipografici, modalità del logo e disponibilità delle varianti chiare e scure. Mostra palette, sintesi dei caratteri e controlli operativi, ma non percorsi o metadati tecnici. Segnala il fallback tipografico soltanto quando un carattere non viene caricato.
 
-La copertina finale appartiene al checkpoint visuale successivo: nella prima approvazione chiarire che potrà usare un'immagine generata, un'immagine fornita o una composizione tipografica.
+La copertina finale appartiene al checkpoint visuale successivo: nella prima approvazione è possibile scegliere un'immagine generata, un'immagine fornita o una composizione tipografica; la produzione dell'asset resta successiva all'approvazione dei testi.

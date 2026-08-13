@@ -190,6 +190,10 @@
     approvalDialogCopy: document.querySelector("#approval-dialog-copy"),
     visualSystemPicker: document.querySelector("#visual-system-picker"),
     visualSystemDescription: document.querySelector("#visual-system-description"),
+    compareVisualSystems: document.querySelector("#compare-visual-systems"),
+    showAdvancedVisualSystem: document.querySelector("#show-advanced-visual-system"),
+    coverChoice: document.querySelector("#cover-choice"),
+    coverChoiceDescription: document.querySelector("#cover-choice-description"),
     validationSummary: document.querySelector("#validation-summary"),
     validationSummaryCopy: document.querySelector("#validation-summary-copy"),
     validationList: document.querySelector("#validation-list"),
@@ -229,6 +233,9 @@
   let pointerDrag = null;
   let selectedVisualSystem = "editorial-frame";
   let logoMode = "auto";
+  let selectedCoverMode = "typographic";
+  let visualAlternativeExpanded = false;
+  let advancedVisualExpanded = false;
   let undoState = null;
   let previewContractRun = 0;
   let validationMode = false;
@@ -492,6 +499,7 @@
         brand_note: typeof source.brand_note === "string" ? source.brand_note : "",
         overall_note: typeof source.overall_note === "string" ? source.overall_note : pending.payload.overall_note || "",
         logo_mode: source.logo_mode || pending.payload.logo_mode || "auto",
+        cover_mode: source.cover_mode || pending.payload.cover_mode || "typographic",
         visual_style_system: source.visual_style_system || pending.payload.visual_style_system || "",
         saved_at: source.saved_at || "",
       },
@@ -537,6 +545,7 @@
         brand_note: brandNote,
         overall_note: overallNote,
         logo_mode: logoMode,
+        cover_mode: selectedCoverMode,
         visual_style_system: selectedVisualSystem,
       },
     });
@@ -560,6 +569,7 @@
         brand_note: typeof saved.brand_note === "string" ? saved.brand_note : "",
         overall_note: typeof saved.overall_note === "string" ? saved.overall_note : "",
         logo_mode: saved.logo_mode || saved.logo_preference || "auto",
+        cover_mode: saved.cover_mode || "typographic",
         visual_style_system: saved.visual_style_system || supportedVisualSystem(safeStorageGet(visualSystemStorageKey())) || "",
       },
     };
@@ -581,6 +591,7 @@
       brand_note: brandNote,
       overall_note: overallNote,
       logo_mode: logoMode,
+      cover_mode: selectedCoverMode,
       visual_style_system: selectedVisualSystem,
       saved_at: new Date().toISOString(),
     };
@@ -865,6 +876,14 @@
     return Array.isArray(options) ? options : [];
   }
 
+  function alternateVisualSystem() {
+    const supplied = model?.visual_proofs?.alternate_style_system;
+    if (supportedVisualSystem(supplied) && supplied !== selectedVisualSystem) return supplied;
+    return selectedVisualSystem === "corporate-modular"
+      ? "editorial-frame"
+      : "corporate-modular";
+  }
+
   function selectedVisualProof() {
     return visualProofOptions().find((option) => option?.id === selectedVisualSystem) || null;
   }
@@ -887,10 +906,16 @@
     return null;
   }
 
-  function resolvedCoverMode() {
+  function modelCoverMode() {
     const mode = model?.cover_mode || model?.visual_proofs?.identity?.cover?.mode;
     if (["generated", "provided", "typographic"].includes(mode)) return mode;
     return model?.cover_visual?.available ? "provided" : "typographic";
+  }
+
+  function resolvedCoverMode() {
+    return ["generated", "provided", "typographic"].includes(selectedCoverMode)
+      ? selectedCoverMode
+      : modelCoverMode();
   }
 
   function visualSystemDefinition(system) {
@@ -925,7 +950,13 @@
     elements.visualSystemPicker.replaceChildren();
     elements.visualSystemPicker.dataset.activeSystem = active.id;
     if (elements.visualSystemDescription) elements.visualSystemDescription.textContent = active.description;
-    for (const system of visualSystems) {
+    const alternate = alternateVisualSystem();
+    const visibleSystems = visualSystems.filter((system) => (
+      system.id === active.id
+      || (visualAlternativeExpanded && system.id === alternate)
+      || (advancedVisualExpanded && system.id === "editorial-halftone")
+    ));
+    for (const system of visibleSystems) {
       const definition = visualSystemDefinition(system);
       const button = create("button", "visual-system-option", definition.label);
       const selected = definition.id === active.id;
@@ -940,16 +971,26 @@
         const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"];
         if (!keys.includes(event.key)) return;
         event.preventDefault();
-        const currentIndex = visualSystems.findIndex((candidate) => candidate.id === definition.id);
+        const currentIndex = visibleSystems.findIndex((candidate) => candidate.id === definition.id);
         const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
         const nextIndex = event.key === "Home"
           ? 0
           : event.key === "End"
-            ? visualSystems.length - 1
-            : (currentIndex + delta + visualSystems.length) % visualSystems.length;
-        setVisualSystem(visualSystems[nextIndex].id, { focus: true });
+            ? visibleSystems.length - 1
+            : (currentIndex + delta + visibleSystems.length) % visibleSystems.length;
+        setVisualSystem(visibleSystems[nextIndex].id, { focus: true });
       });
       elements.visualSystemPicker.append(button);
+    }
+    if (elements.compareVisualSystems) {
+      elements.compareVisualSystems.hidden = visualAlternativeExpanded;
+    }
+    if (elements.showAdvancedVisualSystem) {
+      elements.showAdvancedVisualSystem.hidden = (
+        !visualAlternativeExpanded
+        || advancedVisualExpanded
+        || active.id === "editorial-halftone"
+      );
     }
     const requestedFocus = focusSystem || focusSnapshot?.visualSystem;
     if (requestedFocus) {
@@ -973,6 +1014,47 @@
     renderSlides();
     persistDraft();
     schedulePreviewMeasure();
+  }
+
+  function renderCoverChoice() {
+    if (!elements.coverChoice) return;
+    const visualSelected = resolvedCoverMode() !== "typographic";
+    for (const button of elements.coverChoice.querySelectorAll("[data-cover-choice]")) {
+      const selected = (button.dataset.coverChoice === "visual") === visualSelected;
+      button.setAttribute("aria-checked", String(selected));
+      button.tabIndex = selected ? 0 : -1;
+      button.classList.toggle("is-selected", selected);
+    }
+    const available = model?.cover_visual?.available === true;
+    if (elements.coverChoiceDescription) {
+      elements.coverChoiceDescription.textContent = visualSelected
+        ? available
+          ? "Titolo a sinistra, immagine verticale a destra. Nessuna sovrapposizione."
+          : "Titolo a sinistra; il visuale verticale verrà creato dopo l’approvazione dei testi."
+        : "Copertina tipografica a tutta larghezza. Potrai aggiungere un visuale anche dopo l’approvazione dei testi.";
+    }
+  }
+
+  function setCoverChoice(choice, { focus = false } = {}) {
+    if (!["typographic", "visual"].includes(choice)) return;
+    const currentMode = modelCoverMode();
+    const next = choice === "typographic"
+      ? "typographic"
+      : ["generated", "provided"].includes(currentMode)
+        ? currentMode
+        : model?.cover_visual?.available === true
+          ? "provided"
+          : "generated";
+    if (next === selectedCoverMode) {
+      if (focus) elements.coverChoice?.querySelector(`[data-cover-choice="${choice}"]`)?.focus();
+      return;
+    }
+    recordUndo("tipo di copertina");
+    selectedCoverMode = next;
+    renderCoverChoice();
+    renderSlides();
+    persistDraft();
+    if (focus) elements.coverChoice?.querySelector(`[data-cover-choice="${choice}"]`)?.focus({ preventScroll: true });
   }
 
   function loadViewState() {
@@ -1000,6 +1082,7 @@
       if (!before || before.title !== slide.title || before.summary !== slide.summary || JSON.stringify(normalizedSlides([before])) !== JSON.stringify(normalizedSlides([slide]))) count += 1;
     }
     if (logoMode !== initialLogoMode()) count += 1;
+    if (selectedCoverMode !== modelCoverMode()) count += 1;
     if (selectedVisualSystem !== modelVisualSystem()) count += 1;
     count += selectionComments.length;
     count += Object.values(slideNotes).filter((value) => typeof value === "string" && value.trim()).length;
@@ -1086,6 +1169,9 @@
       elements.overallNote,
       ...elements.logoPreference?.querySelectorAll("button") || [],
       ...elements.visualSystemPicker?.querySelectorAll("button") || [],
+      ...elements.coverChoice?.querySelectorAll("button") || [],
+      elements.compareVisualSystems,
+      elements.showAdvancedVisualSystem,
     ]) {
       if (node) node.disabled = false;
     }
@@ -1103,6 +1189,7 @@
       brand_note: brandNote,
       overall_note: overallNote,
       logo_mode: logoMode,
+      cover_mode: selectedCoverMode,
       visual_style_system: selectedVisualSystem,
       awaiting_feedback_id: awaitingFeedbackId,
       pending_submission: pendingSubmission,
@@ -1167,6 +1254,7 @@
       brand_note: "",
       overall_note: "",
       logo_mode: initialLogoMode(),
+      cover_mode: modelCoverMode(),
       visual_style_system: modelVisualSystem(),
       awaiting_feedback_id: null,
       pending_submission: null,
@@ -1186,6 +1274,7 @@
     brandNote = "";
     overallNote = "";
     logoMode = initialLogoMode();
+    selectedCoverMode = modelCoverMode();
     undoState = null;
     awaitingFeedbackId = null;
     pendingSubmission = null;
@@ -1252,6 +1341,9 @@
       overallNote = typeof saved.overall_note === "string" ? saved.overall_note : "";
       const savedLogoMode = saved.logo_mode || saved.logo_preference;
       logoMode = savedLogoMode === "hidden" ? "hidden" : initialLogoMode();
+      if (["generated", "provided", "typographic"].includes(saved.cover_mode)) {
+        selectedCoverMode = saved.cover_mode;
+      }
     } catch (_error) {
       safeStorageRemove(storageKey);
     }
@@ -2259,10 +2351,22 @@
       preview.classList.add(`visual-system-${selectedVisualSystem}`);
       preview.classList.toggle("has-real-italic", hasRealItalicFont());
       const coverVisual = selectedVisualProof()?.cover_visual || model.cover_visual;
-      if (slide.kind === "cover" && coverVisual?.available && coverVisual.endpoint) {
-        preview.classList.add("has-cover-image");
-        preview.style.setProperty("--preview-image", `url("${api(coverVisual.endpoint).replace(/"/g, "%22")}")`);
-        preview.style.setProperty("--preview-image-position", coverVisual.position || "50% 50%");
+      let coverMedia = null;
+      if (slide.kind === "cover" && resolvedCoverMode() !== "typographic") {
+        preview.classList.add("cover-split");
+        if (coverVisual?.available && coverVisual.endpoint) {
+          preview.classList.add("has-cover-image");
+          coverMedia = document.createElement("img");
+          coverMedia.className = "preview-cover-media";
+          coverMedia.src = api(coverVisual.endpoint);
+          coverMedia.alt = "";
+          coverMedia.setAttribute("aria-hidden", "true");
+          coverMedia.style.objectPosition = coverVisual.position || "50% 50%";
+        } else {
+          preview.classList.add("cover-visual-planned");
+          coverMedia = create("div", "preview-cover-placeholder", "Visuale verticale dopo l’approvazione dei testi");
+          coverMedia.setAttribute("aria-hidden", "true");
+        }
       }
       const previewCopy = create("div", "preview-copy");
       const previewTitle = create("h3", "preview-title");
@@ -2303,6 +2407,7 @@
       if (website) previewBrandNode.append(create("span", "preview-website", website));
       previewBrandNode.hidden = logoMode === "hidden" ? !signature && !website : !hasLogo && !signature && !website;
       if (slide.kind !== "cover") preview.append(constellation);
+      if (coverMedia) preview.append(coverMedia);
       preview.append(pageNumber, previewCopy, previewBrandNode);
       const form = create("div", "slide-form");
       const toolbar = create("div", "slide-toolbar");
@@ -2346,15 +2451,18 @@
         const visualApproved = ["prova_visuale_approvata", "rendering", "qa", "consegnato"].includes(model.workflow_state);
         const delivered = model.workflow_state === "consegnato";
         const coverMode = resolvedCoverMode();
+        const coverAvailable = model?.cover_visual?.available === true;
         const proofReady = copyApproved || visualApproved;
         const coverMessage = coverMode === "generated"
-          ? (proofReady
-                ? "Prova visiva · immagine generata"
-              : "Immagine generata prevista dopo l’approvazione dei testi.")
+          ? (coverAvailable
+              ? "Prova visiva · immagine generata"
+              : proofReady
+                ? "Visuale richiesto · in attesa di generazione"
+                : "Visuale verticale previsto dopo l’approvazione dei testi.")
           : coverMode === "provided"
-            ? (proofReady
+            ? (coverAvailable
                 ? "Prova visiva · immagine fornita"
-                : "Immagine fornita prevista dopo l’approvazione dei testi.")
+                : "Visuale fornito non ancora disponibile.")
             : (proofReady
                 ? "Prova visiva · copertina tipografica"
                 : "Copertina tipografica prevista dopo l’approvazione dei testi.");
@@ -2489,6 +2597,7 @@
       approval_checkpoint: model?.approval_checkpoint || "",
       visual_style_system: selectedVisualSystem,
       logo_mode: logoMode,
+      cover_mode: resolvedCoverMode(),
       slides: normalizedSlides(draftSlides),
       format: clone(model?.format || {}),
       typography: clone(typography()),
@@ -2653,6 +2762,7 @@
     selectedVisualSystem = resolveVisualSystem();
     loadViewState();
     renderVisualSystemPicker();
+    renderCoverChoice();
     currentSlideId = currentSlideId && draftSlides.some((slide) => slide.id === currentSlideId) ? currentSlideId : draftSlides[0]?.id || null;
     renderBrand();
     renderSlides();
@@ -2760,61 +2870,32 @@
       };
       const index = draftSlides.indexOf(slide);
       const label = displayLabel(slide, index);
-      if (warning.schema) issues.push({ key: `schema-${slide.id}`, message: `${label}: ${warning.schema}`, slideId: slide.id, targetId: `field-${slide.id}-summary` });
       if (warning.overflow) issues.push({ key: `overflow-${slide.id}`, message: `${label}: ${warning.overflow}`, slideId: slide.id, targetId: `field-${slide.id}-summary` });
-      for (const [warningIndex, emphasis] of (warning.emphasis || []).entries()) {
-        issues.push({ key: `emphasis-${slide.id}-${warningIndex}`, message: `${label}: ${emphasis.message}`, slideId: slide.id, targetId: `field-${slide.id}-${emphasis.field || "summary"}` });
-      }
     }
-    const cover = draftSlides.find((slide) => slide.kind === "cover");
-    if (cover?.summary.trim() && !hasRealItalicFont()) issues.push({
-      key: "cover-real-italic",
-      message: "Copertina: il sottotitolo richiede una vera variante corsiva. L’anteprima non simula il corsivo.",
-      slideId: cover.id,
-      targetId: `field-${cover.id}-summary`,
-    });
     const requiresFreshVisualProof = model?.approval_checkpoint === "visual_proof"
       && model?.proof_approved !== true
       && !productionRender;
     if (includeProofInteraction && requiresFreshVisualProof) {
+      if (
+        selectedCoverMode !== "typographic"
+        && model?.cover_visual?.available !== true
+      ) issues.push({
+        key: "cover-visual-missing",
+        message: "La copertina con visuale richiede l’immagine verticale prima di approvare la prova.",
+        slideId: "cover",
+        targetId: "cover-choice",
+      });
       const draftChanged = JSON.stringify(normalizedSlides(draftSlides)) !== JSON.stringify(normalizedSlides(baselineSlides));
-      if (draftChanged || selectedVisualSystem !== modelVisualSystem() || logoMode !== initialLogoMode()) issues.push({
+      if (
+        draftChanged
+        || selectedVisualSystem !== modelVisualSystem()
+        || logoMode !== initialLogoMode()
+        || selectedCoverMode !== modelCoverMode()
+      ) issues.push({
         key: "proof-draft-changed",
         message: "Invia prima le correzioni grafiche o testuali, poi riapri e visualizza la nuova prova prima di approvarla.",
         targetId: "visual-system-picker",
       });
-      const missingProofIds = requiredProofSlideIds().filter(
-        (slideId) => !viewedSlideIds.has(slideId),
-      );
-      for (const slideId of missingProofIds) {
-        const slide = draftSlides.find((candidate) => candidate.id === slideId);
-        issues.push({
-          key: `proof-unseen-${slideId}`,
-          message: `${displayLabel(slide || { id: slideId, kind: "item" }, draftSlides.indexOf(slide))}: visualizza la slide campione prima di approvare la prova.`,
-          slideId,
-          targetId: `field-${slideId}-summary`,
-        });
-      }
-      const expectedWidth = model?.proof?.preview_width;
-      const expectedHeight = model?.format?.preview_height;
-      for (const slideId of requiredProofSlideIds()) {
-        const preview = elements.slides?.querySelector(
-          `[data-slide-id="${selectorValue(slideId)}"] .slide-preview`,
-        );
-        const bounds = preview?.getBoundingClientRect();
-        if (
-          !bounds
-          || Math.abs(bounds.width - expectedWidth) > 0.5
-          || Math.abs(bounds.height - expectedHeight) > 0.5
-        ) {
-          issues.push({
-            key: `proof-size-${slideId}`,
-            message: "Allarga la finestra: la prova visuale deve essere vista realmente a 480×600 px.",
-            slideId,
-            targetId: `field-${slideId}-summary`,
-          });
-        }
-      }
       if (!browserProofDescriptor()) issues.push({
         key: "proof-browser",
         message: "Apri la prova in un browser Chromium con versione verificabile prima di approvarla.",
@@ -2826,10 +2907,51 @@
         targetId: "visual-system-picker",
       });
     }
-    issues.push(...collectPaletteContrastIssues());
     const unique = new Map();
     for (const issue of issues) if (!unique.has(issue.key)) unique.set(issue.key, issue);
     return [...unique.values()];
+  }
+
+  function collectApprovalAdvisories() {
+    const advisories = [];
+    for (const slide of draftSlides) {
+      const warning = fitWarnings.get(slide.id) || {
+        schema: schemaWarning(slide),
+        overflow: "",
+        emphasis: ["title", "summary"].flatMap((field) => emphasisWarningsFor(slide, field).map((entry) => ({ field, ...entry }))),
+      };
+      const index = draftSlides.indexOf(slide);
+      const label = displayLabel(slide, index);
+      if (warning.schema) advisories.push({ key: `schema-${slide.id}`, message: `${label}: ${warning.schema}` });
+      for (const [warningIndex, emphasis] of (warning.emphasis || []).entries()) {
+        advisories.push({ key: `emphasis-${slide.id}-${warningIndex}`, message: `${label}: ${emphasis.message}` });
+      }
+    }
+    const cover = draftSlides.find((slide) => slide.kind === "cover");
+    if (cover?.summary.trim() && !hasRealItalicFont()) advisories.push({
+      key: "cover-real-italic",
+      message: "Copertina: il sottotitolo richiede una vera variante corsiva. L’anteprima non simula il corsivo.",
+    });
+    if (model?.approval_checkpoint === "visual_proof" && model?.proof_approved !== true && !productionRender) {
+      for (const slideId of requiredProofSlideIds().filter((id) => !viewedSlideIds.has(id))) {
+        const slide = draftSlides.find((candidate) => candidate.id === slideId);
+        advisories.push({
+          key: `proof-unseen-${slideId}`,
+          message: `${displayLabel(slide || { id: slideId, kind: "item" }, draftSlides.indexOf(slide))}: slide campione non ancora vista.`,
+        });
+      }
+      const expectedWidth = model?.proof?.preview_width;
+      const expectedHeight = model?.format?.preview_height;
+      for (const slideId of requiredProofSlideIds()) {
+        const preview = elements.slides?.querySelector(`[data-slide-id="${selectorValue(slideId)}"] .slide-preview`);
+        const bounds = preview?.getBoundingClientRect();
+        if (!bounds || Math.abs(bounds.width - expectedWidth) > 0.5 || Math.abs(bounds.height - expectedHeight) > 0.5) {
+          advisories.push({ key: `proof-size-${slideId}`, message: "La finestra sta mostrando la prova in scala ridotta rispetto a 480×600 px." });
+        }
+      }
+    }
+    advisories.push(...collectPaletteContrastIssues());
+    return advisories;
   }
 
   function validationTarget(issue) {
@@ -3089,6 +3211,7 @@
       overall_note: overallNote.trim(),
       visual_style_system: selectedVisualSystem,
       logo_mode: logoMode,
+      cover_mode: selectedCoverMode,
     };
     if (action === "approve") {
       payload.render_fingerprint = model.render_fingerprint || "";
@@ -3322,6 +3445,7 @@
       brandNote,
       overallNote,
       logoMode,
+      coverMode: selectedCoverMode,
       visualSystem: selectedVisualSystem,
     };
   }
@@ -3343,6 +3467,7 @@
     brandNote = previous.brandNote;
     overallNote = previous.overallNote;
     logoMode = previous.logoMode;
+    selectedCoverMode = previous.coverMode;
     selectedVisualSystem = previous.visualSystem;
     safeStorageSet(visualSystemStorageKey(), selectedVisualSystem);
     renderAll();
@@ -3388,6 +3513,32 @@
         : (currentIndex + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + values.length) % values.length;
     setLogoMode(values[nextIndex], { focus: true });
   });
+  elements.compareVisualSystems?.addEventListener("click", () => {
+    visualAlternativeExpanded = true;
+    renderVisualSystemPicker({ focusSystem: alternateVisualSystem() });
+  });
+  elements.showAdvancedVisualSystem?.addEventListener("click", () => {
+    advancedVisualExpanded = true;
+    renderVisualSystemPicker({ focusSystem: "editorial-halftone" });
+  });
+  elements.coverChoice?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-cover-choice]");
+    if (button) setCoverChoice(button.dataset.coverChoice);
+  });
+  elements.coverChoice?.addEventListener("keydown", (event) => {
+    const button = event.target.closest("[data-cover-choice]");
+    const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"];
+    if (!button || !keys.includes(event.key)) return;
+    event.preventDefault();
+    const values = ["typographic", "visual"];
+    const currentIndex = values.indexOf(button.dataset.coverChoice);
+    const nextIndex = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? values.length - 1
+        : (currentIndex + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + values.length) % values.length;
+    setCoverChoice(values[nextIndex], { focus: true });
+  });
   elements.styleExportButton?.addEventListener("click", exportStyleProfile);
   elements.undoButton?.addEventListener("click", undoLastChange);
   elements.resetButton?.addEventListener("click", resetDraft);
@@ -3399,10 +3550,12 @@
     }
     if (elements.approvalSummary) {
       const warnings = [...fitWarnings.values()].filter((warning) => warning.schema || warning.overflow).length;
+      const advisoryCount = collectApprovalAdvisories().length;
       const metrics = approvalMetrics();
       const logoSummary = logoMode === "hidden" ? "Logo nascosto" : `Logo disponibile su ${metrics.logoSlides}/${metrics.logoTotal} slide`;
       const densitySummary = warnings === 0 ? "Nessun avviso di densità." : `${warnings} ${warnings === 1 ? "avviso" : "avvisi"} di densità da considerare.`;
-      elements.approvalSummary.textContent = `Hai visualizzato ${viewedSlideIds.size} di ${draftSlides.length} slide. ${logoSummary}. Enfasi applicate: ${metrics.bold} ${metrics.bold === 1 ? "grassetto" : "grassetti"}, ${metrics.italic} ${metrics.italic === 1 ? "corsivo" : "corsivi"}, ${metrics.underline} ${metrics.underline === 1 ? "sottolineatura" : "sottolineature"}, ${metrics.accent} ${metrics.accent === 1 ? "evidenziazione" : "evidenziazioni"}. ${densitySummary}`;
+      const advisorySummary = advisoryCount === 0 ? "Nessun altro avviso." : `${advisoryCount} ${advisoryCount === 1 ? "avviso informativo" : "avvisi informativi"}.`;
+      elements.approvalSummary.textContent = `Hai visualizzato ${viewedSlideIds.size} di ${draftSlides.length} slide. ${logoSummary}. Enfasi applicate: ${metrics.bold} ${metrics.bold === 1 ? "grassetto" : "grassetti"}, ${metrics.italic} ${metrics.italic === 1 ? "corsivo" : "corsivi"}, ${metrics.underline} ${metrics.underline === 1 ? "sottolineatura" : "sottolineature"}, ${metrics.accent} ${metrics.accent === 1 ? "evidenziazione" : "evidenziazioni"}. ${densitySummary} ${advisorySummary} Gli avvisi editoriali e le slide non ancora viste non bloccano la tua approvazione.`;
     }
     elements.approvalDialog?.showModal();
   });

@@ -419,6 +419,21 @@ class ManifestModelTest(unittest.TestCase):
             self.assertNotEqual(after["render_fingerprint"], before)
             self.assertFalse(after["proof_approved"])
 
+    def test_dormant_cover_asset_does_not_change_a_typographic_fingerprint(self) -> None:
+        cover = self.workdir / "cover.png"
+        cover.write_bytes(b"cover-a")
+        manifest = base_manifest()
+        manifest.update(cover_image="cover.png", cover_mode="typographic")
+        initial = self.model(manifest)["render_fingerprint"]
+
+        cover.write_bytes(b"cover-b")
+        self.assertEqual(self.model(manifest)["render_fingerprint"], initial)
+        cover.unlink()
+        self.assertEqual(self.model(manifest)["render_fingerprint"], initial)
+
+        manifest["cover_mode"] = "provided"
+        self.assertNotEqual(self.model(manifest)["render_fingerprint"], initial)
+
     def test_exposes_a_safe_cover_image_endpoint_without_a_local_path(self) -> None:
         image = self.workdir / "cover.png"
         image.write_bytes(b"png")
@@ -446,7 +461,11 @@ class ManifestModelTest(unittest.TestCase):
         }
         manifest.pop("visual_style_system", None)
         proofs = self.model(manifest)["visual_proofs"]
+        self.assertEqual(proofs["presentation_mode"], "recommended")
         self.assertEqual(proofs["selected_style_system"], "corporate-modular")
+        self.assertEqual(proofs["recommended_style_system"], "corporate-modular")
+        self.assertEqual(proofs["alternate_style_system"], "editorial-frame")
+        self.assertEqual(proofs["advanced_style_systems"], ["editorial-halftone"])
         self.assertEqual(
             [option["id"] for option in proofs["options"]],
             ["editorial-frame", "editorial-halftone", "corporate-modular"],
@@ -458,7 +477,7 @@ class ManifestModelTest(unittest.TestCase):
         self.assertEqual(proofs["identity"]["brand"]["name"], "Studio")
         self.assertEqual(proofs["identity"]["cover"]["mode"], "typographic")
 
-    def test_visual_style_override_is_validated_and_cover_modes_fall_back_safely(self) -> None:
+    def test_visual_style_override_and_missing_cover_intent_are_preserved_safely(self) -> None:
         image = self.workdir / "cover.png"
         image.write_bytes(b"png")
         manifest = base_manifest()
@@ -491,7 +510,8 @@ class ManifestModelTest(unittest.TestCase):
             "generated",
         )
         manifest["workflow_state"] = "testi_approvati"
-        self.assertEqual(self.model(manifest)["cover_mode"], "typographic")
+        self.assertEqual(self.model(manifest)["cover_mode"], "generated")
+        self.assertFalse(self.model(manifest)["cover_visual"]["available"])
 
     def test_accepts_new_visual_system_aliases_without_breaking_canonical_ids(self) -> None:
         manifest = base_manifest()
@@ -657,7 +677,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.9.1")
+        self.assertEqual(model["editor_version"], "2.10.1")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
@@ -1296,6 +1316,34 @@ class ValidateFeedbackTest(unittest.TestCase):
         self.assertEqual(approved["proof_slide_ids"], ["cover", "item-2", "outro"])
         self.assertTrue(approved["style_system_verified"])
         self.assertEqual(approved["proof_browser"]["engine"], "chromium")
+
+    def test_visual_approval_rejects_a_requested_cover_without_an_image(self) -> None:
+        manifest = base_manifest()
+        set_workflow_state(manifest, "testi_approvati")
+        manifest.pop("cover_title_serif", None)
+        manifest["items"][0].pop("summary_serif", None)
+        manifest["cover_mode"] = "generated"
+        path = self.workdir / "missing-cover-proof.json"
+        write_json(path, manifest)
+        model = review_server.manifest_model(path, include_internal=True)
+        slides = self.payload()["slides"]
+        slides[0]["title_serif"] = []
+        slides[1]["summary_serif"] = []
+
+        with self.assertRaisesRegex(ValueError, "richiede un'immagine disponibile"):
+            review_server.validate_feedback(
+                self.payload(
+                    slides,
+                    action="approve",
+                    base_workflow_state=model["workflow_state"],
+                    render_fingerprint=model["render_fingerprint"],
+                    cover_mode="generated",
+                    proof_slide_ids=model["proof"]["required_slide_ids"],
+                    style_system_verified=True,
+                    proof_browser={"engine": "chromium", "major": 140},
+                ),
+                model,
+            )
 
     def test_approval_requires_the_server_issued_workflow_echo(self) -> None:
         slides = self.payload()["slides"]
