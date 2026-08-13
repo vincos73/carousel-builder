@@ -56,8 +56,18 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertIn(
             'model.workflow_state === "testi_approvati" && count > 0', pending
         )
-        self.assertIn("Salva bozza · poi riapprova", pending)
+        self.assertIn("Invia bozza · poi riapprova", pending)
         self.assertIn("elements.mobileSendButton", pending)
+
+    def test_sent_draft_confirms_the_persisted_visual_system(self) -> None:
+        poll = self.source.split("async function pollStatus()", 1)[1].split(
+            "function clearPendingSelection", 1
+        )[0]
+        self.assertIn('const submittedVisualSystem = pendingSubmission?.payload?.visual_style_system', poll)
+        self.assertIn('submittedVisualSystem === modelVisualSystem()', poll)
+        self.assertIn('Bozza inviata e applicata. Sistema visivo:', poll)
+        self.assertIn('Revisione ${model.revision}', poll)
+        self.assertIn("Invia bozza per applicare le modifiche", self.html)
 
     def test_fast_approval_is_strict_and_sends_one_combined_scope(self) -> None:
         fast = self.source.split("function fastApprovalEligible()", 1)[1].split(

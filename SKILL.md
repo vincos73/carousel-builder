@@ -5,7 +5,7 @@ description: Trasforma URL, articoli, newsletter, note e testi in caroselli edit
 
 # Carousel Builder
 
-Versione: **2.11.1**
+Versione: **2.11.2**
 
 Separare fonte, identità, testi, prova visuale, produzione e QA. Usare il consenso combinato solo per una preview tipografica già definitiva che supera i gate di [visual-review.md](references/visual-review.md); altrimenti mantenere due approvazioni. Conservare sempre due ricevute durevoli prima del rendering. La richiesta iniziale autorizza solo la proposta editoriale.
 

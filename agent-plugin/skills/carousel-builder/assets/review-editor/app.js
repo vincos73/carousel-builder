@@ -1139,10 +1139,10 @@
     }
     const visualProofHasChanges = model.workflow_state === "testi_approvati" && count > 0;
     const sendLabel = waiting
-      ? "Bozza salvata"
+      ? "Bozza inviata"
       : visualProofHasChanges
-        ? "Salva bozza · poi riapprova"
-        : "Salva bozza";
+        ? "Invia bozza · poi riapprova"
+        : "Invia bozza";
     if (elements.sendButton) elements.sendButton.textContent = sendLabel;
     if (elements.mobileSendButton) elements.mobileSendButton.textContent = sendLabel;
     if (elements.workflowBadge) {
@@ -3307,6 +3307,8 @@
       const baseChange = statusBaseChange(status);
       if (awaitingFeedbackId && status.applied_feedback_id === awaitingFeedbackId) {
         const appliedFeedbackId = awaitingFeedbackId;
+        const submittedAction = pendingSubmission?.action || "feedback";
+        const submittedVisualSystem = pendingSubmission?.payload?.visual_style_system || "";
         awaitingFeedbackId = null;
         pendingSubmission = null;
         markRecoveryApplied(appliedFeedbackId);
@@ -3315,7 +3317,15 @@
         activeValidationIssues = [];
         removeDraftPreservingRecovery();
         await loadSession();
-        showToast("Le modifiche dirette sono state applicate. Controlla la nuova revisione.");
+        if (submittedAction === "feedback" && submittedVisualSystem === modelVisualSystem()) {
+          const definition = visualSystemDefinition(
+            visualSystems.find((system) => system.id === submittedVisualSystem) || visualSystems[0],
+          );
+          const styleName = definition.label.replace(/^[A-Z] · /, "");
+          showToast(`Bozza inviata e applicata. Sistema visivo: ${styleName}. Revisione ${model.revision}.`);
+        } else {
+          showToast("Le modifiche dirette sono state applicate. Controlla la nuova revisione.");
+        }
         return;
       }
       if (foreignFeedbackId && status.applied_feedback_id === foreignFeedbackId) {
