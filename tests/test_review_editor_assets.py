@@ -154,17 +154,24 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         self.assertIn('response.status === 422 && rejectedAction === "approve"', self.source)
         self.assertIn("await loadSession()", self.source)
 
-    def test_visual_approval_binds_viewed_proof_sample_and_browser(self) -> None:
+    def test_visual_approval_keeps_editorial_advisories_non_blocking(self) -> None:
         submit = self.source.split("async function submit(action)", 1)[1].split("function schedulePoll", 1)[0]
-        gate = self.source.split("function collectApprovalIssues(", 1)[1].split("function validationTarget", 1)[0]
+        gate = self.source.split("function collectApprovalIssues(", 1)[1].split("function collectApprovalAdvisories", 1)[0]
         snapshot = self.source.split("function canonicalContentSnapshot()", 1)[1].split("function getRenderContract", 1)[0]
-        self.assertIn("requiredProofSlideIds()", gate)
-        self.assertIn("viewedSlideIds.has(slideId)", gate)
+        advisories = self.source.split("function collectApprovalAdvisories()", 1)[1].split("function validationTarget", 1)[0]
+        self.assertIn("requiredProofSlideIds()", advisories)
+        self.assertNotIn("viewedSlideIds.has(slideId)", gate)
         self.assertIn("model?.proof_approved !== true", gate)
         self.assertIn("!productionRender", gate)
         self.assertIn('model?.proof?.preview_width !== 480', gate)
-        self.assertIn("Math.abs(bounds.width - expectedWidth) > 0.5", gate)
-        self.assertIn("Math.abs(bounds.height - expectedHeight) > 0.5", gate)
+        self.assertNotIn("proof-unseen-", gate)
+        self.assertNotIn("proof-size-", gate)
+        self.assertIn("proof-unseen-", advisories)
+        self.assertIn("proof-size-", advisories)
+        self.assertNotIn("warning.schema", gate)
+        self.assertNotIn("warning.emphasis", gate)
+        self.assertNotIn("collectPaletteContrastIssues()", gate)
+        self.assertIn("collectPaletteContrastIssues()", advisories)
         self.assertIn("payload.proof_slide_ids = requiredProofSlideIds()", submit)
         self.assertIn("payload.style_system_verified = true", submit)
         self.assertIn("payload.proof_browser = browserProofDescriptor()", submit)
@@ -175,6 +182,7 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         self.assertIn('engine, major', self.source)
         self.assertNotIn('["firefox",', self.source)
         self.assertNotIn('["webkit",', self.source)
+        self.assertIn("Gli avvisi editoriali e le slide non ancora viste non bloccano", self.source)
 
     def test_slide_is_seen_only_after_half_of_the_preview_is_observed(self) -> None:
         jump = self.source.split("function jumpToSlide(slideId)", 1)[1].split(
@@ -274,13 +282,16 @@ assert.equal(previewReadyForApproval({ previewReady: "false" }), false);
         self.assertIn("awaitingFeedbackId = serverFeedbackId", self.source)
         self.assertNotIn("setInterval(pollStatus", self.source)
 
-    def test_approval_uses_one_blocking_gate_with_inline_focusable_errors(self) -> None:
+    def test_approval_uses_one_technical_gate_with_editorial_advisories(self) -> None:
         self.assertIn("function runApprovalGate", self.source)
         self.assertGreaterEqual(self.source.count("runApprovalGate()"), 2)
         self.assertIn("collectPaletteContrastIssues", self.source)
-        self.assertIn("warning.schema", self.source)
+        gate = self.source.split("function collectApprovalIssues(", 1)[1].split("function collectApprovalAdvisories", 1)[0]
+        advisories = self.source.split("function collectApprovalAdvisories()", 1)[1].split("function validationTarget", 1)[0]
+        self.assertNotIn("warning.schema", gate)
         self.assertIn("warning.overflow", self.source)
-        self.assertIn("warning.emphasis", self.source)
+        self.assertIn("warning.schema", advisories)
+        self.assertIn("warning.emphasis", advisories)
         self.assertIn('target.setAttribute("aria-invalid", "true")', self.source)
         self.assertIn('id="validation-summary"', self.html)
         self.assertIn('id="validation-list"', self.html)

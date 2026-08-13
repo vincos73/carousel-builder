@@ -2870,19 +2870,8 @@
       };
       const index = draftSlides.indexOf(slide);
       const label = displayLabel(slide, index);
-      if (warning.schema) issues.push({ key: `schema-${slide.id}`, message: `${label}: ${warning.schema}`, slideId: slide.id, targetId: `field-${slide.id}-summary` });
       if (warning.overflow) issues.push({ key: `overflow-${slide.id}`, message: `${label}: ${warning.overflow}`, slideId: slide.id, targetId: `field-${slide.id}-summary` });
-      for (const [warningIndex, emphasis] of (warning.emphasis || []).entries()) {
-        issues.push({ key: `emphasis-${slide.id}-${warningIndex}`, message: `${label}: ${emphasis.message}`, slideId: slide.id, targetId: `field-${slide.id}-${emphasis.field || "summary"}` });
-      }
     }
-    const cover = draftSlides.find((slide) => slide.kind === "cover");
-    if (cover?.summary.trim() && !hasRealItalicFont()) issues.push({
-      key: "cover-real-italic",
-      message: "Copertina: il sottotitolo richiede una vera variante corsiva. L’anteprima non simula il corsivo.",
-      slideId: cover.id,
-      targetId: `field-${cover.id}-summary`,
-    });
     const requiresFreshVisualProof = model?.approval_checkpoint === "visual_proof"
       && model?.proof_approved !== true
       && !productionRender;
@@ -2907,38 +2896,6 @@
         message: "Invia prima le correzioni grafiche o testuali, poi riapri e visualizza la nuova prova prima di approvarla.",
         targetId: "visual-system-picker",
       });
-      const missingProofIds = requiredProofSlideIds().filter(
-        (slideId) => !viewedSlideIds.has(slideId),
-      );
-      for (const slideId of missingProofIds) {
-        const slide = draftSlides.find((candidate) => candidate.id === slideId);
-        issues.push({
-          key: `proof-unseen-${slideId}`,
-          message: `${displayLabel(slide || { id: slideId, kind: "item" }, draftSlides.indexOf(slide))}: visualizza la slide campione prima di approvare la prova.`,
-          slideId,
-          targetId: `field-${slideId}-summary`,
-        });
-      }
-      const expectedWidth = model?.proof?.preview_width;
-      const expectedHeight = model?.format?.preview_height;
-      for (const slideId of requiredProofSlideIds()) {
-        const preview = elements.slides?.querySelector(
-          `[data-slide-id="${selectorValue(slideId)}"] .slide-preview`,
-        );
-        const bounds = preview?.getBoundingClientRect();
-        if (
-          !bounds
-          || Math.abs(bounds.width - expectedWidth) > 0.5
-          || Math.abs(bounds.height - expectedHeight) > 0.5
-        ) {
-          issues.push({
-            key: `proof-size-${slideId}`,
-            message: "Allarga la finestra: la prova visuale deve essere vista realmente a 480×600 px.",
-            slideId,
-            targetId: `field-${slideId}-summary`,
-          });
-        }
-      }
       if (!browserProofDescriptor()) issues.push({
         key: "proof-browser",
         message: "Apri la prova in un browser Chromium con versione verificabile prima di approvarla.",
@@ -2950,10 +2907,51 @@
         targetId: "visual-system-picker",
       });
     }
-    issues.push(...collectPaletteContrastIssues());
     const unique = new Map();
     for (const issue of issues) if (!unique.has(issue.key)) unique.set(issue.key, issue);
     return [...unique.values()];
+  }
+
+  function collectApprovalAdvisories() {
+    const advisories = [];
+    for (const slide of draftSlides) {
+      const warning = fitWarnings.get(slide.id) || {
+        schema: schemaWarning(slide),
+        overflow: "",
+        emphasis: ["title", "summary"].flatMap((field) => emphasisWarningsFor(slide, field).map((entry) => ({ field, ...entry }))),
+      };
+      const index = draftSlides.indexOf(slide);
+      const label = displayLabel(slide, index);
+      if (warning.schema) advisories.push({ key: `schema-${slide.id}`, message: `${label}: ${warning.schema}` });
+      for (const [warningIndex, emphasis] of (warning.emphasis || []).entries()) {
+        advisories.push({ key: `emphasis-${slide.id}-${warningIndex}`, message: `${label}: ${emphasis.message}` });
+      }
+    }
+    const cover = draftSlides.find((slide) => slide.kind === "cover");
+    if (cover?.summary.trim() && !hasRealItalicFont()) advisories.push({
+      key: "cover-real-italic",
+      message: "Copertina: il sottotitolo richiede una vera variante corsiva. L’anteprima non simula il corsivo.",
+    });
+    if (model?.approval_checkpoint === "visual_proof" && model?.proof_approved !== true && !productionRender) {
+      for (const slideId of requiredProofSlideIds().filter((id) => !viewedSlideIds.has(id))) {
+        const slide = draftSlides.find((candidate) => candidate.id === slideId);
+        advisories.push({
+          key: `proof-unseen-${slideId}`,
+          message: `${displayLabel(slide || { id: slideId, kind: "item" }, draftSlides.indexOf(slide))}: slide campione non ancora vista.`,
+        });
+      }
+      const expectedWidth = model?.proof?.preview_width;
+      const expectedHeight = model?.format?.preview_height;
+      for (const slideId of requiredProofSlideIds()) {
+        const preview = elements.slides?.querySelector(`[data-slide-id="${selectorValue(slideId)}"] .slide-preview`);
+        const bounds = preview?.getBoundingClientRect();
+        if (!bounds || Math.abs(bounds.width - expectedWidth) > 0.5 || Math.abs(bounds.height - expectedHeight) > 0.5) {
+          advisories.push({ key: `proof-size-${slideId}`, message: "La finestra sta mostrando la prova in scala ridotta rispetto a 480×600 px." });
+        }
+      }
+    }
+    advisories.push(...collectPaletteContrastIssues());
+    return advisories;
   }
 
   function validationTarget(issue) {
@@ -3552,10 +3550,12 @@
     }
     if (elements.approvalSummary) {
       const warnings = [...fitWarnings.values()].filter((warning) => warning.schema || warning.overflow).length;
+      const advisoryCount = collectApprovalAdvisories().length;
       const metrics = approvalMetrics();
       const logoSummary = logoMode === "hidden" ? "Logo nascosto" : `Logo disponibile su ${metrics.logoSlides}/${metrics.logoTotal} slide`;
       const densitySummary = warnings === 0 ? "Nessun avviso di densità." : `${warnings} ${warnings === 1 ? "avviso" : "avvisi"} di densità da considerare.`;
-      elements.approvalSummary.textContent = `Hai visualizzato ${viewedSlideIds.size} di ${draftSlides.length} slide. ${logoSummary}. Enfasi applicate: ${metrics.bold} ${metrics.bold === 1 ? "grassetto" : "grassetti"}, ${metrics.italic} ${metrics.italic === 1 ? "corsivo" : "corsivi"}, ${metrics.underline} ${metrics.underline === 1 ? "sottolineatura" : "sottolineature"}, ${metrics.accent} ${metrics.accent === 1 ? "evidenziazione" : "evidenziazioni"}. ${densitySummary}`;
+      const advisorySummary = advisoryCount === 0 ? "Nessun altro avviso." : `${advisoryCount} ${advisoryCount === 1 ? "avviso informativo" : "avvisi informativi"}.`;
+      elements.approvalSummary.textContent = `Hai visualizzato ${viewedSlideIds.size} di ${draftSlides.length} slide. ${logoSummary}. Enfasi applicate: ${metrics.bold} ${metrics.bold === 1 ? "grassetto" : "grassetti"}, ${metrics.italic} ${metrics.italic === 1 ? "corsivo" : "corsivi"}, ${metrics.underline} ${metrics.underline === 1 ? "sottolineatura" : "sottolineature"}, ${metrics.accent} ${metrics.accent === 1 ? "evidenziazione" : "evidenziazioni"}. ${densitySummary} ${advisorySummary} Gli avvisi editoriali e le slide non ancora viste non bloccano la tua approvazione.`;
     }
     elements.approvalDialog?.showModal();
   });

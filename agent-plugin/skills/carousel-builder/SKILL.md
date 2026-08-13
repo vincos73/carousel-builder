@@ -5,7 +5,7 @@ description: Trasforma URL, articoli, newsletter, note e testi in caroselli edit
 
 # Carousel Builder
 
-Versione: **2.10.0**
+Versione: **2.10.1**
 
 Separare fonte, identità, testi, prova visuale, produzione e QA. Prima del rendering completo richiedere due approvazioni: profilo e testi, poi prova visuale. La richiesta iniziale autorizza solo la proposta editoriale.
 
@@ -61,7 +61,7 @@ Usare `conversation` quando almeno una capacità è realmente assente o fallisce
 2. Applicare la firma del sistema selezionato alle card interne e alla chiusura, mai alla copertina. Convertire le enfasi approvate in campi espliciti e rimuovere gli asterischi.
 3. Preparare il manifest conforme a [carousel-schema.md](references/carousel-schema.md), con produzione, accessibilità e prova canonica: copertina, card interna più densa e chiusura se presente.
 4. Verificare il campione a 480×600 e a risoluzione leggibile secondo [production-qa.md](references/production-qa.md). Controllare font reali, fit, contrasto, crop e firma strutturale.
-5. Mostrare la prova e offrire approvazione, cambio grafico o ritorno ai testi. La cover visuale usa titolo a sinistra e immagine verticale a destra, senza overlay o trasparenza. Nel percorso locale restare in attesa attiva a ogni prova.
+5. Mostrare la prova e offrire approvazione, cambio grafico o ritorno ai testi. La cover visuale usa titolo a sinistra e immagine verticale a destra, senza overlay o trasparenza. Nel percorso locale restare in attesa attiva a ogni prova. Avvisi editoriali, enfasi non applicabili, contrasto consigliato e slide campione non ancora viste restano informativi: l'approvazione esplicita dell'utente li accetta. Restano bloccanti soltanto errori che impediscono una produzione coerente, come rendering non pronto, overflow, struttura minima assente, modifiche non salvate, asset richiesto mancante o sessione non valida.
 6. Elaborare il batch visuale con `process_review.py`: avanza a `prova_visuale_approvata` soltanto quando fingerprint, campione, stile, browser Chromium e produttore superano i gate. Dopo una modifica grafica mostrare una nuova prova; non riaprire i testi se il copy è identico.
 
 ## Fase 3: produzione, QA e consegna
