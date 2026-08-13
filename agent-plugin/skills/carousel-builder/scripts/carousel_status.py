@@ -15,6 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from manifest_contract import CURRENT_SCHEMA_VERSION  # noqa: E402
 from review_core import (  # noqa: E402
     CANONICAL_WORKFLOW_STATES,
+    COMBINED_APPROVAL_SCOPE,
     InterprocessLock,
     LockUnavailableError,
     validate_workflow_receipts,
@@ -31,11 +32,19 @@ from review_server import (  # noqa: E402
 
 def _review_is_current(manifest: dict, *, revision: int, stage: str) -> bool:
     review = manifest.get("review")
+    stage_matches = isinstance(review, dict) and (
+        review.get("approval_stage") == stage
+        or (
+            review.get("approval_scope") == COMBINED_APPROVAL_SCOPE
+            and review.get("approval_stage") == "profile_text"
+            and stage in {"profile_text", "visual_proof"}
+        )
+    )
     return bool(
         isinstance(review, dict)
         and review.get("last_action") == "approve"
         and review.get("approval_requested") is True
-        and review.get("approval_stage") == stage
+        and stage_matches
         and review.get("applied_manifest_revision") == revision
         and review.get("comments_pending", 0) == 0
     )

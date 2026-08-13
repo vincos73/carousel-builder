@@ -242,16 +242,9 @@ function manifestFixture() {
     schema_version: "1.4",
     source_type: "article",
     sequence_mode: "narrative",
-    workflow_state: "testi_approvati",
+    workflow_state: "bozza",
     revision: 1,
-    workflow_receipts: [{
-      from: "bozza",
-      to: "testi_approvati",
-      revision: 1,
-      render_fingerprint: "1".repeat(64),
-      evidence_sha256: "7".repeat(64),
-      advanced_at: "2026-08-12T12:00:00+00:00",
-    }],
+    workflow_receipts: [],
     visual_style_system: "editorial-frame",
     production: {
       mode: "renderer",
@@ -372,7 +365,7 @@ test("stopProcess cancella il timer sul termine rapido e forza SIGKILL dopo la d
   assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
 });
 
-test("browser reale: approval, fresh production 480x600, riordino, submit e recovery", { timeout: 90_000 }, async (context) => {
+test("browser reale: consenso combinato, fresh production 480x600, riordino, submit e recovery", { timeout: 90_000 }, async (context) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-browser-smoke-"));
   const manifestPath = path.join(directory, "manifest.json");
   const sessionDirectory = path.join(directory, "session");
@@ -433,38 +426,21 @@ test("browser reale: approval, fresh production 480x600, riordino, submit e reco
   );
   const initialChoices = await evaluate(client, approvalPage, `({
     visualSystems: document.querySelectorAll('.visual-system-option').length,
-    compareHidden: document.querySelector('#compare-visual-systems').hidden,
-    advancedHidden: document.querySelector('#show-advanced-visual-system').hidden,
     coverChoice: document.querySelector('[data-cover-choice][aria-checked="true"]').dataset.coverChoice,
   })`);
   assert.deepEqual(initialChoices, {
-    visualSystems: 1,
-    compareHidden: false,
-    advancedHidden: true,
+    visualSystems: 3,
     coverChoice: "typographic",
   });
-  await evaluate(client, approvalPage, `document.querySelector('#compare-visual-systems').click()`);
-  assert.deepEqual(
-    await evaluate(client, approvalPage, `({
-      visualSystems: document.querySelectorAll('.visual-system-option').length,
-      advancedHidden: document.querySelector('#show-advanced-visual-system').hidden,
-    })`),
-    { visualSystems: 2, advancedHidden: false },
-  );
   await evaluate(client, approvalPage, `document.querySelector('[data-visual-system="corporate-modular"]').click()`);
   assert.deepEqual(
     await evaluate(client, approvalPage, `({
       systems: [...document.querySelectorAll('.visual-system-option')].map((option) => option.dataset.visualSystem),
       selected: document.querySelector('.visual-system-option[aria-checked="true"]').dataset.visualSystem,
     })`),
-    { systems: ["editorial-frame", "corporate-modular"], selected: "corporate-modular" },
+    { systems: ["editorial-frame", "editorial-halftone", "corporate-modular"], selected: "corporate-modular" },
   );
   await evaluate(client, approvalPage, `document.querySelector('[data-visual-system="editorial-frame"]').click()`);
-  await evaluate(client, approvalPage, `document.querySelector('#show-advanced-visual-system').click()`);
-  assert.equal(
-    await evaluate(client, approvalPage, `document.querySelectorAll('.visual-system-option').length`),
-    3,
-  );
   await evaluate(client, approvalPage, `document.querySelector('[data-cover-choice="visual"]').click()`);
   await waitFor(
     client,
@@ -515,8 +491,8 @@ test("browser reale: approval, fresh production 480x600, riordino, submit e reco
   })`);
   assert.deepEqual(retryPreviewState, { ready: "true", error: "", fontAlertHidden: true });
 
-  // Navigation intent alone does not mark the sample as viewed, but unseen
-  // slides are advisory: the user's explicit approval remains available.
+  // Navigation intent alone does not mark the sample as viewed. Approval is
+  // still available, but it remains the editorial-only checkpoint.
   await evaluate(client, approvalPage, `(() => {
     for (const slideId of ['cover', 'item-2', 'outro']) {
       document.querySelector('[data-sequence-slide="' + slideId + '"]').click();
@@ -528,9 +504,12 @@ test("browser reale: approval, fresh production 480x600, riordino, submit e reco
     true,
     "le slide campione non viste non devono bloccare l'approvazione esplicita",
   );
-  assert.match(
-    await evaluate(client, approvalPage, "document.querySelector('#approval-summary').textContent"),
-    /avvisi informativi.*non bloccano la tua approvazione/,
+  assert.deepEqual(
+    await evaluate(client, approvalPage, `({
+      label: document.querySelector('#approve-button').textContent,
+      scope: document.querySelector('#approval-dialog').dataset.approvalScope || "",
+    })`),
+    { label: "Approva", scope: "" },
   );
   await evaluate(client, approvalPage, "document.querySelector('#approval-dialog').close()");
 
@@ -545,11 +524,22 @@ test("browser reale: approval, fresh production 480x600, riordino, submit e reco
       `osservazione reale della proof ${slideId}`,
     );
   }
+  await waitFor(
+    client,
+    approvalPage,
+    "document.querySelector('#approve-button').textContent === 'Approva'",
+    "abilitazione consenso combinato",
+  );
   await evaluate(client, approvalPage, `document.querySelector('#approve-button').click()`);
-  await waitFor(client, approvalPage, "document.querySelector('#approval-dialog').open === true", "dialog approvazione visuale");
+  await waitFor(client, approvalPage, "document.querySelector('#approval-dialog').open === true", "dialog approvazione combinata");
+  assert.equal(
+    await evaluate(client, approvalPage, "document.querySelector('#approval-dialog').dataset.approvalScope"),
+    "profile_text_and_visual",
+  );
   await evaluate(client, approvalPage, `document.querySelector('#confirm-approval').click()`);
   const feedbackPath = path.join(sessionDirectory, "feedback.json");
   const approval = await readJsonWhen(feedbackPath, (value) => value.action === "approve", "Persistenza approvazione");
+  assert.equal(approval.approval_scope, "profile_text_and_visual");
   assert.deepEqual(approval.proof_slide_ids, ["cover", "item-2", "outro"]);
   assert.equal(approval.style_system_verified, true);
   assert.equal(approval.proof_browser.engine, "chromium");

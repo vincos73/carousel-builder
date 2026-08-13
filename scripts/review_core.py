@@ -34,6 +34,7 @@ CANONICAL_WORKFLOW_TRANSITIONS = {
     current: CANONICAL_WORKFLOW_STATES[index + 1]
     for index, current in enumerate(CANONICAL_WORKFLOW_STATES[:-1])
 }
+COMBINED_APPROVAL_SCOPE = "profile_text_and_visual"
 LEGACY_PROFILE_TEXT_WORKFLOW_STATES = frozenset(
     {
         "draft",

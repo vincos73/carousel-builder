@@ -47,7 +47,12 @@ class FastWorkflowTests(unittest.TestCase):
             },
         )
 
-    def _submit_profile_approval(self) -> Path:
+    def _submit_profile_approval(
+        self,
+        *,
+        combined: bool = False,
+        visual_style: str | None = None,
+    ) -> Path:
         model = review_server.manifest_model(
             self.manifest_path, include_internal=True
         )
@@ -67,10 +72,19 @@ class FastWorkflowTests(unittest.TestCase):
             ],
             "comments": [],
             "overall_note": "",
-            "visual_style_system": model["visual_proofs"]["selected_style_system"],
+            "visual_style_system": visual_style or model["visual_proofs"]["selected_style_system"],
             "logo_mode": model["logo_mode"],
             "cover_mode": model["cover_mode"],
         }
+        if combined:
+            payload.update(
+                {
+                    "approval_scope": "profile_text_and_visual",
+                    "proof_slide_ids": model["proof"]["required_slide_ids"],
+                    "style_system_verified": True,
+                    "proof_browser": {"engine": "chromium", "major": 140},
+                }
+            )
         feedback = review_server.validate_feedback(payload, model)
         archive = review_server.feedback_archive_path(self.session_dir, feedback_id)
         write_json(archive, feedback)
@@ -102,6 +116,67 @@ class FastWorkflowTests(unittest.TestCase):
         self.assertEqual(result["advanced"]["to"], "testi_approvati")
         self.assertEqual(manifest["workflow_state"], "testi_approvati")
         self.assertEqual(len(manifest["workflow_receipts"]), 1)
+
+    def test_combined_approval_advances_both_durable_checkpoints(self) -> None:
+        archive = self._submit_profile_approval(combined=True)
+
+        result = process_review.process_review(
+            self.manifest_path,
+            archive,
+            session_dir_input=self.session_dir,
+        )
+
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(result["status"], "advanced")
+        self.assertEqual(
+            [transition["to"] for transition in result["transitions"]],
+            ["testi_approvati", "prova_visuale_approvata"],
+        )
+        self.assertEqual(manifest["workflow_state"], "prova_visuale_approvata")
+        self.assertEqual(len(manifest["workflow_receipts"]), 2)
+        self.assertTrue(manifest["proof"]["approved"])
+        self.assertEqual(
+            manifest["review"]["approval_scope"],
+            "profile_text_and_visual",
+        )
+
+    def test_combined_approval_replays_after_capability_metadata_fix(self) -> None:
+        archive = self._submit_profile_approval(
+            combined=True,
+            visual_style="corporate-modular",
+        )
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        original_fingerprint = review_server.manifest_model(self.manifest_path)[
+            "render_fingerprint"
+        ]
+        manifest["production"]["supported_style_systems"] = ["editorial-frame"]
+        write_json(self.manifest_path, manifest)
+        self.assertEqual(
+            review_server.manifest_model(self.manifest_path)["render_fingerprint"],
+            original_fingerprint,
+        )
+
+        with self.assertRaisesRegex(ValueError, "deve includere"):
+            process_review.process_review(
+                self.manifest_path,
+                archive,
+                session_dir_input=self.session_dir,
+            )
+
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        manifest["production"]["supported_style_systems"].append("corporate-modular")
+        write_json(self.manifest_path, manifest)
+        result = process_review.process_review(
+            self.manifest_path,
+            archive,
+            session_dir_input=self.session_dir,
+        )
+
+        applied = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(result["status"], "advanced")
+        self.assertEqual(applied["visual_style_system"], "corporate-modular")
+        self.assertEqual(applied["workflow_state"], "prova_visuale_approvata")
+        self.assertEqual(len(applied["workflow_receipts"]), 2)
 
     def test_post_approval_cover_attachment_preserves_editorial_receipt(self) -> None:
         archive = self._submit_profile_approval()

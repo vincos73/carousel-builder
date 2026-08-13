@@ -83,6 +83,8 @@ I gate sono cumulativi:
 
 Qualunque modifica a copy, ordine, profilo, sistema, logo, asset o composizione può cambiare revisione o fingerprint e invalidare la proof. `apply_review.py` non avanza mai: una correzione editoriale o una nota non classificabile riapre atomicamente `bozza` e azzera la catena; una modifica esclusivamente a sistema visivo, logo, cover o enfasi tipografica riapre o mantiene `testi_approvati` e conserva soltanto la ricevuta reale `bozza -> testi_approvati`. Una modifica alle sole enfasi non rende stale alt text o trascrizione. Gli asset della cover possono essere collegati dopo l'approvazione dei testi soltanto tramite `attach_cover_asset.py`. Dopo un uso diretto di `apply_review.py` per recovery, rieseguire `carousel_status.py` e usare la revisione corrente restituita, non quella precedente al batch. Ripartire dal checkpoint risultante e non ricostruire le ricevute a mano.
 
+Un batch con `approval_scope: profile_text_and_visual` rappresenta un solo consenso esplicito su testi e preview definitiva. `process_review.py` deve comunque eseguire due transizioni consecutive e aggiungere due ricevute, prima `bozza -> testi_approvati` e poi `testi_approvati -> prova_visuale_approvata`. Non comprimere il ledger e non avanzare automaticamente a `rendering`.
+
 ## Risultato di export
 
 Durante lo stato `rendering`, eseguire l'export con `--result-json` come descritto in [production-qa.md](production-qa.md#invocazione-local-editor). L'esportatore pubblica il JSON nello stesso gruppo coordinato di PDF, directory PNG e contact sheet richiesti. Il risultato usa `result_schema: carousel-builder-export-v1` e lega:

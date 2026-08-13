@@ -906,6 +906,23 @@
     return null;
   }
 
+  const combinedApprovalScope = "profile_text_and_visual";
+
+  function proofSlidesAtCanonicalSize() {
+    const expectedWidth = model?.proof?.preview_width;
+    const expectedHeight = model?.format?.preview_height;
+    if (expectedWidth !== 480 || expectedHeight !== 600) return false;
+    return requiredProofSlideIds().every((slideId) => {
+      const preview = elements.slides?.querySelector(`[data-slide-id="${selectorValue(slideId)}"] .slide-preview`);
+      const bounds = preview?.getBoundingClientRect();
+      return Boolean(
+        bounds
+        && Math.abs(bounds.width - expectedWidth) <= 0.5
+        && Math.abs(bounds.height - expectedHeight) <= 0.5
+      );
+    });
+  }
+
   function modelCoverMode() {
     const mode = model?.cover_mode || model?.visual_proofs?.identity?.cover?.mode;
     if (["generated", "provided", "typographic"].includes(mode)) return mode;
@@ -950,12 +967,7 @@
     elements.visualSystemPicker.replaceChildren();
     elements.visualSystemPicker.dataset.activeSystem = active.id;
     if (elements.visualSystemDescription) elements.visualSystemDescription.textContent = active.description;
-    const alternate = alternateVisualSystem();
-    const visibleSystems = visualSystems.filter((system) => (
-      system.id === active.id
-      || (visualAlternativeExpanded && system.id === alternate)
-      || (advancedVisualExpanded && system.id === "editorial-halftone")
-    ));
+    const visibleSystems = visualSystems;
     for (const system of visibleSystems) {
       const definition = visualSystemDefinition(system);
       const button = create("button", "visual-system-option", definition.label);
@@ -981,16 +993,6 @@
         setVisualSystem(visibleSystems[nextIndex].id, { focus: true });
       });
       elements.visualSystemPicker.append(button);
-    }
-    if (elements.compareVisualSystems) {
-      elements.compareVisualSystems.hidden = visualAlternativeExpanded;
-    }
-    if (elements.showAdvancedVisualSystem) {
-      elements.showAdvancedVisualSystem.hidden = (
-        !visualAlternativeExpanded
-        || advancedVisualExpanded
-        || active.id === "editorial-halftone"
-      );
     }
     const requestedFocus = focusSystem || focusSnapshot?.visualSystem;
     if (requestedFocus) {
@@ -1123,6 +1125,7 @@
       if (elements.sendButton) elements.sendButton.disabled = true;
       if (elements.approveButton) elements.approveButton.disabled = true;
       syncMobileActions();
+      updateApprovalCopy();
       return;
     }
     if (elements.resetButton) elements.resetButton.disabled = count === 0 || waiting;
@@ -1136,10 +1139,10 @@
     }
     const visualProofHasChanges = model.workflow_state === "testi_approvati" && count > 0;
     const sendLabel = waiting
-      ? "Correzioni inviate"
+      ? "Bozza salvata"
       : visualProofHasChanges
-        ? "Salva correzioni · poi riapprova"
-        : "Invia correzioni";
+        ? "Salva bozza · poi riapprova"
+        : "Salva bozza";
     if (elements.sendButton) elements.sendButton.textContent = sendLabel;
     if (elements.mobileSendButton) elements.mobileSendButton.textContent = sendLabel;
     if (elements.workflowBadge) {
@@ -1148,6 +1151,7 @@
     }
     elements.editor?.setAttribute("aria-busy", String(waiting));
     syncMobileActions();
+    updateApprovalCopy();
   }
 
   function lockEditing() {
@@ -2206,6 +2210,7 @@
     persistViewState();
     applyViewedClasses();
     renderSequenceNav();
+    updateApprovalCopy();
   }
 
   function commentsForSlide(slideId) {
@@ -2735,30 +2740,6 @@
   function renderAll() {
     if (elements.revisionLabel) elements.revisionLabel.textContent = `Revisione ${model.revision}`;
     if (elements.builderVersion) elements.builderVersion.textContent = model.editor_version ? `v${model.editor_version}` : "";
-    const visualProofStage = model.workflow_state === "testi_approvati";
-    const visualApproved = ["prova_visuale_approvata", "rendering", "qa", "consegnato"].includes(model.workflow_state);
-    const delivered = model.workflow_state === "consegnato";
-    const approvalLabel = delivered
-      ? "Layout consegnato"
-      : visualApproved
-        ? "Prova visuale approvata"
-        : visualProofStage ? "Approva prova visuale" : "Approva profilo e testi";
-    if (elements.approveButton) elements.approveButton.textContent = approvalLabel;
-    if (elements.mobileApproveButton) elements.mobileApproveButton.textContent = approvalLabel;
-    if (elements.approvalDialogTitle) {
-      elements.approvalDialogTitle.textContent = visualProofStage
-        ? "Confermi la prova visuale?"
-        : "Confermi profilo e testi?";
-    }
-    if (elements.approvalDialogCopy) {
-      const coverMode = resolvedCoverMode();
-      const coverLabel = coverMode === "generated"
-        ? "immagine generata"
-        : coverMode === "provided" ? "immagine fornita" : "copertina tipografica";
-      elements.approvalDialogCopy.textContent = visualProofStage
-        ? `Confermi composizione, ${coverLabel}, gerarchia tipografica, sito e firma. Il rendering completo inizierà soltanto dopo questa approvazione.`
-        : `Le modifiche e i commenti saranno inviati insieme. L’agente eseguirà ancora i controlli editoriali prima di avanzare lo stato. Dopo l’approvazione dei testi verrà mostrata una prova visuale separata con ${coverLabel}.`;
-    }
     selectedVisualSystem = resolveVisualSystem();
     loadViewState();
     renderVisualSystemPicker();
@@ -2952,6 +2933,69 @@
     }
     advisories.push(...collectPaletteContrastIssues());
     return advisories;
+  }
+
+  function fastApprovalEligible() {
+    if (
+      productionRender
+      || model?.workflow_state !== "bozza"
+      || model?.approval_checkpoint !== "profile_text"
+      || modelCoverMode() !== "typographic"
+      || resolvedCoverMode() !== "typographic"
+      || model?.production?.mode !== "renderer"
+      || model?.production?.producer !== renderContractId()
+      || !model?.production?.supported_style_systems?.includes(selectedVisualSystem)
+      || !browserProofDescriptor()
+      || hasPendingLock()
+      || hasStaleBase()
+    ) return false;
+    if (
+      selectionComments.length
+      || Object.values(slideNotes).some((value) => typeof value === "string" && value.trim())
+      || brandNote.trim()
+      || overallNote.trim()
+    ) return false;
+    const required = requiredProofSlideIds();
+    if (!required.length || required.some((slideId) => !viewedSlideIds.has(slideId))) return false;
+    if (!proofSlidesAtCanonicalSize()) return false;
+    return collectApprovalIssues({ includeProofInteraction: false }).length === 0
+      && collectApprovalAdvisories().length === 0;
+  }
+
+  function updateApprovalCopy() {
+    if (!model) return;
+    const visualProofStage = model.workflow_state === "testi_approvati";
+    const visualApproved = ["prova_visuale_approvata", "rendering", "qa", "consegnato"].includes(model.workflow_state);
+    const delivered = model.workflow_state === "consegnato";
+    const fast = fastApprovalEligible();
+    const approvalLabel = delivered
+      ? "Layout consegnato"
+      : visualApproved
+        ? "Prova visuale approvata"
+        : visualProofStage
+          ? "Approva"
+          : "Approva";
+    if (elements.approveButton) elements.approveButton.textContent = approvalLabel;
+    if (elements.mobileApproveButton) elements.mobileApproveButton.textContent = approvalLabel;
+    if (elements.confirmApproval) {
+      elements.confirmApproval.textContent = "Approva";
+    }
+    if (elements.approvalDialogTitle) {
+      elements.approvalDialogTitle.textContent = fast
+        ? "Confermi testi e grafica?"
+        : visualProofStage ? "Confermi la prova visiva?" : "Confermi l’approvazione?";
+    }
+    if (elements.approvalDialogCopy) {
+      const coverMode = resolvedCoverMode();
+      const coverLabel = coverMode === "generated"
+        ? "immagine generata"
+        : coverMode === "provided" ? "immagine fornita" : "copertina tipografica";
+      elements.approvalDialogCopy.textContent = fast
+        ? `Con un solo consenso approvi i testi mostrati e la prova grafica definitiva con ${coverLabel}. Dopo i controlli automatici il carosello passerà direttamente alla produzione.`
+        : visualProofStage
+          ? `Confermi composizione, ${coverLabel}, gerarchia tipografica, sito e firma. Il rendering completo inizierà soltanto dopo questa approvazione.`
+          : `Le modifiche e i commenti saranno inviati insieme. L’agente eseguirà ancora i controlli editoriali prima di avanzare lo stato. Se la preview è già definitiva e senza avvisi, potrai approvare testi e grafica con un solo consenso; altrimenti verrà mostrata una prova visuale separata con ${coverLabel}.`;
+    }
   }
 
   function validationTarget(issue) {
@@ -3201,6 +3245,7 @@
       return;
     }
     if (pendingSubmission) return sendPendingSubmission();
+    const combinedApproval = action === "approve" && fastApprovalEligible();
     const feedbackId = createFeedbackId();
     const payload = {
       feedback_id: feedbackId,
@@ -3217,6 +3262,11 @@
       payload.render_fingerprint = model.render_fingerprint || "";
       payload.base_workflow_state = model.workflow_state || "";
       if (model.approval_checkpoint === "visual_proof") {
+        payload.proof_slide_ids = requiredProofSlideIds();
+        payload.style_system_verified = true;
+        payload.proof_browser = browserProofDescriptor();
+      } else if (combinedApproval) {
+        payload.approval_scope = combinedApprovalScope;
         payload.proof_slide_ids = requiredProofSlideIds();
         payload.style_system_verified = true;
         payload.proof_browser = browserProofDescriptor();
@@ -3548,6 +3598,12 @@
       showToast("L’approvazione è bloccata finché i problemi indicati non sono risolti. Puoi comunque inviare una correzione.", true);
       return;
     }
+    const combinedApproval = fastApprovalEligible();
+    if (elements.approvalDialog) {
+      elements.approvalDialog.dataset.approvalScope = combinedApproval
+        ? combinedApprovalScope
+        : "";
+    }
     if (elements.approvalSummary) {
       const warnings = [...fitWarnings.values()].filter((warning) => warning.schema || warning.overflow).length;
       const advisoryCount = collectApprovalAdvisories().length;
@@ -3555,7 +3611,10 @@
       const logoSummary = logoMode === "hidden" ? "Logo nascosto" : `Logo disponibile su ${metrics.logoSlides}/${metrics.logoTotal} slide`;
       const densitySummary = warnings === 0 ? "Nessun avviso di densità." : `${warnings} ${warnings === 1 ? "avviso" : "avvisi"} di densità da considerare.`;
       const advisorySummary = advisoryCount === 0 ? "Nessun altro avviso." : `${advisoryCount} ${advisoryCount === 1 ? "avviso informativo" : "avvisi informativi"}.`;
-      elements.approvalSummary.textContent = `Hai visualizzato ${viewedSlideIds.size} di ${draftSlides.length} slide. ${logoSummary}. Enfasi applicate: ${metrics.bold} ${metrics.bold === 1 ? "grassetto" : "grassetti"}, ${metrics.italic} ${metrics.italic === 1 ? "corsivo" : "corsivi"}, ${metrics.underline} ${metrics.underline === 1 ? "sottolineatura" : "sottolineature"}, ${metrics.accent} ${metrics.accent === 1 ? "evidenziazione" : "evidenziazioni"}. ${densitySummary} ${advisorySummary} Gli avvisi editoriali e le slide non ancora viste non bloccano la tua approvazione.`;
+      const scopeSummary = combinedApproval
+        ? "Questo unico consenso copre testi e prova grafica definitiva."
+        : "Gli avvisi editoriali e le slide non ancora viste non bloccano questa approvazione.";
+      elements.approvalSummary.textContent = `Hai visualizzato ${viewedSlideIds.size} di ${draftSlides.length} slide. ${logoSummary}. Enfasi applicate: ${metrics.bold} ${metrics.bold === 1 ? "grassetto" : "grassetti"}, ${metrics.italic} ${metrics.italic === 1 ? "corsivo" : "corsivi"}, ${metrics.underline} ${metrics.underline === 1 ? "sottolineatura" : "sottolineature"}, ${metrics.accent} ${metrics.accent === 1 ? "evidenziazione" : "evidenziazioni"}. ${densitySummary} ${advisorySummary} ${scopeSummary}`;
     }
     elements.approvalDialog?.showModal();
   });
@@ -3563,6 +3622,15 @@
     if (!runApprovalGate()) {
       elements.approvalDialog?.close();
       showToast("La bozza è cambiata: risolvi i problemi indicati prima di approvare.", true);
+      return;
+    }
+    if (
+      elements.approvalDialog?.dataset.approvalScope === combinedApprovalScope
+      && !fastApprovalEligible()
+    ) {
+      elements.approvalDialog?.close();
+      showToast("La preview non soddisfa più il percorso rapido: ricontrollala prima di approvare.", true);
+      updateApprovalCopy();
       return;
     }
     elements.approvalDialog?.close();

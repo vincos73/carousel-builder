@@ -21,7 +21,7 @@ python3 <skill>/scripts/review_server.py <manifest.json> --session-dir <session-
 
 Il server deve restare vincolato a `127.0.0.1`, usare un token casuale e servire soltanto gli asset inclusi e il modello editoriale ricavato dal manifest.
 
-`/api/session` espone `render_fingerprint` e stato durevole del feedback sotto lock. Il fingerprint lega snapshot, checkpoint, produzione, bundle e asset. Su `approve`, il browser invia fingerprint e `base_workflow_state`; il server deriva lo stage e calcola il candidato. Il passaggio a `testi_approvati` invalida click stale. `/api/status` espone stato e checkpoint anche senza nuova revisione.
+`/api/session` espone `render_fingerprint` e stato durevole del feedback sotto lock. Il fingerprint lega snapshot, contratto di produzione/output, bundle e asset, ma non il checkpoint né l'elenco dichiarativo dei sistemi supportati. Su `approve`, il browser invia fingerprint e `base_workflow_state`; il server deriva lo stage e calcola il candidato. Lo stato base impedisce comunque a un click stale di attraversare un checkpoint. `/api/status` espone stato e checkpoint anche senza nuova revisione.
 
 Nel checkpoint visuale `proof.required_slide_ids` contiene copertina, card più densa e chiusura. L'editor lega il campione visto a revisione, checkpoint, fingerprint e sistema, poi invia ID, verifica stile e major Chromium. Inviare prima ogni correzione locale. Solo Chromium può firmare il proof esportabile.
 
@@ -47,7 +47,7 @@ Elaborare il batch normale con:
 python3 <skill>/scripts/process_review.py <manifest.json> <feedback-path> --session-dir <session-dir>
 ```
 
-`process_review.py` invoca `apply_review.py` e legge lo status. `approve` avanza solo il checkpoint valido, mai `rendering`; `feedback` non avanza. Accetta l'alias `feedback.json` o un batch della sessione in `feedback-batches/`; alias e batch append-only devono coincidere.
+`process_review.py` invoca `apply_review.py` e legge lo status. `approve` avanza solo il checkpoint valido, mai `rendering`; con `approval_scope: profile_text_and_visual` avanza in sequenza i due checkpoint iniziali e conserva due ricevute. Il server accetta questo scope soltanto da `bozza`, con cover tipografica, renderer canonico, campione completo in Chromium, stile supportato e nessuna nota, commento o warning. `feedback` non avanza. Accetta l'alias `feedback.json` o un batch della sessione in `feedback-batches/`; alias e batch append-only devono coincidere.
 
 `apply_review.py` limita i campi, crea backup e incrementa `revision` quando serve. Copy, ordine, profilo o richieste ambigue riaprono `bozza`; sistema, logo, cover o enfasi mantengono `testi_approvati`. Il visual proof ricontrolla il fingerprint e lega `proof.approved`.
 
@@ -75,7 +75,7 @@ Per l'anteprima dei logo servire soltanto asset raster autorizzati. Quando il ma
 
 Esaminare poi `comments` e `overall_note`. I commenti sono richieste da interpretare, non modifiche già effettuate. Applicare le correzioni necessarie al manifest, ripetere i controlli editoriali e aggiornare la revisione se occorre.
 
-Se `action` è `approve`, trattarla come richiesta esplicita ma lasciare che `process_review.py` esegua l'avanzamento attestato del solo checkpoint corrente. Se restituisce `approval_blocked`, leggere lo status incluso, correggere il gate e mantenere il checkpoint. Non modificare stato o ricevute a mano.
+Se `action` è `approve`, trattarla come richiesta esplicita ma lasciare che `process_review.py` esegua gli avanzamenti attestati coperti dallo scope ricevuto. Se restituisce `approval_blocked`, leggere lo status incluso, correggere il gate e mantenere il checkpoint. Non modificare stato o ricevute a mano e non richiedere un nuovo consenso quando il medesimo batch può essere rielaborato dopo una correzione tecnica non visuale.
 
 ## Ripresa e chiusura
 
