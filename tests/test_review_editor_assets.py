@@ -49,6 +49,16 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertLess(backup_at, post_at)
         self.assertIn("markRecoveryApplied(appliedFeedbackId)", self.source)
 
+    def test_visual_proof_changes_require_save_before_reapproval(self) -> None:
+        pending = self.source.split("function updateChangeSummary()", 1)[1].split(
+            "function lockEditing()", 1
+        )[0]
+        self.assertIn(
+            'model.workflow_state === "testi_approvati" && count > 0', pending
+        )
+        self.assertIn("Salva correzioni · poi riapprova", pending)
+        self.assertIn("elements.mobileSendButton", pending)
+
     def test_stale_pending_is_recovered_and_never_retried_against_a_new_base(self) -> None:
         hydrate = self.source.split("function hydrateDraft()", 1)[1].split("function fontStack", 1)[0]
         retry = self.source.split("async function sendPendingSubmission()", 1)[1].split("async function submit", 1)[0]

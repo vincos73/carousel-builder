@@ -59,7 +59,7 @@ I gate sono cumulativi:
 - `rendering -> qa`: `render-result` corrente e artefatti esistenti con digest SHA-256 coincidenti;
 - `qa -> consegnato`: lo stesso `render-result` già legato alla ricevuta, report QA positivo e gli stessi artefatti ancora presenti.
 
-Qualunque modifica a copy, ordine, profilo, sistema, logo, asset o composizione può cambiare revisione o fingerprint e invalidare la proof. `apply_review.py` non avanza mai: una correzione editoriale o una nota non classificabile riapre atomicamente `bozza` e azzera la catena; una modifica esclusivamente a sistema visivo/logo riapre `testi_approvati` e conserva soltanto la ricevuta reale `bozza -> testi_approvati`. Ripartire dal checkpoint risultante e non ricostruire le ricevute a mano.
+Qualunque modifica a copy, ordine, profilo, sistema, logo, asset o composizione può cambiare revisione o fingerprint e invalidare la proof. `apply_review.py` non avanza mai: una correzione editoriale o una nota non classificabile riapre atomicamente `bozza` e azzera la catena; una modifica esclusivamente a sistema visivo, logo o enfasi tipografica riapre `testi_approvati` e conserva soltanto la ricevuta reale `bozza -> testi_approvati`. Una modifica alle sole enfasi non rende stale alt text o trascrizione. Gli asset della cover devono essere già presenti quando nasce la sessione locale: non inserirli direttamente dopo l'approvazione dei testi. Dopo ogni `apply_review.py`, rieseguire `carousel_status.py` e usare la revisione corrente restituita, non quella precedente al batch. Ripartire dal checkpoint risultante e non ricostruire le ricevute a mano.
 
 ## Risultato di export
 

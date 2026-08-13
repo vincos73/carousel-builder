@@ -5,7 +5,7 @@ description: Trasforma URL, articoli, newsletter, note e testi in caroselli edit
 
 # Carousel Builder
 
-Versione: **2.9.0**
+Versione: **2.9.1**
 
 Creare caroselli separando fonte, identità, testi, prova visuale, produzione e QA. Richiedere due approvazioni distinte prima del rendering completo: prima profilo e testi, poi la prova visuale. Una richiesta iniziale di creare un carosello autorizza la proposta editoriale, non la produzione grafica.
 
@@ -49,7 +49,7 @@ Usare `conversation` quando almeno una capacità è realmente assente o fallisce
 1. Costruire copertina e sequenza secondo [editorial-workflow.md](references/editorial-workflow.md). Nel percorso rapido mostrare nella stessa revisione prima `Anteprima profilo brand` e poi `Anteprima testi`; nel guidato approvare prima il profilo.
 2. Indicare profilo, fonte, `sequence_mode`, master 1080×1350, export previsto, numero di slide e testi esatti. Ogni frase compiuta inizia su una nuova riga. Mostrare solo contenuti destinati alle slide e le minime informazioni di revisione, non manifest o note tecniche.
 3. Proporre i tre sistemi di [visual-systems.md](references/visual-systems.md) sullo stesso contenuto e identità. Salvare la scelta in `visual_style_system`; un nome, una palette o un font senza firma strutturale non costituiscono una prova valida.
-4. Nel percorso locale creare uno schema 1.4 in stato `bozza`, con `workflow_receipts: []`. Prima di aprire l'editor, controllare tutte le card nei tre sistemi, anche a 480 px: nessuna slide iniziale deve mostrare avvisi di densità o overflow. Il copy generato con titolo è lungo al massimo 180 caratteri, quello senza titolo al massimo 320 caratteri. Correggere o dividere finché il fit è pulito senza scendere sotto il 92% della scala.
+4. Nel percorso locale creare uno schema 1.4 in stato `bozza`, con `workflow_receipts: []`. Se la copertina userà un asset generato o fornito, prepararlo e collegarlo al manifest prima di aprire la prima sessione: l'editor lo tiene nascosto fino al checkpoint visuale. Non aggiungere direttamente asset al manifest dopo l'approvazione dei testi, perché cambierebbe l'impronta della sessione; se una modifica editoriale successiva rende il visuale incoerente, rigenerarlo in un nuovo manifest pulito `bozza` e riapprovare i testi. Prima di aprire l'editor, controllare tutte le card nei tre sistemi, anche a 480 px: nessuna slide iniziale deve mostrare avvisi di densità o overflow. Il copy generato con titolo è lungo al massimo 180 caratteri, quello senza titolo al massimo 320 caratteri. Correggere o dividere finché il fit è pulito senza scendere sotto il 92% della scala.
 5. Avviare e aprire l'editor come descritto in [visual-review.md](references/visual-review.md). Restare in ascolto dell'evento: non terminare il turno e non chiedere all'utente di scrivere «fatto».
 6. Alla ricezione, confermare subito che il batch è in lavorazione. Applicare il percorso append-only con `apply_review.py`; esaminare commenti, warning, alt text e trascrizione stale. Conservare il testo scritto dall'utente salvo incompatibilità dichiarata con fonte, modalità `verbatim` o produzione.
 7. Dopo ogni batch ripetere i controlli e lasciare che l'editor ricarichi il manifest. Una richiesta `approve` è esplicita ma non sufficiente: avanzare a `testi_approvati` soltanto con i gate descritti in [workflow-state.md](references/workflow-state.md). Se resta un blocco, mantenere `bozza` e mostrarlo.
@@ -57,7 +57,7 @@ Usare `conversation` quando almeno una capacità è realmente assente o fallisce
 
 ## Fase 2: prova visuale
 
-1. Estrarre 2-3 concetti e tradurli in una sola metafora secondo [cover-visual.md](references/cover-visual.md). Usare un'immagine solo per la copertina e solo se generatore o asset fornito sono disponibili; altrimenti creare una copertina tipografica completa.
+1. Estrarre 2-3 concetti e tradurli in una sola metafora secondo [cover-visual.md](references/cover-visual.md). Usare un'immagine solo per la copertina e solo se generatore o asset fornito sono disponibili; altrimenti creare una copertina tipografica completa. Nel percorso locale usare l'asset già collegato al manifest prima della prima sessione; nel percorso conversazionale generarlo dopo l'approvazione dei testi.
 2. Applicare la firma del sistema selezionato alle card interne e alla chiusura, mai alla copertina. Convertire le enfasi approvate in campi espliciti e rimuovere gli asterischi.
 3. Preparare il manifest conforme a [carousel-schema.md](references/carousel-schema.md), con produzione, accessibilità e prova canonica: copertina, card interna più densa e chiusura se presente.
 4. Verificare il campione a 480×600 e a risoluzione leggibile secondo [production-qa.md](references/production-qa.md). Controllare font reali, fit, contrasto, crop e firma strutturale.
@@ -90,4 +90,4 @@ Un profilo riutilizzabile contiene regole, non testi della singola fonte. Logo e
 
 Per modifiche testuali mostrare le slide cambiate e poi la sequenza aggiornata. Per modifiche solo grafiche non riaprire i testi, ma richiedere una nuova prova. Riutilizzare la cover soltanto se tesi, metafora e composizione restano invariate.
 
-In caso di errore non avanzare lo stato e preservare gli artefatti validi. Nel percorso locale seguire [review-recovery.md](references/review-recovery.md) soltanto dopo un'interruzione o conflitto; altrimenti spiegare il risultato disponibile e offrire ripetizione, fallback o interruzione. Gli avanzamenti locali sono solo in avanti; una correzione applicata dopo un checkpoint riapre atomicamente `bozza` se cambia copy, ordine o profilo, oppure `testi_approvati` se cambia soltanto stile/logo. Ripetere i checkpoint richiesti e non modificare mai stato o ricevute a mano.
+In caso di errore non avanzare lo stato e preservare gli artefatti validi. Nel percorso locale seguire [review-recovery.md](references/review-recovery.md) soltanto dopo un'interruzione o conflitto; altrimenti spiegare il risultato disponibile e offrire ripetizione, fallback o interruzione. Gli avanzamenti locali sono solo in avanti; una correzione applicata dopo un checkpoint riapre atomicamente `bozza` se cambia copy, ordine o profilo, oppure `testi_approvati` se cambia soltanto stile, logo o enfasi tipografica. Ripetere i checkpoint richiesti e non modificare mai stato o ricevute a mano.

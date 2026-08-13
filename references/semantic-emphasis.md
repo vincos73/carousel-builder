@@ -28,6 +28,7 @@ Se nessun file o font corsivo reale è disponibile, non sintetizzarlo: lasciare 
 Quando l'utente seleziona una locuzione, offrire i comandi `Grassetto`, `Corsivo`, `Sottolinea`, `Evidenzia` e `Commenta` senza inserire Markdown nel testo. I comandi aggiornano direttamente i campi espliciti del manifest e l'anteprima.
 
 - Consentire il toggle e la rimozione delle enfasi.
+- Dopo l'approvazione dei testi, trattare una modifica alle sole enfasi come variazione visuale: conservare la ricevuta editoriale, invalidare la prova corrente e richiedere soltanto una nuova prova visuale. Non marcare alt text o trascrizione come stale quando copy e ordine restano identici.
 - Mostrare le enfasi direttamente nell'anteprima in tempo reale. Non duplicarle con chip, pill o altri elementi esterni al testo.
 - Supportare `Cmd/Ctrl+B`, `Cmd/Ctrl+I`, `Cmd/Ctrl+U` e `Cmd/Ctrl+Maiusc+H` quando una selezione testuale è attiva.
 - Usare `aria-pressed`, nomi accessibili completi e focus visibile.

@@ -657,7 +657,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.9.0")
+        self.assertEqual(model["editor_version"], "2.9.1")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
