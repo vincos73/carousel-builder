@@ -1051,7 +1051,14 @@
         || approvalComplete
         || !previewReadyForApproval(document.documentElement.dataset);
     }
-    if (elements.sendButton) elements.sendButton.textContent = waiting ? "Correzioni inviate" : "Invia correzioni";
+    const visualProofHasChanges = model.workflow_state === "testi_approvati" && count > 0;
+    const sendLabel = waiting
+      ? "Correzioni inviate"
+      : visualProofHasChanges
+        ? "Salva correzioni · poi riapprova"
+        : "Invia correzioni";
+    if (elements.sendButton) elements.sendButton.textContent = sendLabel;
+    if (elements.mobileSendButton) elements.mobileSendButton.textContent = sendLabel;
     if (elements.workflowBadge) {
       elements.workflowBadge.textContent = waiting ? "Inviato · in attesa dell’agente" : labelForValue(workflowLabels, model.workflow_state, "Stato non definito");
       elements.workflowBadge.toggleAttribute("aria-busy", waiting);

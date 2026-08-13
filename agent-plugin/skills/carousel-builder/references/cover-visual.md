@@ -1,6 +1,6 @@
 # Visuale di copertina
 
-Definire la copertina dopo l'approvazione di profilo e testi e prima della prova visuale. Derivare soggetto, scena e metafora dalla fonte corrente; derivare stile, tecnica, palette e tono da `brand.visual_direction` e dagli altri campi del profilo. Scegliere `generative` soltanto se la sessione può generare immagini, `provided` per un asset dell'utente oppure `typographic` in assenza di entrambi. Per impostazione predefinita non generare illustrazioni decorative per le slide interne; restano consentiti gli SVG strutturali del sistema visivo.
+Definire la copertina dopo aver preparato la bozza editoriale e prima della prova visuale. Nel percorso `local-editor`, generare o acquisire l'asset e collegarlo al manifest prima di aprire la prima sessione: durante `bozza` resta nascosto nell'editor e diventa visibile soltanto dopo l'approvazione dei testi. Nel percorso conversazionale generarlo dopo l'approvazione di profilo e testi. Derivare soggetto, scena e metafora dalla fonte corrente; derivare stile, tecnica, palette e tono da `brand.visual_direction` e dagli altri campi del profilo. Scegliere `generative` soltanto se la sessione può generare immagini, `provided` per un asset dell'utente oppure `typographic` in assenza di entrambi. Per impostazione predefinita non generare illustrazioni decorative per le slide interne; restano consentiti gli SVG strutturali del sistema visivo.
 
 ## Estrazione
 
@@ -43,6 +43,7 @@ Vincoli: [brand.visual_direction.avoid]; nessun testo, lettera, numero, logo, wa
 - Non imitare lo stile di artisti viventi o brand non autorizzati.
 - In modalità `generative` o `provided`, preferire un'immagine 4:5 di almeno 1440×1800. Se lo strumento produce un rapporto diverso, dichiararlo e mantenere soggetti ed elementi essenziali dentro una safe area compatibile con il crop 4:5.
 - Salvare un'immagine usata accanto al manifest o in `assets/`, mai nella cartella finale che il renderer ricrea.
+- Non aggiungere o sostituire direttamente `cover_image` e i relativi metadati dopo un checkpoint locale. Se i testi cambiano in modo da invalidare la metafora, preparare il nuovo visuale in un nuovo manifest `bozza` e ripetere l'approvazione editoriale; non aggiornare a mano hash o ricevute della sessione precedente.
 - Dopo il rendering di un'immagine, correggere prima `cover_image_position`; rigenerarla o richiedere un altro asset solo se il problema è compositivo.
 
 ## Approvazione

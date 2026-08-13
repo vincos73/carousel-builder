@@ -6,7 +6,7 @@ Usare questa modalità soltanto quando Python 3.10 o successivo e un browser loc
 
 ## Preparazione
 
-1. Salvare il manifest del carosello in una cartella di lavoro accessibile all'utente.
+1. Salvare il manifest in una cartella accessibile. Collegare gli asset di copertina prima della prima sessione locale: in `bozza` restano nascosti. Non mutarli dopo un checkpoint.
 2. Scegliere una cartella di sessione dedicata, esterna alla cartella della skill.
 3. Avviare il server con percorsi assoluti:
 
@@ -47,7 +47,7 @@ Applicare le modifiche dirette con:
 python3 <skill>/scripts/apply_review.py <manifest.json> <feedback-path> --session-dir <session-dir>
 ```
 
-Lo script deve accettare soltanto l'alias `feedback.json` o un batch archiviato in `feedback-batches/` appartenente alla cartella di sessione e al manifest associato. Quando esiste il batch append-only, l'alias deve coincidere esattamente. Lo script aggiorna soltanto i campi consentiti, preserva un backup atomico nella cartella di sessione e incrementa `revision` quando cambia contenuto, prova o composizione. Non avanza mai il workflow; se un feedback modifica copy/ordine/profilo o contiene una richiesta non classificabile dopo un checkpoint, riapre atomicamente `bozza` e azzera le ricevute. Se cambia soltanto sistema visivo/logo, riapre `testi_approvati` conservando la ricevuta editoriale. Per `approval_stage: visual_proof` ricontrolla il fingerprint dopo l'applicazione e lega atomicamente `proof.approved` al render finale; per `profile_text` lascia la proof non approvata.
+Lo script deve accettare soltanto l'alias `feedback.json` o un batch archiviato in `feedback-batches/` appartenente alla cartella di sessione e al manifest associato. Quando esiste il batch append-only, l'alias deve coincidere esattamente. Lo script aggiorna soltanto i campi consentiti, preserva un backup atomico nella cartella di sessione e incrementa `revision` quando cambia contenuto, prova o composizione. Non avanza mai il workflow; se un feedback modifica copy/ordine/profilo o contiene una richiesta non classificabile dopo un checkpoint, riapre atomicamente `bozza` e azzera le ricevute. Se cambia soltanto sistema visivo, logo o enfasi tipografica, riapre `testi_approvati` conservando la ricevuta editoriale. Per `approval_stage: visual_proof` ricontrolla il fingerprint dopo l'applicazione e lega atomicamente `proof.approved` al render finale; per `profile_text` lascia la proof non approvata.
 
 Lo script riallinea inoltre i riferimenti derivati dai testi:
 
@@ -63,7 +63,7 @@ Per l'anteprima dei logo servire soltanto asset raster autorizzati. Quando il ma
 
 Esaminare poi `comments` e `overall_note`. I commenti sono richieste da interpretare, non modifiche già effettuate. Applicare le correzioni necessarie al manifest, ripetere i controlli editoriali e aggiornare la revisione se occorre.
 
-Se `action` è `approve`, trattarla come richiesta esplicita di approvazione, non come avanzamento di stato. Dopo aver risolto i commenti e superato i controlli, eseguire la transizione richiesta con `scripts/advance_workflow.py`, passando la stessa `--session-dir`, secondo [workflow-state.md](workflow-state.md). Non modificare `workflow_state` o `workflow_receipts` a mano; se un gate fallisce mantenere il checkpoint corrente.
+Se `action` è `approve`, trattarla come richiesta esplicita, non come avanzamento. Risolti i commenti e superati i controlli, eseguire `carousel_status.py`, quindi passare la revisione corrente a `scripts/advance_workflow.py` con la stessa `--session-dir`, secondo [workflow-state.md](workflow-state.md). Non modificare stato o ricevute a mano; se un gate fallisce mantenere il checkpoint.
 
 ## Ripresa e chiusura
 

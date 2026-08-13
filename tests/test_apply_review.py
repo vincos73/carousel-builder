@@ -1013,6 +1013,57 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertTrue(payload["workflow_state_changed"])
         self.assertEqual(self.manifest()["workflow_state"], "bozza")
 
+    def test_emphasis_only_change_preserves_text_approval_and_accessibility(self) -> None:
+        manifest = base_manifest()
+        set_workflow_state(manifest, "testi_approvati")
+        original_receipt = copy.deepcopy(manifest["workflow_receipts"][0])
+        batch = self.full_batch()
+        batch[1]["summary_serif"] = []
+
+        result = self.apply(manifest, base_feedback(batch))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        written = self.manifest()
+        self.assertFalse(payload["workflow_state_changed"])
+        self.assertEqual(written["workflow_state"], "testi_approvati")
+        self.assertEqual(written["workflow_receipts"], [original_receipt])
+        self.assertEqual(written["items"][0]["summary_serif"], [])
+        self.assertEqual(payload["stale_alt_text"], [])
+        self.assertFalse(payload["stale_transcript"])
+        self.assertFalse(written["proof"]["approved"])
+
+    def test_visual_approval_requires_saving_an_emphasis_change_first(self) -> None:
+        manifest = base_manifest()
+        set_workflow_state(manifest, "testi_approvati")
+        manifest_path = self.workdir / "emphasis-fingerprint-source.json"
+        write_json(manifest_path, manifest)
+        base_model = apply_review.server_manifest_model(manifest_path)
+        candidate = copy.deepcopy(manifest)
+        candidate["items"][0]["summary_serif"] = []
+        candidate_model = apply_review.server_manifest_model(
+            manifest_path, manifest=candidate
+        )
+        batch = self.full_batch()
+        batch[1]["summary_serif"] = []
+        feedback = base_feedback(
+            batch,
+            action="approve",
+            approval_stage="visual_proof",
+            base_workflow_state="testi_approvati",
+            base_render_fingerprint=base_model["render_fingerprint"],
+            render_fingerprint=candidate_model["render_fingerprint"],
+            proof_slide_ids=candidate_model["proof"]["required_slide_ids"],
+            style_system_verified=True,
+            proof_browser={"engine": "chromium", "major": 140},
+        )
+
+        result = self.apply(manifest, feedback)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("modifiche ancora locali", json.loads(result.stderr)["error"])
+        self.assertEqual(self.manifest(), manifest)
+
     def test_visual_checkpoint_rejects_legacy_or_incomplete_approval_batches(self) -> None:
         manifest = base_manifest()
         set_workflow_state(manifest, "testi_approvati")
@@ -1138,7 +1189,7 @@ class ApplyReviewTest(unittest.TestCase):
         result = self.apply(manifest, feedback)
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn("modifiche editoriali", json.loads(result.stderr)["error"])
+        self.assertIn("modifiche ancora locali", json.loads(result.stderr)["error"])
         self.assertEqual(self.manifest(), manifest)
 
     def test_empty_feedback_cannot_reopen_an_approved_checkpoint(self) -> None:

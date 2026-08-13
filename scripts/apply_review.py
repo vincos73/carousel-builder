@@ -777,6 +777,9 @@ def main() -> int:
                 warnings=warnings,
             )
         )
+        cover_emphasis_changed = any(
+            manifest.get(key) != value for key, value in cover_emphasis.items()
+        )
         if cover_dropped:
             emphasis_dropped["cover"] = cover_dropped
         if cover_copy_changed and manifest.get("cover_alt_text"):
@@ -829,7 +832,29 @@ def main() -> int:
         if not new_items:
             raise ValueError("Deve restare almeno una slide interna")
 
+        original_item_ids = list(by_id)
+        new_item_ids = [str(item["id"]) for item in new_items]
+        items_copy_or_order_changed = (
+            original_item_ids != new_item_ids
+            or any(
+                by_id[str(item["id"])].get("title", "") != item.get("title", "")
+                or by_id[str(item["id"])].get("summary", "")
+                != item.get("summary", "")
+                for item in new_items
+            )
+        )
+        item_emphasis_keys = EMPHASIS_KEYS["title"] + EMPHASIS_KEYS["summary"]
+        items_emphasis_changed = any(
+            any(
+                by_id[str(item["id"])].get(key) != item.get(key)
+                for key in item_emphasis_keys
+            )
+            for item in new_items
+        )
+
         new_outro = None
+        outro_copy_changed = False
+        outro_emphasis_changed = False
         if outro_enabled:
             outro_slide = slides[-1]
             new_outro = dict(manifest["outro"])
@@ -837,11 +862,11 @@ def main() -> int:
             new_outro["body"] = sentence_line_breaks(
                 require_text(outro_slide.get("summary"), "outro.body")
             )
-            outro_changed = (
+            outro_copy_changed = (
                 manifest["outro"].get("title", "") != new_outro["title"]
                 or manifest["outro"].get("body", "") != new_outro["body"]
             )
-            if outro_changed and new_outro.get("alt_text"):
+            if outro_copy_changed and new_outro.get("alt_text"):
                 stale_alt_text.append("outro")
             outro_dropped = sync_emphasis(
                 new_outro,
@@ -865,6 +890,10 @@ def main() -> int:
             )
             if outro_dropped:
                 emphasis_dropped["outro"] = outro_dropped
+            outro_emphasis_changed = any(
+                manifest["outro"].get(key) != new_outro.get(key)
+                for key in item_emphasis_keys
+            )
 
         changed: list[str] = []
         if manifest.get("cover_title", "") != new_cover:
@@ -875,9 +904,7 @@ def main() -> int:
             changed.append("items")
         if new_outro is not None and manifest.get("outro") != new_outro:
             changed.append("outro")
-        if cover_emphasis and any(
-            manifest.get(key) != value for key, value in cover_emphasis.items()
-        ):
+        if cover_emphasis_changed:
             changed.append("cover_emphasis")
         logo_mode_changed = (
             selected_logo_mode is not None
@@ -924,7 +951,18 @@ def main() -> int:
                 new_proof_ids = canonical_ids
                 changed.append("proof.slide_ids")
 
-        editorial_changed = any(field != "logo_mode" for field in changed)
+        editorial_changed = bool(
+            cover_copy_changed
+            or items_copy_or_order_changed
+            or outro_copy_changed
+            or new_reading_order is not None
+            or new_proof_ids is not None
+        )
+        emphasis_changed = bool(
+            cover_emphasis_changed
+            or items_emphasis_changed
+            or outro_emphasis_changed
+        )
         if (
             selected_visual_style is not None
             and manifest.get("visual_style_system") != selected_visual_style
@@ -933,6 +971,7 @@ def main() -> int:
 
         visual_selection_changed = bool(
             logo_mode_changed
+            or emphasis_changed
             or (
                 selected_visual_style is not None
                 and manifest.get("visual_style_system") != selected_visual_style
@@ -959,9 +998,12 @@ def main() -> int:
             raise ValueError(
                 "Un feedback vuoto non può riaprire un checkpoint già approvato"
             )
-        if bind_approved_proof and editorial_changed:
+        if bind_approved_proof and (
+            editorial_changed or (visual_selection_changed and not post_visual_approval)
+        ):
             raise ValueError(
-                "La prova visuale non può approvare modifiche editoriali: riapri prima il checkpoint testi"
+                "La prova visuale non può approvare modifiche ancora locali: "
+                "invia prima la correzione e riapri il checkpoint risultante"
             )
 
         rewind_target = None
