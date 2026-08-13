@@ -515,8 +515,8 @@ test("browser reale: approval, fresh production 480x600, riordino, submit e reco
   })`);
   assert.deepEqual(retryPreviewState, { ready: "true", error: "", fontAlertHidden: true });
 
-  // Navigation intent alone is not visual proof. These clicks and the approval
-  // attempt happen in one task, before IntersectionObserver can attest a frame.
+  // Navigation intent alone does not mark the sample as viewed, but unseen
+  // slides are advisory: the user's explicit approval remains available.
   await evaluate(client, approvalPage, `(() => {
     for (const slideId of ['cover', 'item-2', 'outro']) {
       document.querySelector('[data-sequence-slide="' + slideId + '"]').click();
@@ -525,9 +525,14 @@ test("browser reale: approval, fresh production 480x600, riordino, submit e reco
   })()`);
   assert.equal(
     await evaluate(client, approvalPage, "document.querySelector('#approval-dialog').open"),
-    false,
-    "click rapidi sulla navigazione non devono valere come prova visuale",
+    true,
+    "le slide campione non viste non devono bloccare l'approvazione esplicita",
   );
+  assert.match(
+    await evaluate(client, approvalPage, "document.querySelector('#approval-summary').textContent"),
+    /avvisi informativi.*non bloccano la tua approvazione/,
+  );
+  await evaluate(client, approvalPage, "document.querySelector('#approval-dialog').close()");
 
   // Bring every required preview into the viewport and wait for the real
   // >= 50% IntersectionObserver confirmation before approving.
