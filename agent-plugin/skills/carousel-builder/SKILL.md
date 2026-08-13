@@ -5,15 +5,15 @@ description: Trasforma URL, articoli, newsletter, note e testi in caroselli edit
 
 # Carousel Builder
 
-Versione: **2.10.1**
+Versione: **2.11.1**
 
-Separare fonte, identità, testi, prova visuale, produzione e QA. Prima del rendering completo richiedere due approvazioni: profilo e testi, poi prova visuale. La richiesta iniziale autorizza solo la proposta editoriale.
+Separare fonte, identità, testi, prova visuale, produzione e QA. Usare il consenso combinato solo per una preview tipografica già definitiva che supera i gate di [visual-review.md](references/visual-review.md); altrimenti mantenere due approvazioni. Conservare sempre due ricevute durevoli prima del rendering. La richiesta iniziale autorizza solo la proposta editoriale.
 
 Non ricavare identità, logo, URL, firma o attribuzioni dalla fonte, dalla memoria o dal profilo personale. Usare solo ciò che l'utente fornisce o approva esplicitamente.
 
 Usare soltanto strumenti disponibili: non installare pacchetti né scaricare browser, font o dipendenze. Nel percorso locale eseguire esclusivamente `scripts/review_server.py`, `scripts/process_review.py`, `scripts/attach_cover_asset.py`, `scripts/carousel_status.py`, `scripts/advance_workflow.py`, `scripts/finalize_delivery.py`, `scripts/apply_review.py` e `scripts/export_review_pdf.cjs`. Recuperare risorse esterne soltanto da fonti approvate.
 
-Il workflow è `bozza` → `testi_approvati` → `prova_visuale_approvata` → `rendering` → `qa` → `consegnato`. In `local-editor` non modificare a mano stato o ricevute. `process_review.py` applica il batch e avanza solo l'approvazione valida; `apply_review.py` resta il livello atomico e di recovery senza avanzamento. Usare `advance_workflow.py` per entrare in `rendering` e `finalize_delivery.py` per le transizioni finali. `adapter` e `layout` applicano gli stessi checkpoint senza simulare attestazioni locali.
+Il workflow è `bozza` → `testi_approvati` → `prova_visuale_approvata` → `rendering` → `qa` → `consegnato`. In `local-editor` non modificare a mano stato o ricevute. `process_review.py` applica il batch e avanza i checkpoint coperti; nel percorso combinato registra in sequenza le prime due ricevute. `apply_review.py` resta il livello atomico e di recovery senza avanzamento. Usare `advance_workflow.py` per entrare in `rendering` e `finalize_delivery.py` per le transizioni finali. `adapter` e `layout` applicano gli stessi checkpoint senza simulare attestazioni locali.
 
 Prima del passo successivo o dopo un recovery, eseguire `carousel_status.py` con manifest e sessione. `next_action` diagnostica senza modificare file né sostituire i gate.
 
@@ -52,12 +52,12 @@ Usare `conversation` quando almeno una capacità è realmente assente o fallisce
 4. Registrare `typographic` per default, oppure `generated`/`provided` se l'utente sceglie un visuale; non generare ancora l'immagine. Nel percorso locale creare uno schema 1.4 `bozza` con `workflow_receipts: []`. Controllare tutte le card nel sistema selezionato anche a 480 px: nessuna slide iniziale deve mostrare avvisi di densità o overflow. Il copy generato ha massimo 180 caratteri con titolo e 320 senza. Correggere o dividere senza scendere sotto il 92% della scala.
 5. Avviare e aprire l'editor come descritto in [visual-review.md](references/visual-review.md). Restare in ascolto dell'evento: non terminare il turno e non chiedere all'utente di scrivere «fatto».
 6. Alla ricezione, confermare subito che il batch è in lavorazione. Elaborare il batch append-only con `process_review.py`; esaminare commenti, warning, alt text e trascrizione stale. Conservare il testo scritto dall'utente salvo incompatibilità dichiarata con fonte, modalità `verbatim` o produzione.
-7. Dopo ogni batch ripetere i controlli e lasciare che l'editor ricarichi il manifest. `process_review.py` avanza a `testi_approvati` solo per una richiesta `approve` valida; se resta un blocco, mantiene `bozza` e lo espone nell'output.
+7. Dopo ogni batch ripetere i controlli e lasciare che l'editor ricarichi il manifest. Quando [visual-review.md](references/visual-review.md) abilita `Approva e produci`, `process_review.py` registra in sequenza `testi_approvati` e `prova_visuale_approvata`; altrimenti avanza solo il primo checkpoint. Se resta un blocco, mantiene `bozza` e lo espone nell'output.
 8. Nel percorso conversazionale mostrare prima le slide cambiate e poi l'intera sequenza. Offrire `Approva profilo e testi`, `Modifica il profilo` o `Modifica i testi`.
 
 ## Fase 2: prova visuale
 
-1. Se `cover_mode` richiede un visuale, estrarre 2-3 concetti e tradurli in una sola metafora secondo [cover-visual.md](references/cover-visual.md), quindi generare o acquisire l'immagine soltanto ora. Nel percorso locale collegarla attraverso `attach_cover_asset.py`, mai modificando il manifest a mano. Se la modalità è `typographic` o l'immagine non è producibile, mantenere una copertina tipografica completa.
+1. Saltare questa fase se il percorso combinato ha già portato il manifest a `prova_visuale_approvata`. Altrimenti, se `cover_mode` richiede un visuale, estrarre 2-3 concetti e tradurli in una sola metafora secondo [cover-visual.md](references/cover-visual.md), quindi generare o acquisire l'immagine soltanto ora. Nel percorso locale collegarla attraverso `attach_cover_asset.py`, mai modificando il manifest a mano. Se la modalità è `typographic` o l'immagine non è producibile, mantenere una copertina tipografica completa.
 2. Applicare la firma del sistema selezionato alle card interne e alla chiusura, mai alla copertina. Convertire le enfasi approvate in campi espliciti e rimuovere gli asterischi.
 3. Preparare il manifest conforme a [carousel-schema.md](references/carousel-schema.md), con produzione, accessibilità e prova canonica: copertina, card interna più densa e chiusura se presente.
 4. Verificare il campione a 480×600 e a risoluzione leggibile secondo [production-qa.md](references/production-qa.md). Controllare font reali, fit, contrasto, crop e firma strutturale.
@@ -90,4 +90,4 @@ Un profilo riutilizzabile contiene regole, non testi della singola fonte. Logo e
 
 Per modifiche testuali mostrare le slide cambiate e poi la sequenza aggiornata. Per modifiche solo grafiche non riaprire i testi, ma richiedere una nuova prova. Riutilizzare la cover soltanto se tesi, metafora e composizione restano invariate.
 
-In caso di errore non avanzare lo stato e preservare gli artefatti validi. Nel percorso locale seguire [review-recovery.md](references/review-recovery.md) soltanto dopo un'interruzione o conflitto; altrimenti spiegare il risultato disponibile e offrire ripetizione, fallback o interruzione. Gli avanzamenti locali sono solo in avanti; una correzione applicata dopo un checkpoint riapre atomicamente `bozza` se cambia copy, ordine o profilo, oppure `testi_approvati` se cambia soltanto stile, logo o enfasi tipografica. Ripetere i checkpoint richiesti e non modificare mai stato o ricevute a mano.
+In caso di errore non avanzare lo stato e preservare gli artefatti validi. Nel percorso locale seguire [review-recovery.md](references/review-recovery.md) soltanto dopo un'interruzione o conflitto. Un errore di soli metadati tecnici può rielaborare lo stesso batch senza nuovo consenso. Le correzioni riaprono atomicamente `bozza` se cambiano copy, ordine o profilo, oppure `testi_approvati` se cambiano solo stile, logo o enfasi. Ripetere solo i checkpoint invalidati e non modificare stato o ricevute a mano.

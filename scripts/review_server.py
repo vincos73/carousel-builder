@@ -23,6 +23,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from review_core import (  # noqa: E402
+    COMBINED_APPROVAL_SCOPE,
     VISUAL_STYLE_IDS,
     InterprocessLock,
     LockUnavailableError,
@@ -65,7 +66,7 @@ from manifest_contract import (  # noqa: E402
 
 MAX_BODY_BYTES = 1_000_000
 MAX_COMMENTS = 200
-EDITOR_VERSION = "2.10.1"
+EDITOR_VERSION = "2.11.1"
 RENDER_CONTRACT = "approved-preview-dom-v2"
 TYPOGRAPHY_DEFAULTS = {
     "cover_px": 112,
@@ -1230,6 +1231,11 @@ def manifest_model(
             "position": "50% 50%",
             "mode": "typographic",
         }
+    production_identity = {
+        "mode": model["production"]["mode"],
+        "producer": model["production"]["producer"],
+        "expected_outputs": model["production"]["expected_outputs"],
+    }
     context = {
         "editor_version": EDITOR_VERSION,
         "render_contract": RENDER_CONTRACT,
@@ -1241,11 +1247,7 @@ def manifest_model(
         "sequence_mode": model["sequence_mode"],
         # The approved proof is bound to the exact producer/output contract.
         # Changing delivery targets after approval must invalidate the proof.
-        "production": model["production"],
-        # Only the coarse approval checkpoint belongs to the render identity:
-        # entering visual proof invalidates a stale profile/text approval, while
-        # later visual workflow states keep the same approved proof valid.
-        "approval_checkpoint": model["approval_checkpoint"],
+        "production": production_identity,
     }
     context_fingerprint = render_context_fingerprint(
         context, render_asset_digests(manifest, manifest_path)
@@ -1431,6 +1433,7 @@ def validate_feedback(
     proof_slide_ids = None
     style_system_verified = None
     proof_browser = None
+    approval_scope = None
     if action == "approve":
         approval_stage = approval_stage_for_workflow(model.get("workflow_state"))
         if "approval_stage" in payload:
@@ -1462,10 +1465,27 @@ def validate_feedback(
             visual_style_system=visual_style_system,
             logo_mode=logo_mode,
         )
-        if approval_stage == "visual_proof":
+        requested_scope = payload.get("approval_scope")
+        if requested_scope is not None:
+            if requested_scope != COMBINED_APPROVAL_SCOPE:
+                raise ValueError("approval_scope non valido")
+            if approval_stage != "profile_text":
+                raise ValueError(
+                    "L'approvazione combinata è disponibile soltanto dalla bozza"
+                )
+            approval_scope = COMBINED_APPROVAL_SCOPE
+        binds_visual_proof = (
+            approval_stage == "visual_proof"
+            or approval_scope == COMBINED_APPROVAL_SCOPE
+        )
+        if binds_visual_proof:
             if cover_mode != model.get("cover_mode"):
                 raise ValueError(
                     "La modalità della copertina deve essere salvata prima di approvare la prova visuale"
+                )
+            if approval_scope == COMBINED_APPROVAL_SCOPE and cover_mode != "typographic":
+                raise ValueError(
+                    "L'approvazione combinata richiede una copertina tipografica definitiva"
                 )
             if cover_mode in {"generated", "provided"} and not model.get(
                 "cover_visual", {}
@@ -1491,7 +1511,7 @@ def validate_feedback(
                             f"{field}_{role}", []
                         )
                 current_slides.append(normalized)
-            if normalized_slides != current_slides:
+            if approval_stage == "visual_proof" and normalized_slides != current_slides:
                 raise ValueError(
                     "Le modifiche editoriali devono essere inviate e riapprovate prima della prova visuale"
                 )
@@ -1510,7 +1530,12 @@ def validate_feedback(
                 payload.get("proof_browser"), required=True
             )
             production = model.get("production", {})
-            if production.get("mode") not in {"renderer", "adapter"}:
+            allowed_modes = (
+                {"renderer"}
+                if approval_scope == COMBINED_APPROVAL_SCOPE
+                else {"renderer", "adapter"}
+            )
+            if production.get("mode") not in allowed_modes:
                 raise ValueError(
                     "La prova visuale può essere approvata solo con un renderer o adapter"
                 )
@@ -1522,6 +1547,16 @@ def validate_feedback(
                 raise ValueError(
                     "Il produttore non supporta il visual_style_system selezionato"
                 )
+            if approval_scope == COMBINED_APPROVAL_SCOPE:
+                raw_note = payload.get("overall_note", "")
+                if normalized_comments or not isinstance(raw_note, str) or raw_note.strip():
+                    raise ValueError(
+                        "L'approvazione combinata non può includere commenti o note pendenti"
+                    )
+                if warnings:
+                    raise ValueError(
+                        "L'approvazione combinata richiede una preview senza avvisi"
+                    )
 
     result = {
         "feedback_id": client_feedback_id(payload.get("feedback_id")) or new_feedback_id(),
@@ -1545,6 +1580,8 @@ def validate_feedback(
         result["base_workflow_state"] = base_workflow_state
         result["base_render_fingerprint"] = base_render_fingerprint
         result["render_fingerprint"] = approved_render_fingerprint
+        if approval_scope is not None:
+            result["approval_scope"] = approval_scope
     if proof_slide_ids is not None:
         result["proof_slide_ids"] = proof_slide_ids
         result["style_system_verified"] = style_system_verified

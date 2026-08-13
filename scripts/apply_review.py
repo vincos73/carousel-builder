@@ -20,6 +20,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from review_core import (  # noqa: E402
     CANONICAL_WORKFLOW_STATES,
+    COMBINED_APPROVAL_SCOPE,
     InterprocessLock,
     LockUnavailableError,
     approval_stage_for_workflow,
@@ -548,6 +549,7 @@ def main() -> int:
             raise ValueError("Azione del batch non valida")
         bind_approved_proof = False
         approval_stage = None
+        approval_scope = None
         stored_action = state.get("last_action")
         if stored_action is None:
             state["last_action"] = action
@@ -697,7 +699,20 @@ def main() -> int:
                         "Gli asset, il contenuto o il checkpoint sono cambiati dopo l'approvazione; ricarica l'editor"
                     )
                 approval_stage = received_approval_stage
-                bind_approved_proof = approval_stage == "visual_proof"
+                approval_scope = feedback.get("approval_scope")
+                if approval_scope not in {None, COMBINED_APPROVAL_SCOPE}:
+                    raise ValueError("approval_scope non valido")
+                if (
+                    approval_scope == COMBINED_APPROVAL_SCOPE
+                    and approval_stage != "profile_text"
+                ):
+                    raise ValueError(
+                        "L'approvazione combinata è valida soltanto per profilo e testi"
+                    )
+                bind_approved_proof = (
+                    approval_stage == "visual_proof"
+                    or approval_scope == COMBINED_APPROVAL_SCOPE
+                )
             else:
                 # Compatibility for pre-fingerprint batches is deliberately
                 # limited to the profile/text checkpoint.  It must never bind a
@@ -1111,8 +1126,13 @@ def main() -> int:
             raise ValueError(
                 "Un feedback vuoto non può riaprire un checkpoint già approvato"
             )
-        if bind_approved_proof and (
-            editorial_changed or (visual_selection_changed and not post_visual_approval)
+        if (
+            bind_approved_proof
+            and approval_scope != COMBINED_APPROVAL_SCOPE
+            and (
+                editorial_changed
+                or (visual_selection_changed and not post_visual_approval)
+            )
         ):
             raise ValueError(
                 "La prova visuale non può approvare modifiche ancora locali: "
@@ -1304,6 +1324,10 @@ def main() -> int:
         )
         if approval_stage is not None:
             review["approval_stage"] = approval_stage
+        if approval_scope is not None:
+            review["approval_scope"] = approval_scope
+        else:
+            review.pop("approval_scope", None)
         if selected_visual_style is not None:
             review["visual_style_system"] = selected_visual_style
         if changed or existing_review != review:
@@ -1362,6 +1386,7 @@ def main() -> int:
             "overall_note": feedback.get("overall_note", ""),
             "approval_requested": action == "approve",
             "approval_stage": approval_stage,
+            "approval_scope": approval_scope,
             "workflow_state_changed": workflow_state_changed,
             "emphasis_dropped": emphasis_dropped,
             "proof_slide_ids_pruned": pruned_proof_ids,

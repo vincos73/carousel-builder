@@ -56,8 +56,23 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertIn(
             'model.workflow_state === "testi_approvati" && count > 0', pending
         )
-        self.assertIn("Salva correzioni · poi riapprova", pending)
+        self.assertIn("Salva bozza · poi riapprova", pending)
         self.assertIn("elements.mobileSendButton", pending)
+
+    def test_fast_approval_is_strict_and_sends_one_combined_scope(self) -> None:
+        fast = self.source.split("function fastApprovalEligible()", 1)[1].split(
+            "function updateApprovalCopy()", 1
+        )[0]
+        self.assertIn('model?.workflow_state !== "bozza"', fast)
+        self.assertIn('resolvedCoverMode() !== "typographic"', fast)
+        self.assertIn('model?.production?.mode !== "renderer"', fast)
+        self.assertIn("proofSlidesAtCanonicalSize()", fast)
+        self.assertIn("collectApprovalIssues", fast)
+        self.assertIn("collectApprovalAdvisories", fast)
+        self.assertIn('const combinedApprovalScope = "profile_text_and_visual"', self.source)
+        self.assertIn("payload.approval_scope = combinedApprovalScope", self.source)
+        self.assertIn('const approvalLabel = delivered', self.source)
+        self.assertIn("Questo unico consenso copre testi e prova grafica definitiva.", self.source)
 
     def test_stale_pending_is_recovered_and_never_retried_against_a_new_base(self) -> None:
         hydrate = self.source.split("function hydrateDraft()", 1)[1].split("function fontStack", 1)[0]
@@ -501,17 +516,16 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         self.assertNotIn("background: var(--vincos-navy);", stylesheet)
         self.assertNotIn('id="change-label"', html)
 
-    def test_visual_choice_is_progressive_and_cover_visual_is_a_clean_split(self) -> None:
-        self.assertIn("Sistema visivo consigliato", self.html)
-        self.assertIn('id="compare-visual-systems"', self.html)
-        self.assertIn('id="show-advanced-visual-system"', self.html)
+    def test_visual_choice_is_immediate_and_cover_visual_is_a_clean_split(self) -> None:
+        self.assertIn("Sistema visivo", self.html)
+        self.assertNotIn('id="compare-visual-systems"', self.html)
+        self.assertNotIn('id="show-advanced-visual-system"', self.html)
         self.assertIn('data-cover-choice="typographic"', self.html)
         self.assertIn('data-cover-choice="visual"', self.html)
         picker = self.source.split("function renderVisualSystemPicker", 1)[1].split(
             "function setVisualSystem", 1
         )[0]
-        self.assertIn("visualAlternativeExpanded && system.id === alternate", picker)
-        self.assertIn('advancedVisualExpanded && system.id === "editorial-halftone"', picker)
+        self.assertIn("const visibleSystems = visualSystems;", picker)
         self.assertIn('preview.classList.add("cover-split")', self.source)
         self.assertIn('coverMedia.className = "preview-cover-media"', self.source)
         self.assertIn("inset: 0 0 0 55%;", self.stylesheet)

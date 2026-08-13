@@ -19,6 +19,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from review_core import (  # noqa: E402
     CANONICAL_WORKFLOW_STATES,
+    COMBINED_APPROVAL_SCOPE,
     InterprocessLock,
     LockUnavailableError,
     atomic_write_json,
@@ -75,10 +76,15 @@ def require_review_approval(manifest: dict, *, stage: str, revision: int) -> Non
     review = manifest.get("review")
     if not isinstance(review, dict):
         raise ValueError(f"Manca la ricevuta di approvazione {stage}")
+    stage_matches = review.get("approval_stage") == stage or (
+        review.get("approval_scope") == COMBINED_APPROVAL_SCOPE
+        and review.get("approval_stage") == "profile_text"
+        and stage in {"profile_text", "visual_proof"}
+    )
     if (
         review.get("last_action") != "approve"
         or review.get("approval_requested") is not True
-        or review.get("approval_stage") != stage
+        or not stage_matches
         or review.get("applied_manifest_revision") != revision
         or review.get("comments_pending") != 0
         or valid_sha256(review.get("last_feedback_sha256")) is None

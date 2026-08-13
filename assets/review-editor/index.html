@@ -53,14 +53,10 @@
           </div>
           <section class="visual-systems" aria-labelledby="visual-systems-title">
             <div class="visual-systems-copy">
-              <h3 id="visual-systems-title">Sistema visivo consigliato</h3>
+              <h3 id="visual-systems-title">Sistema visivo</h3>
               <p id="visual-system-description" aria-live="polite"></p>
             </div>
             <div id="visual-system-picker" class="visual-system-picker" role="radiogroup" aria-label="Sistema visivo dell’anteprima"></div>
-            <div class="visual-system-actions">
-              <button id="compare-visual-systems" class="button button-ghost button-compact" type="button">Confronta un’alternativa</button>
-              <button id="show-advanced-visual-system" class="button button-ghost button-compact" type="button">Mostra Geometrico</button>
-            </div>
           </section>
           <section class="cover-choice" aria-labelledby="cover-choice-title">
             <div class="cover-choice-copy">
@@ -69,7 +65,7 @@
             </div>
             <div id="cover-choice" class="segmented-control cover-choice-control" role="radiogroup" aria-label="Tipo di copertina">
               <button type="button" class="segment-button" data-cover-choice="typographic" role="radio" aria-checked="true" tabindex="0">Solo testo</button>
-              <button type="button" class="segment-button" data-cover-choice="visual" role="radio" aria-checked="false" tabindex="-1">Con visuale</button>
+              <button type="button" class="segment-button" data-cover-choice="visual" role="radio" aria-checked="false" tabindex="-1">Con immagine</button>
             </div>
           </section>
           <section id="validation-summary" class="validation-summary" aria-labelledby="validation-summary-title" tabindex="-1" hidden>
@@ -126,7 +122,7 @@
               <li>Correggi i testi nell’editor accanto all’anteprima.</li>
               <li>Seleziona una parola o una frase per applicare uno stile o aggiungere un commento.</li>
               <li>Sposta o elimina le slide interne con i comandi della slide.</li>
-              <li>Invia le correzioni oppure approva profilo e testi.</li>
+              <li>Salva bozza per riprendere più tardi, oppure seleziona Approva per passare alla prova visiva.</li>
             </ol>
           </section>
 
@@ -149,8 +145,8 @@
       <div class="actions">
         <button id="undo-button" class="button button-ghost" type="button" disabled>Annulla ultima</button>
         <button id="reset-button" class="button button-ghost" type="button">Ripristina</button>
-        <button id="send-button" class="button button-secondary" type="button">Invia correzioni</button>
-        <button id="approve-button" class="button button-primary" type="button">Approva profilo e testi</button>
+        <button id="send-button" class="button button-secondary" type="button">Salva bozza</button>
+        <button id="approve-button" class="button button-primary" type="button">Approva</button>
       </div>
       <button id="mobile-actions-button" class="button button-secondary" type="button" aria-haspopup="dialog">Azioni di revisione</button>
     </footer>
@@ -170,12 +166,12 @@
 
     <dialog id="approval-dialog" class="comment-dialog" aria-labelledby="approval-dialog-title">
       <form method="dialog">
-        <h2 id="approval-dialog-title">Confermi profilo e testi?</h2>
-        <p id="approval-dialog-copy" class="dialog-copy">Le modifiche e i commenti saranno inviati insieme. L’agente eseguirà ancora i controlli editoriali prima di avanzare lo stato. Dopo l’approvazione dei testi verrà mostrata una prova visuale separata con immagine generata, immagine fornita o copertina tipografica.</p>
+        <h2 id="approval-dialog-title">Confermi l’approvazione?</h2>
+        <p id="approval-dialog-copy" class="dialog-copy">Le modifiche e i commenti saranno inviati insieme. Se la preview tipografica è già definitiva e senza avvisi, lo stesso consenso può approvare testi e grafica; altrimenti verrà mostrata una prova visuale separata.</p>
         <p id="approval-summary" class="approval-summary" aria-live="polite"></p>
         <div class="dialog-actions">
           <button class="button button-ghost" value="cancel">Torna alla revisione</button>
-          <button id="confirm-approval" class="button button-primary" type="button">Conferma approvazione</button>
+          <button id="confirm-approval" class="button button-primary" type="button">Approva</button>
         </div>
       </form>
     </dialog>
@@ -186,8 +182,8 @@
         <p class="dialog-copy">Scegli come proseguire con la revisione corrente.</p>
         <div class="mobile-actions-list">
           <button id="mobile-undo-button" class="button button-ghost" type="button" disabled>Annulla ultima modifica</button>
-          <button id="mobile-send-button" class="button button-secondary" type="button">Invia correzioni</button>
-          <button id="mobile-approve-button" class="button button-primary" type="button">Approva profilo e testi</button>
+          <button id="mobile-send-button" class="button button-secondary" type="button">Salva bozza</button>
+          <button id="mobile-approve-button" class="button button-primary" type="button">Approva</button>
           <button id="mobile-reset-button" class="button button-ghost" type="button">Ripristina modifiche</button>
         </div>
         <div class="dialog-actions">

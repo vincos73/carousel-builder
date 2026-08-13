@@ -81,7 +81,7 @@ Se la distinzione è incerta e cambia sensibilmente il risultato, proporre la mo
 - Nel percorso guidato, mostrare i testi dopo l'approvazione del profilo.
 - Le diciture usate nell'anteprima conversazionale per identificare le slide non devono diventare etichette nel rendering.
 - Dopo ogni modifica, mostrare prima le slide cambiate e poi l'intera sequenza aggiornata. Attendere un nuovo via libera.
-- Dopo l'approvazione editoriale, passare alla prova visuale prevista in `SKILL.md`; non produrre l'intero batch prima che anche quella prova sia approvata.
+- Dopo l'approvazione editoriale, passare alla prova visuale prevista in `SKILL.md`, salvo che lo stesso consenso abbia già coperto la preview tipografica definitiva; non produrre l'intero batch prima che anche la prova sia attestata.
 
 ## Controllo editoriale
 

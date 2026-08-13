@@ -52,7 +52,7 @@ Qualunque modalità diversa da `layout` deve:
 2. dichiarare prima della produzione quali artefatti può creare;
 3. rispettare dimensioni, profilo, ordine delle slide, font e campi di enfasi;
 4. dichiarare in `production.supported_style_systems` i sistemi visivi realmente implementati e includere quello selezionato nel manifest;
-5. produrre prima la prova visuale e soltanto dopo il batch completo, usando strutture HTML/CSS/SVG deterministiche e trattando l'immagine come asset opzionale di copertina;
+5. produrre prima la prova visuale e soltanto dopo il batch completo; la prova può essere approvata insieme ai testi quando la preview tipografica è già definitiva e supera i gate del percorso combinato, usando strutture HTML/CSS/SVG deterministiche e trattando l'immagine come asset opzionale di copertina;
 6. restituire errori e output verificabili, senza sostituire asset, font o firma strutturale in modo invisibile.
 
 Nel percorso `local-editor`, anteprima approvata e produzione devono usare lo stesso albero `.slide-preview`, gli stessi asset e lo stesso foglio di stile. La modalità di produzione può nascondere soltanto i controlli dell'editor e riposizionare la sequenza per la cattura; non può ridefinire copy, tipografia, safe area o geometria del sistema visivo. Prima di creare gli artefatti, richiedere schema `1.4`, stato esatto `rendering`, `proof.approved: true` e un `proof.render_fingerprint` uguale al fingerprint corrente. L'export canonico non è consentito negli stati `qa` o `consegnato`: il risultato attestato deve restare immutato fino alla consegna, mentre una correzione riapre il checkpoint appropriato. Confrontare automaticamente revisione, fingerprint, sistema visivo, contratto degli output, snapshot canonico del contenuto, ordine, rapporto 4:5, geometria normalizzata e pixel catturati dell'anteprima e della produzione. Ripetere il confronto dopo la cattura e subito prima della pubblicazione coordinata. Qualsiasi differenza o feedback durevole pendente è bloccante.
@@ -110,7 +110,7 @@ Un profilo può proporre una scala diversa soltanto con approvazione esplicita. 
 
 ## Controllo della prova visuale
 
-Dopo l'approvazione dei testi creare una prova con:
+Dopo l'approvazione dei testi creare una prova con gli elementi seguenti, salvo che lo stesso campione definitivo sia già stato approvato nel percorso combinato:
 
 1. copertina;
 2. card con maggiore densità testuale;

@@ -317,7 +317,7 @@ class ManifestModelTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "proof deve essere"):
             self.model(manifest)
 
-    def test_render_fingerprint_tracks_the_coarse_approval_checkpoint(self) -> None:
+    def test_render_fingerprint_is_stable_across_approval_checkpoints(self) -> None:
         manifest = base_manifest()
         profile = self.model(manifest)
         self.assertEqual(profile["approval_checkpoint"], "profile_text")
@@ -340,7 +340,7 @@ class ManifestModelTest(unittest.TestCase):
         set_workflow_state(manifest, "testi_approvati")
         visual = self.model(manifest)
         self.assertEqual(visual["approval_checkpoint"], "visual_proof")
-        self.assertNotEqual(visual["render_fingerprint"], profile["render_fingerprint"])
+        self.assertEqual(visual["render_fingerprint"], profile["render_fingerprint"])
         manifest["proof"].update(
             {"approved": True, "render_fingerprint": visual["render_fingerprint"]}
         )
@@ -375,6 +375,17 @@ class ManifestModelTest(unittest.TestCase):
             self.assertEqual(later["approval_checkpoint"], "visual_proof")
             self.assertEqual(later["render_fingerprint"], visual["render_fingerprint"])
             self.assertTrue(later["proof_approved"])
+
+    def test_capability_metadata_does_not_invalidate_render_fingerprint(self) -> None:
+        manifest = base_manifest()
+        baseline = self.model(manifest)["render_fingerprint"]
+        manifest["production"]["supported_style_systems"] = [
+            "editorial-frame",
+            "corporate-modular",
+        ]
+        self.assertEqual(self.model(manifest)["render_fingerprint"], baseline)
+        manifest["production"]["expected_outputs"].append("contact_sheet")
+        self.assertNotEqual(self.model(manifest)["render_fingerprint"], baseline)
 
     def test_asset_byte_changes_invalidate_the_render_fingerprint(self) -> None:
         cover = self.workdir / "cover.png"
@@ -677,7 +688,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.10.1")
+        self.assertEqual(model["editor_version"], "2.11.1")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
@@ -1155,6 +1166,33 @@ class ValidateFeedbackTest(unittest.TestCase):
             approved["base_render_fingerprint"], self.model["render_fingerprint"]
         )
         self.assertEqual(len(approved["render_fingerprint"]), 64)
+
+    def test_combined_approval_requires_a_clean_final_proof(self) -> None:
+        slides = self.payload()["slides"]
+        slides[0]["title_serif"] = []
+        slides[1]["summary_serif"] = []
+        common = {
+            "action": "approve",
+            "approval_scope": "profile_text_and_visual",
+            "proof_slide_ids": self.model["proof"]["required_slide_ids"],
+            "style_system_verified": True,
+            "proof_browser": {"engine": "chromium", "major": 140},
+        }
+        approved = review_server.validate_feedback(
+            self.payload(slides, **common), self.model
+        )
+        self.assertEqual(approved["approval_stage"], "profile_text")
+        self.assertEqual(
+            approved["approval_scope"], "profile_text_and_visual"
+        )
+        self.assertEqual(
+            approved["proof_slide_ids"], self.model["proof"]["required_slide_ids"]
+        )
+        with self.assertRaisesRegex(ValueError, "commenti o note"):
+            review_server.validate_feedback(
+                self.payload(slides, overall_note="Da verificare", **common),
+                self.model,
+            )
 
     def test_visual_approval_stage_is_derived_and_stale_fingerprints_fail(self) -> None:
         slides = self.payload()["slides"]
