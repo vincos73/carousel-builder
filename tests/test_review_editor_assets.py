@@ -490,6 +490,32 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         self.assertNotIn("background: var(--vincos-navy);", stylesheet)
         self.assertNotIn('id="change-label"', html)
 
+    def test_visual_choice_is_progressive_and_cover_visual_is_a_clean_split(self) -> None:
+        self.assertIn("Sistema visivo consigliato", self.html)
+        self.assertIn('id="compare-visual-systems"', self.html)
+        self.assertIn('id="show-advanced-visual-system"', self.html)
+        self.assertIn('data-cover-choice="typographic"', self.html)
+        self.assertIn('data-cover-choice="visual"', self.html)
+        picker = self.source.split("function renderVisualSystemPicker", 1)[1].split(
+            "function setVisualSystem", 1
+        )[0]
+        self.assertIn("visualAlternativeExpanded && system.id === alternate", picker)
+        self.assertIn('advancedVisualExpanded && system.id === "editorial-halftone"', picker)
+        self.assertIn('preview.classList.add("cover-split")', self.source)
+        self.assertIn('coverMedia.className = "preview-cover-media"', self.source)
+        self.assertIn("inset: 0 0 0 55%;", self.stylesheet)
+        self.assertIn("width: 45%;", self.stylesheet)
+        self.assertIn(
+            '.slide-preview.cover-split[data-kind="cover"] .preview-copy',
+            self.stylesheet,
+        )
+        self.assertIn("width: 49%;", self.stylesheet)
+        split_page = self.stylesheet.split(
+            '.slide-preview.cover-split[data-kind="cover"] .preview-page', 1
+        )[1].split("}", 1)[0]
+        self.assertIn("right: 51%;", split_page)
+        self.assertNotIn("Titolo sopra l’immagine", self.source)
+
     def test_applied_formats_are_compact_visible_and_directly_removable(self) -> None:
         stylesheet = (EDITOR_DIR / "styles.css").read_text(encoding="utf-8")
         self.assertIn('active ? "true" : mixed ? "mixed" : "false"', self.source)
@@ -517,7 +543,7 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
     def test_agent_recovers_durable_editor_events_at_every_checkpoint(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         visual_review = (ROOT / "references" / "visual-review.md").read_text(encoding="utf-8")
-        self.assertIn("anche in questo checkpoint e in ogni prova successiva", skill)
+        self.assertIn("restare in attesa attiva a ogni prova", skill)
         self.assertIn("in ogni checkpoint dell'editor", visual_review)
         self.assertIn("session-state.json", visual_review)
         self.assertIn("last_feedback_id", visual_review)
@@ -537,11 +563,11 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         visual_review = (ROOT / "references" / "visual-review.md").read_text(encoding="utf-8")
         self.assertIn("nessuna slide iniziale deve mostrare avvisi di densità o overflow", skill)
         self.assertIn("`local-editor` è obbligatorio", skill)
-        self.assertIn("al massimo 180 caratteri", skill)
-        self.assertIn("al massimo 320 caratteri", skill)
+        self.assertIn("massimo 180 caratteri", skill)
+        self.assertIn("320 senza", skill)
         self.assertIn("una prima proposta già impaginabile", workflow)
         self.assertIn("trattare le soglie come limiti rigidi", workflow)
-        self.assertIn("ciascuno dei tre sistemi visivi", visual_review)
+        self.assertIn("sistema consigliato", visual_review)
         self.assertIn("l'apertura dell'editor è obbligatoria", visual_review)
 
     def test_vincos_logo_is_the_approved_outlined_lockup(self) -> None:

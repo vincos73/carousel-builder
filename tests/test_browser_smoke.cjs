@@ -431,6 +431,55 @@ test("browser reale: approval, fresh production 480x600, riordino, submit e reco
     "document.documentElement.dataset.previewReady === 'true' || Boolean(document.documentElement.dataset.productionError)",
     "esito contratto anteprima approvabile",
   );
+  const initialChoices = await evaluate(client, approvalPage, `({
+    visualSystems: document.querySelectorAll('.visual-system-option').length,
+    compareHidden: document.querySelector('#compare-visual-systems').hidden,
+    advancedHidden: document.querySelector('#show-advanced-visual-system').hidden,
+    coverChoice: document.querySelector('[data-cover-choice][aria-checked="true"]').dataset.coverChoice,
+  })`);
+  assert.deepEqual(initialChoices, {
+    visualSystems: 1,
+    compareHidden: false,
+    advancedHidden: true,
+    coverChoice: "typographic",
+  });
+  await evaluate(client, approvalPage, `document.querySelector('#compare-visual-systems').click()`);
+  assert.deepEqual(
+    await evaluate(client, approvalPage, `({
+      visualSystems: document.querySelectorAll('.visual-system-option').length,
+      advancedHidden: document.querySelector('#show-advanced-visual-system').hidden,
+    })`),
+    { visualSystems: 2, advancedHidden: false },
+  );
+  await evaluate(client, approvalPage, `document.querySelector('[data-visual-system="corporate-modular"]').click()`);
+  assert.deepEqual(
+    await evaluate(client, approvalPage, `({
+      systems: [...document.querySelectorAll('.visual-system-option')].map((option) => option.dataset.visualSystem),
+      selected: document.querySelector('.visual-system-option[aria-checked="true"]').dataset.visualSystem,
+    })`),
+    { systems: ["editorial-frame", "corporate-modular"], selected: "corporate-modular" },
+  );
+  await evaluate(client, approvalPage, `document.querySelector('[data-visual-system="editorial-frame"]').click()`);
+  await evaluate(client, approvalPage, `document.querySelector('#show-advanced-visual-system').click()`);
+  assert.equal(
+    await evaluate(client, approvalPage, `document.querySelectorAll('.visual-system-option').length`),
+    3,
+  );
+  await evaluate(client, approvalPage, `document.querySelector('[data-cover-choice="visual"]').click()`);
+  await waitFor(
+    client,
+    approvalPage,
+    `document.querySelector('[data-slide-id="cover"] .slide-preview').classList.contains('cover-split')
+      && Boolean(document.querySelector('[data-slide-id="cover"] .preview-cover-placeholder'))`,
+    "intenzione cover visuale in split",
+  );
+  await evaluate(client, approvalPage, `document.querySelector('[data-cover-choice="typographic"]').click()`);
+  await waitFor(
+    client,
+    approvalPage,
+    `!document.querySelector('[data-slide-id="cover"] .slide-preview').classList.contains('cover-split')`,
+    "ripristino cover tipografica",
+  );
   const approvalPreviewState = await evaluate(client, approvalPage, `({
     ready: document.documentElement.dataset.previewReady || "",
     error: document.documentElement.dataset.productionError || "",
@@ -502,30 +551,20 @@ test("browser reale: approval, fresh production 480x600, riordino, submit e reco
   assert.ok(Number.isInteger(approval.proof_browser.major) && approval.proof_browser.major > 0);
 
   const sessionState = JSON.parse(await fs.readFile(path.join(sessionDirectory, "session-state.json"), "utf8"));
-  const applied = spawnSync(process.env.PYTHON || "python3", [
-    path.join(ROOT, "scripts", "apply_review.py"),
+  const processed = spawnSync(process.env.PYTHON || "python3", [
+    path.join(ROOT, "scripts", "process_review.py"),
     manifestPath,
     sessionState.last_feedback_path,
     "--session-dir",
     sessionDirectory,
   ], { cwd: ROOT, encoding: "utf8" });
-  assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+  assert.equal(processed.status, 0, processed.stderr || processed.stdout);
+  const processResult = JSON.parse(processed.stdout);
+  assert.equal(processResult.status, "advanced");
+  assert.equal(processResult.advanced.to, "prova_visuale_approvata");
   const approvedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   assert.equal(approvedManifest.proof.approved, true);
   assert.deepEqual(approvedManifest.proof.browser, approval.proof_browser);
-  const advanced = spawnSync(process.env.PYTHON || "python3", [
-    path.join(ROOT, "scripts", "advance_workflow.py"),
-    manifestPath,
-    "--session-dir",
-    sessionDirectory,
-    "--expected-state",
-    "testi_approvati",
-    "--expected-revision",
-    String(approvedManifest.revision),
-    "--to",
-    "prova_visuale_approvata",
-  ], { cwd: ROOT, encoding: "utf8" });
-  assert.equal(advanced.status, 0, advanced.stderr || advanced.stdout);
   const proofManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   assert.equal(proofManifest.workflow_receipts.length, 2);
   assert.deepEqual(

@@ -686,10 +686,7 @@ input:focus {
 }
 
 .slide-preview.has-cover-image {
-  background-color: var(--preview-bg, #172033);
-  background-image: linear-gradient(rgba(12, 22, 40, 0.34), rgba(12, 22, 40, 0.48)), var(--preview-image);
-  background-position: center, var(--preview-image-position, 50% 50%);
-  background-size: cover, cover;
+  background: var(--preview-bg, #172033);
 }
 
 .slide-preview::before {
@@ -1056,6 +1053,62 @@ input:focus {
   padding-top: clamp(8px, 2.2cqw, 13px);
   border-top: 1px solid color-mix(in srgb, currentColor 24%, transparent);
   opacity: 1;
+}
+
+.slide-preview.cover-split[data-kind="cover"] {
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.preview-cover-media,
+.preview-cover-placeholder {
+  position: absolute;
+  z-index: 0;
+  inset: 0 0 0 55%;
+  width: 45%;
+  height: 100%;
+}
+
+.preview-cover-media {
+  display: block;
+  object-fit: cover;
+}
+
+.preview-cover-placeholder {
+  display: grid;
+  place-items: center;
+  padding: clamp(20px, 6cqw, 34px);
+  color: color-mix(in srgb, var(--preview-text) 76%, transparent);
+  background: color-mix(in srgb, var(--preview-accent) 18%, var(--preview-bg));
+  font-size: clamp(10px, 3cqw, 15px);
+  font-weight: 750;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.slide-preview.cover-split[data-kind="cover"] .preview-copy,
+.slide-preview.visual-system-editorial-frame.cover-split[data-kind="cover"] .preview-copy,
+.slide-preview.visual-system-editorial-halftone.cover-split[data-kind="cover"] .preview-copy,
+.slide-preview.visual-system-corporate-modular.cover-split[data-kind="cover"] .preview-copy {
+  z-index: 2;
+  width: 49%;
+  margin-right: auto;
+  margin-left: 0;
+}
+
+.slide-preview.cover-split[data-kind="cover"] .preview-title {
+  font-size: clamp(22px, calc(8.5cqw * var(--preview-scale)), 41px);
+}
+
+.slide-preview.cover-split[data-kind="cover"] .preview-page {
+  right: 51%;
+  padding: 5px 7px;
+  color: #ffffff;
+  background: rgba(12, 22, 40, 0.82);
+}
+
+.slide-preview.cover-split[data-kind="cover"] .preview-brand {
+  right: 51%;
 }
 
 .fit-warning {
@@ -1435,8 +1488,18 @@ input:focus {
     gap: 12px;
   }
 
+  .cover-choice {
+    align-items: flex-start;
+    flex-direction: column;
+    padding-inline: 18px;
+  }
+
   .visual-system-picker {
     justify-content: flex-start;
+  }
+
+  .visual-system-actions {
+    flex-wrap: wrap;
   }
 
   .sequence-nav {
@@ -2143,6 +2206,7 @@ input:focus {
 
 .content-header,
 .visual-systems,
+.cover-choice,
 .overall-panel {
   grid-column: 1 / -1;
 }
@@ -2210,6 +2274,52 @@ input:focus {
   color: var(--editor-ink);
   background: transparent;
   box-shadow: none;
+}
+
+.visual-system-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.visual-system-actions .button {
+  min-height: 36px;
+  padding-inline: 8px;
+  color: var(--editor-plum);
+  font-size: 11px;
+}
+
+.cover-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 13px 22px 15px;
+  border-bottom: 1px solid var(--editor-line-light);
+  background: var(--editor-panel);
+}
+
+.cover-choice h3,
+.cover-choice p {
+  margin: 0;
+}
+
+.cover-choice h3 {
+  color: var(--editor-ink);
+  font-size: 13px;
+}
+
+.cover-choice p {
+  max-width: 68ch;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.cover-choice-control {
+  flex: 0 0 auto;
 }
 
 .validation-summary {
@@ -2717,6 +2827,7 @@ input:focus {
 
   .content-header,
   .visual-systems,
+  .cover-choice,
   .sequence-nav,
   .slides,
   .overall-panel {
@@ -2813,7 +2924,7 @@ input:focus {
   .visual-system-picker {
     display: grid;
     width: 100%;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   }
 
   .visual-system-option {
@@ -2923,6 +3034,7 @@ html.production-render .topbar,
 html.production-render .sidebar,
 html.production-render .content-header,
 html.production-render .visual-systems,
+html.production-render .cover-choice,
 html.production-render .sequence-nav,
 html.production-render .overall-panel,
 html.production-render .actionbar,
@@ -2932,6 +3044,7 @@ html[data-capture-target="true"] .topbar,
 html[data-capture-target="true"] .sidebar,
 html[data-capture-target="true"] .content-header,
 html[data-capture-target="true"] .visual-systems,
+html[data-capture-target="true"] .cover-choice,
 html[data-capture-target="true"] .sequence-nav,
 html[data-capture-target="true"] .overall-panel,
 html[data-capture-target="true"] .actionbar,

@@ -65,7 +65,7 @@ from manifest_contract import (  # noqa: E402
 
 MAX_BODY_BYTES = 1_000_000
 MAX_COMMENTS = 200
-EDITOR_VERSION = "2.9.1"
+EDITOR_VERSION = "2.10.0"
 RENDER_CONTRACT = "approved-preview-dom-v2"
 TYPOGRAPHY_DEFAULTS = {
     "cover_px": 112,
@@ -121,6 +121,11 @@ VISUAL_STYLE_SYSTEMS = {
     "editorial-frame": "Editoriale",
     "editorial-halftone": "Geometrico",
     "corporate-modular": "Istituzionale",
+}
+VISUAL_STYLE_ALTERNATES = {
+    "editorial-frame": "corporate-modular",
+    "corporate-modular": "editorial-frame",
+    "editorial-halftone": "editorial-frame",
 }
 if frozenset(VISUAL_STYLE_SYSTEMS) != VISUAL_STYLE_IDS:
     raise RuntimeError("Le etichette dei sistemi visivi non coincidono con review_core")
@@ -540,7 +545,7 @@ def validate_emphasis_overlap(values: dict[str, list[str]], content: str, *, fie
 
 
 def normalized_cover_mode(manifest: dict, cover_visual: dict) -> str:
-    """Expose the intended cover mode before approval and an executable one after."""
+    """Expose cover intent without silently replacing a missing requested visual."""
     raw_mode = manifest.get("cover_mode")
     if not isinstance(raw_mode, str):
         legacy_mode = manifest.get("cover_visual_mode")
@@ -550,14 +555,6 @@ def normalized_cover_mode(manifest: dict, cover_visual: dict) -> str:
             raw_mode = "provided"
     if raw_mode not in {"generated", "provided", "typographic"}:
         raw_mode = "provided" if cover_visual["available"] else "typographic"
-    if raw_mode == "generated" and not cover_visual["available"]:
-        if manifest.get("workflow_state", "bozza") in {
-            "bozza", "draft", "in_revisione", "in_revisione_editoriale", "in_review", "feedback"
-        }:
-            return "generated"
-        return "typographic"
-    if raw_mode == "provided" and not cover_visual["available"]:
-        return "typographic"
     return raw_mode
 
 
@@ -568,17 +565,28 @@ def visual_proofs(
     typography: dict,
     cover_visual: dict,
 ) -> dict:
-    """Describe three renderable proof directions sharing one visual identity."""
+    """Describe one recommended direction with optional comparison paths."""
     cover = {**cover_visual, "mode": normalized_cover_mode(manifest, cover_visual)}
+    selected = resolved_visual_style_system(manifest)
     return {
-        "selected_style_system": resolved_visual_style_system(manifest),
+        "presentation_mode": "recommended",
+        "selected_style_system": selected,
+        "recommended_style_system": selected,
+        "alternate_style_system": VISUAL_STYLE_ALTERNATES[selected],
+        "advanced_style_systems": ["editorial-halftone"],
         "identity": {
             "brand": brand,
             "typography": typography,
             "cover": cover,
         },
         "options": [
-            {"id": style_system, "label": label, "style_system": style_system}
+            {
+                "id": style_system,
+                "label": label,
+                "style_system": style_system,
+                "tier": "advanced" if style_system == "editorial-halftone" else "standard",
+                "recommended": style_system == selected,
+            }
             for style_system, label in VISUAL_STYLE_SYSTEMS.items()
         ],
     }
@@ -985,7 +993,10 @@ def render_asset_digests(manifest: dict, manifest_path: Path) -> dict[str, str]:
     _logos, logo_paths = logo_assets(manifest, manifest_path)
     _fonts, font_paths = font_assets(manifest, manifest_path)
     paths: dict[str, Path] = {}
-    if cover_path is not None:
+    if (
+        cover_path is not None
+        and normalized_cover_mode(manifest, _cover) in {"generated", "provided"}
+    ):
         paths["cover"] = cover_path
     paths.update({f"logo:{role}": path for role, path in logo_paths.items()})
     paths.update({f"font:{role}": path for role, path in font_paths.items()})
@@ -1211,13 +1222,21 @@ def manifest_model(
         "production": contract["production"],
         "slides": slides,
     }
+    render_cover_visual = model["cover_visual"]
+    if model["cover_mode"] == "typographic":
+        render_cover_visual = {
+            "available": False,
+            "endpoint": "",
+            "position": "50% 50%",
+            "mode": "typographic",
+        }
     context = {
         "editor_version": EDITOR_VERSION,
         "render_contract": RENDER_CONTRACT,
         "format": model["format"],
         "typography": model["typography"],
         "brand": model["brand"],
-        "cover_visual": model["cover_visual"],
+        "cover_visual": render_cover_visual,
         "cover_mode": model["cover_mode"],
         "sequence_mode": model["sequence_mode"],
         # The approved proof is bound to the exact producer/output contract.
@@ -1395,6 +1414,16 @@ def validate_feedback(
     if logo_mode is None:
         raise ValueError("logo_mode deve essere auto oppure hidden")
 
+    cover_mode = payload.get("cover_mode", model.get("cover_mode", "typographic"))
+    if not isinstance(cover_mode, str) or cover_mode not in {
+        "generated",
+        "provided",
+        "typographic",
+    }:
+        raise ValueError(
+            "cover_mode deve essere generated, provided oppure typographic"
+        )
+
     approved_render_fingerprint = None
     base_render_fingerprint = None
     approval_stage = None
@@ -1434,6 +1463,16 @@ def validate_feedback(
             logo_mode=logo_mode,
         )
         if approval_stage == "visual_proof":
+            if cover_mode != model.get("cover_mode"):
+                raise ValueError(
+                    "La modalità della copertina deve essere salvata prima di approvare la prova visuale"
+                )
+            if cover_mode in {"generated", "provided"} and not model.get(
+                "cover_visual", {}
+            ).get("available"):
+                raise ValueError(
+                    "La copertina con visuale richiede un'immagine disponibile prima dell'approvazione"
+                )
             selected_style = (
                 visual_style_system
                 or model["visual_proofs"]["selected_style_system"]
@@ -1496,6 +1535,7 @@ def validate_feedback(
             payload.get("overall_note"), field="overall_note", limit=10_000
         ),
         "logo_mode": logo_mode,
+        "cover_mode": cover_mode,
         "warnings": warnings,
     }
     if visual_style_system is not None:

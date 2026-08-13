@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "carousel-builder",
-  "version": "2.9.1",
-  "description": "Crea caroselli editoriali 4:5 con tre sistemi visivi, logo contestuale, enfasi tipografiche e revisione locale.",
+  "version": "2.10.0",
+  "description": "Crea caroselli editoriali 4:5 con un sistema consigliato, confronti opzionali, cover differita e revisione locale.",
   "author": {
     "name": "Vincenzo Cosenza",
     "url": "https://github.com/vincos73"

@@ -53,10 +53,24 @@
           </div>
           <section class="visual-systems" aria-labelledby="visual-systems-title">
             <div class="visual-systems-copy">
-              <h3 id="visual-systems-title">Prove visive</h3>
+              <h3 id="visual-systems-title">Sistema visivo consigliato</h3>
               <p id="visual-system-description" aria-live="polite"></p>
             </div>
             <div id="visual-system-picker" class="visual-system-picker" role="radiogroup" aria-label="Sistema visivo dell’anteprima"></div>
+            <div class="visual-system-actions">
+              <button id="compare-visual-systems" class="button button-ghost button-compact" type="button">Confronta un’alternativa</button>
+              <button id="show-advanced-visual-system" class="button button-ghost button-compact" type="button">Mostra Geometrico</button>
+            </div>
+          </section>
+          <section class="cover-choice" aria-labelledby="cover-choice-title">
+            <div class="cover-choice-copy">
+              <h3 id="cover-choice-title">Copertina</h3>
+              <p id="cover-choice-description" aria-live="polite"></p>
+            </div>
+            <div id="cover-choice" class="segmented-control cover-choice-control" role="radiogroup" aria-label="Tipo di copertina">
+              <button type="button" class="segment-button" data-cover-choice="typographic" role="radio" aria-checked="true" tabindex="0">Solo testo</button>
+              <button type="button" class="segment-button" data-cover-choice="visual" role="radio" aria-checked="false" tabindex="-1">Con visuale</button>
+            </div>
           </section>
           <section id="validation-summary" class="validation-summary" aria-labelledby="validation-summary-title" tabindex="-1" hidden>
             <div>

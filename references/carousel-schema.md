@@ -66,12 +66,12 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
   "cover_title_italic": ["Frase esatta da rendere in corsivo"],
   "cover_title_underline": [],
   "cover_title_accent": [],
-  "cover_image": "assets/cover-visual.png",
+  "cover_image": "",
   "cover_image_position": "50% 50%",
-  "cover_alt_text": "Descrizione concisa del visuale e del contenuto essenziale della copertina",
-  "cover_visual_concepts": ["concetto 1", "concetto 2"],
-  "cover_visual_metaphor": "Metafora fisica scelta",
-  "cover_visual_prompt": "Prompt usato per l'illustrazione",
+  "cover_alt_text": "",
+  "cover_visual_concepts": [],
+  "cover_visual_metaphor": "",
+  "cover_visual_prompt": "",
   "cover_mode": "typographic",
   "brand": {},
   "items": [
@@ -115,7 +115,7 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
 - `logo_mode`: usare `auto` per mostrare la variante approvata adatta al fondo oppure `hidden` per omettere il logo nell'intero carosello. Non controllarlo slide per slide.
 - `target_channels`: dichiarare i canali e placement previsti prima della produzione.
 - `channel_variants`: registrare soltanto le varianti con rapporto o densità diversi dal master; ciascuna richiede una prova visuale dedicata.
-- `workflow_state`: usare `bozza`, `testi_approvati`, `prova_visuale_approvata`, `rendering`, `qa` o `consegnato`. Nel percorso `local-editor` iniziare da `bozza` e avanzare soltanto con `scripts/advance_workflow.py` secondo [workflow-state.md](workflow-state.md); non modificare il campo a mano. Adapter e `layout` usano il contratto del proprio produttore e non devono simulare le attestazioni locali.
+- `workflow_state`: usare `bozza`, `testi_approvati`, `prova_visuale_approvata`, `rendering`, `qa` o `consegnato`. Nel percorso `local-editor` iniziare da `bozza`, usare `scripts/process_review.py` per i due checkpoint di approvazione, `advance_workflow.py` per entrare in produzione e `finalize_delivery.py` per i gate finali secondo [workflow-state.md](workflow-state.md); non modificare il campo a mano. Adapter e `layout` usano il contratto del proprio produttore e non devono simulare le attestazioni locali.
 - `revision`: incrementare quando cambiano testi approvati, profilo, visuale o composizione. Una transizione di stato valida non incrementa da sola la revisione.
 - `workflow_receipts`: nello schema 1.4 inizializzare come lista vuota in `bozza`. La CLI aggiunge una ricevuta per ogni passaggio; in qualunque stato successivo la lista deve coprire senza salti l'intera catena da `bozza` allo stato corrente, con `from`, `to`, `revision`, `render_fingerprint`, `evidence_sha256` e `advanced_at`. Non crearla o correggerla manualmente. I manifest legacy possono non avere il campo ma non possono essere avanzati dalla CLI 1.4.
 - `production.mode`: usare `renderer`, `adapter` o `layout` secondo il preflight.
@@ -138,12 +138,12 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
 - Tutti i segmenti `*_italic` usano il ruolo `emphasis_italic` risolto. Accettare `*_serif` come alias legacy; Playfair Display va usato esclusivamente in corsivo.
 - `summary` e `outro.body`: ogni frase completa inizia su una nuova riga senza righe vuote. Nel rendering ogni frase diventa un blocco distinto; `body_line_height` governa le righe avvolte all'interno del blocco e `sentence_gap_em` aggiunge spazio dopo ogni blocco tranne l'ultimo. I punti interni a numeri e versioni, per esempio `1.2`, non producono un ritorno a capo; lo stesso vale per le abbreviazioni comuni.
 - `source_url`: facoltativo.
-- `cover_image`: percorso assoluto o relativo al manifest; vuoto per il fallback.
+- `cover_image`: percorso assoluto o relativo al manifest; vuoto per `typographic` e durante l'intenzione `generated` non ancora prodotta. Nel percorso locale aggiungerlo dopo l'approvazione dei testi soltanto tramite `attach_cover_asset.py`.
 - `cover_image_position`: posizione CSS del ritaglio.
 - `cover_alt_text`: descrizione del visuale e delle informazioni essenziali non già disponibili nella trascrizione.
 - `cover_visual_concepts`: massimo tre concetti.
 - `cover_visual_metaphor` e `cover_visual_prompt`: metadati di revisione.
-- `cover_mode`: usare `generated` solo quando l'immagine della copertina è stata generata, `provided` per un asset fornito dall'utente e `typographic` per una copertina senza immagine. Le slide interne non dipendono da questo campo. Accettare i valori legacy `cover_visual_mode: generative|technical` mappandoli rispettivamente a `generated|provided`.
+- `cover_mode`: usare `generated` quando l'utente richiede una copertina da generare, `provided` per un asset dell'utente e `typographic` per una copertina senza immagine. Prima dell'approvazione visuale `generated` può rappresentare un'intenzione ancora priva di `cover_image`; la proof non è approvabile finché l'asset non è disponibile. `typographic` è il default in assenza di una scelta esplicita. In `generated` e `provided` il renderer usa una composizione split deterministica con testo a sinistra e immagine verticale a destra, senza overlay o trasparenza. Le slide interne non dipendono da questo campo. Accettare i valori legacy `cover_visual_mode: generative|technical` mappandoli rispettivamente a `generated|provided`.
 - `brand`: profilo risolto conforme a [brand-profile.md](brand-profile.md), con ruoli `fonts.display` e `fonts.body`; accettare `fonts.sans` come alias legacy di entrambi.
 - `items`: almeno un elemento.
 - `items[].id`: identificatore stabile e univoco di 1-64 caratteri formato da lettere, numeri, trattino o underscore, usato per prova, ordine di lettura e revisioni. `cover` e `outro` sono riservati.

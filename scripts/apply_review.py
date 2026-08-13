@@ -7,6 +7,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import secrets
 import stat
 import sys
@@ -31,6 +32,7 @@ from review_core import (  # noqa: E402
     normalized_visual_style_system,
     safe_feedback_id,
     sentence_line_breaks,
+    sha256_file,
     sha256_json,
     strict_json_loads,
     valid_sha256,
@@ -40,7 +42,9 @@ from review_core import (  # noqa: E402
 
 from review_server import (  # noqa: E402
     absolute_input_path,
+    cover_image_asset,
     manifest_model as server_manifest_model,
+    normalized_cover_mode,
     read_private_json,
     reject_symlink_path,
 )
@@ -711,6 +715,105 @@ def main() -> int:
             selected_logo_mode = normalized_logo_mode(feedback.get("logo_mode"))
             if selected_logo_mode is None:
                 raise ValueError("logo_mode deve essere auto oppure hidden")
+        current_cover_visual, _ = cover_image_asset(manifest, manifest_path)
+        current_cover_mode = normalized_cover_mode(manifest, current_cover_visual)
+        selected_cover_mode = feedback.get("cover_mode", current_cover_mode)
+        if not isinstance(selected_cover_mode, str) or selected_cover_mode not in {
+            "generated",
+            "provided",
+            "typographic",
+        }:
+            raise ValueError(
+                "cover_mode deve essere generated, provided oppure typographic"
+            )
+        cover_asset_updates: dict[str, object] = {}
+        raw_cover_asset = feedback.get("cover_asset")
+        if raw_cover_asset is not None:
+            allowed_cover_asset_fields = {
+                "path",
+                "sha256",
+                "position",
+                "alt_text",
+                "concepts",
+                "metaphor",
+                "prompt",
+            }
+            if (
+                not isinstance(raw_cover_asset, dict)
+                or set(raw_cover_asset) - allowed_cover_asset_fields
+                or not {"path", "sha256", "alt_text"}.issubset(raw_cover_asset)
+            ):
+                raise ValueError("cover_asset non ha il formato canonico")
+            asset_name = raw_cover_asset.get("path")
+            if not isinstance(asset_name, str) or not asset_name:
+                raise ValueError("cover_asset.path deve essere un percorso relativo")
+            asset_relative = Path(asset_name)
+            if (
+                asset_relative.is_absolute()
+                or any(part in {"", ".", ".."} for part in asset_relative.parts)
+                or asset_relative.suffix.lower() not in {
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                    ".webp",
+                }
+            ):
+                raise ValueError("cover_asset.path non è un'immagine relativa supportata")
+            asset_root = manifest_path.parent.resolve()
+            asset_lexical_path = asset_root / asset_relative
+            reject_symlink_path(asset_lexical_path, field="cover_asset.path")
+            asset_path = asset_lexical_path.resolve()
+            try:
+                asset_path.relative_to(asset_root)
+            except ValueError as exc:
+                raise ValueError("cover_asset.path esce dalla cartella del manifest") from exc
+            if asset_path.is_symlink() or not asset_path.is_file():
+                raise ValueError("cover_asset.path non è un file regolare disponibile")
+            if asset_path.stat().st_nlink != 1:
+                raise ValueError("cover_asset.path non può essere un hard link")
+            expected_asset_sha = raw_cover_asset.get("sha256")
+            if (
+                not isinstance(expected_asset_sha, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", expected_asset_sha)
+                or sha256_file(asset_path) != expected_asset_sha
+            ):
+                raise ValueError("cover_asset.sha256 non coincide con l'immagine")
+            position = raw_cover_asset.get("position", "50% 50%")
+            if not isinstance(position, str) or not re.fullmatch(
+                r"(?:left|center|right|\d{1,3}(?:\.\d+)?%)\s+"
+                r"(?:top|center|bottom|\d{1,3}(?:\.\d+)?%)",
+                position,
+            ):
+                raise ValueError("cover_asset.position non è una posizione CSS sicura")
+            alt_text = raw_cover_asset.get("alt_text")
+            if not isinstance(alt_text, str) or not alt_text.strip() or len(alt_text) > 2_000:
+                raise ValueError("cover_asset.alt_text deve essere una descrizione non vuota")
+            concepts = raw_cover_asset.get("concepts", [])
+            if (
+                not isinstance(concepts, list)
+                or len(concepts) > 3
+                or any(
+                    not isinstance(value, str) or not value.strip() or len(value) > 500
+                    for value in concepts
+                )
+            ):
+                raise ValueError("cover_asset.concepts deve contenere al massimo tre concetti")
+            for field in ("metaphor", "prompt"):
+                value = raw_cover_asset.get(field, "")
+                if not isinstance(value, str) or len(value) > 10_000:
+                    raise ValueError(f"cover_asset.{field} non è valido")
+            if selected_cover_mode not in {"generated", "provided"}:
+                raise ValueError(
+                    "cover_asset richiede cover_mode generated oppure provided"
+                )
+            cover_asset_updates = {
+                "cover_image": asset_relative.as_posix(),
+                "cover_image_position": position,
+                "cover_alt_text": alt_text.strip(),
+                "cover_visual_concepts": concepts,
+                "cover_visual_metaphor": raw_cover_asset.get("metaphor", ""),
+                "cover_visual_prompt": raw_cover_asset.get("prompt", ""),
+            }
 
         original_items = manifest.get("items")
         if not isinstance(original_items, list) or not original_items:
@@ -968,9 +1071,19 @@ def main() -> int:
             and manifest.get("visual_style_system") != selected_visual_style
         ):
             changed.append("visual_style_system")
+        cover_mode_changed = current_cover_mode != selected_cover_mode
+        if cover_mode_changed:
+            changed.append("cover_mode")
+        cover_asset_changed = False
+        for field, value in cover_asset_updates.items():
+            if manifest.get(field) != value:
+                changed.append(field)
+                cover_asset_changed = True
 
         visual_selection_changed = bool(
             logo_mode_changed
+            or cover_mode_changed
+            or cover_asset_changed
             or emphasis_changed
             or (
                 selected_visual_style is not None
@@ -1215,6 +1328,10 @@ def main() -> int:
                     manifest["visual_style_system"] = selected_visual_style
                 if logo_mode_changed:
                     manifest["logo_mode"] = selected_logo_mode
+                if cover_mode_changed:
+                    manifest["cover_mode"] = selected_cover_mode
+                if cover_asset_changed:
+                    manifest.update(cover_asset_updates)
                 manifest["revision"] = revision + 1
             manifest["review"] = review
             server_manifest_model(manifest_path, manifest=manifest)
@@ -1234,6 +1351,7 @@ def main() -> int:
             }
         )
         atomic_write_json(state_path, state, private=True)
+        final_model = server_manifest_model(manifest_path, manifest=manifest)
         result = {
             "status": "applied",
             "feedback_id": feedback_id,
@@ -1252,6 +1370,12 @@ def main() -> int:
             "warnings": warnings,
             "visual_style_system": manifest.get("visual_style_system"),
             "logo_mode": normalized_logo_mode(manifest.get("logo_mode")) or "auto",
+            "cover_mode": final_model["cover_mode"],
+            "cover_generation_requested": (
+                final_model["cover_mode"] == "generated"
+                and final_model.get("cover_visual", {}).get("available") is not True
+            ),
+            "cover_asset_attached": cover_asset_changed,
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0

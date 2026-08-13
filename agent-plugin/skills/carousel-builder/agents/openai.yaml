@@ -1,7 +1,7 @@
 interface:
   display_name: "Carousel Builder by Vincos"
-  short_description: "Caroselli personali con tre sistemi visivi"
-  default_prompt: "Usa $carousel-builder per trasformare questo contenuto in un carosello personale, farmi confrontare Editoriale, Geometrico e Istituzionale e revisionare i testi nell'editor locale quando disponibile."
+  short_description: "Caroselli personali con percorso visivo rapido"
+  default_prompt: "Usa $carousel-builder per trasformare questo contenuto in un carosello personale, consigliarmi un sistema visivo, chiedermi se desidero una cover con visuale e revisionare i testi nell'editor locale quando disponibile."
   icon_small: "./assets/icon.svg"
   icon_large: "./assets/icon.svg"
   brand_color: '#FEBD08'

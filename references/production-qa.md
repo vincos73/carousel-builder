@@ -137,15 +137,16 @@ Confrontare ogni card con l'ultima anteprima approvata e verificare:
 
 ## Controllo visivo
 
-Generare una contact sheet dell'intera sequenza quando possibile.
+Generare una contact sheet dell'intera sequenza. Eseguire i controlli deterministici del renderer su tutte le slide: contenuto, ordine, dimensioni, fit, caricamento asset e font, geometria, pixel, digest e parità anteprima-produzione. Il report QA li attesta con `automated_all_slides: true` soltanto se l'intero set passa.
 
-Per caroselli fino a 10 slide:
+Il controllo umano normale è mirato:
 
-1. ispezionare tutte le card nella contact sheet;
-2. ispezionare ogni card a dimensione leggibile;
-3. controllare in particolare copertina, una card densa e chiusura alla risoluzione originale.
+1. ispezionare l'intera sequenza nella contact sheet;
+2. aprire a dimensione leggibile copertina, card più densa e chiusura quando presente;
+3. aprire inoltre ogni slide segnalata dai controlli automatici o sospetta nella contact sheet;
+4. ampliare il campione a tutte le card soltanto se emerge un difetto sistemico, manca la contact sheet o una slide non è valutabile nel riepilogo.
 
-Per sequenze più lunghe, ispezionare comunque l'intera contact sheet e aprire alla risoluzione originale copertina, chiusura, card più densa e almeno una card ogni tre.
+Registrare gli ID realmente aperti in `human_sample_slide_ids` e le anomalie automatiche in `flagged_slide_ids`. Il campione deve includere sempre il proof canonico e tutte le anomalie. Questa riduzione riguarda la controverifica umana ripetitiva, non la copertura automatica né l'ispezione dell'intera sequenza nella contact sheet.
 
 Verificare:
 
@@ -159,7 +160,7 @@ Verificare:
 - sistema visivo risolto, varianti controllate e struttura HTML/CSS/SVG coerenti;
 - firma strutturale obbligatoria presente sulle card interne e sulla chiusura e geometricamente coerente con la prova approvata: cornice completa per `editorial-frame`, costellazione di cinque corpi per `editorial-halftone`, indice modulare e guida orizzontale per `corporate-modular`;
 - copertina priva degli elementi strutturali dei tre sistemi, così immagine, titolo, numerazione e firma non entrano in conflitto;
-- eventuale immagine di copertina che non interferisca con la lettura;
+- eventuale immagine di copertina confinata nella colonna verticale destra, con titolo e sottotitolo nella colonna sinistra, senza sovrapposizione, trasparenza o gradiente compensativo;
 - dimensioni e rapporto d'aspetto richiesti;
 - sfondo esteso esattamente da `x=0`, `y=0` fino a 1080×1350, senza strisce o margini introdotti dal renderer;
 - assenza di SVG, filtri o elementi nascosti che occupino spazio nel flusso del documento;
@@ -200,7 +201,7 @@ Prima della consegna verificare:
 
 Se un controllo fallisce, conservare gli output validi, mantenere lo stato precedente e offrire ripetizione o fallback. Non avanzare a `consegnato`.
 
-Nel percorso `local-editor`, ispezionare prima gli artefatti mentre lo stato è `rendering`, quindi avanzare `rendering -> qa` con il risultato JSON dell'export. Solo dopo la creazione della relativa ricevuta compilare il report `carousel-builder-qa-v1` descritto in [workflow-state.md](workflow-state.md), copiandone `render_evidence_sha256`; infine avanzare `qa -> consegnato` con lo stesso `render-result` e il report. Entrambe le transizioni ricalcolano i digest degli artefatti reali. Non compilare il report come semplice copia dell'esito automatico.
+Nel percorso `local-editor`, ispezionare prima gli artefatti mentre lo stato è `rendering` e compilare il report `carousel-builder-qa-v1` descritto in [workflow-state.md](workflow-state.md). Con `finalize_delivery.py` è possibile impostare `render_evidence_sha256` a `auto`: il wrapper avanza `rendering -> qa`, crea nella sessione una copia del report legata al digest durevole appena prodotto e la usa per `qa -> consegnato`. Entrambe le transizioni ricalcolano i digest degli artefatti reali; un report già dotato di digest viene invece verificato senza riscrittura. Non compilare il report come semplice copia dell'esito automatico: `human_sample_review` richiede l'ispezione effettiva del campione dichiarato.
 
 ## Consegna
 

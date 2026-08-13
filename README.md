@@ -31,6 +31,8 @@ Se preferisci installarla dalla riga di comando, trovi il comando nella sezione 
 - configura un'identità visiva da sito, brand kit, descrizione manuale o profilo JSON;
 - distingue tra sequenza narrativa e sequenza sezionale (titolo e corpo);
 - permette di approvare profilo e testi prima della produzione grafica;
+- propone un solo sistema visivo consigliato, con un confronto opzionale e Geometrico come scelta avanzata;
+- permette di scegliere subito una copertina tipografica o con visuale, generando l'eventuale immagine soltanto dopo l'approvazione dei testi;
 - offre un editor locale per correggere, riordinare, commentare e approvare le slide quando l'ambiente lo consente (con ChatGPT desktop e Claude Code);
 - usa la revisione conversazionale come fallback negli altri ambienti;
 - produce PNG, PDF o un layout dettagliato, secondo gli strumenti messi a disposizione dall'ambiente di lavoro;
@@ -64,7 +66,7 @@ Due le modalità di sviluppo del carosello:
 
 ## Sistemi editoriali
 
-Tre i modelli di carosello disponibili: 
+Tre i modelli di carosello disponibili. Il percorso normale ne consiglia uno; l'utente può confrontare una sola alternativa e aprire Geometrico come opzione avanzata:
 
 - **Editoriale**: minimal, caratterizzato da una cornice continua 
 - **Geometrico**: estroso, caratterizzato da forme circolari colorate
@@ -76,8 +78,8 @@ Tre i modelli di carosello disponibili:
 - esportazione ad alta definizione: **1440×1800 px**;
 - prova obbligatoria a **480×600 px**;
 - adattamento tipografico automatico massimo: **8%**;
-- immagine generata in copertina (solo su ChatGPT o su chatbot che possono richiamare modelli per la creazione di immagini);
-- numerazione progressiva nell'angolo superiore destro su ogni pagina;
+- immagine opzionale generata dopo l'approvazione dei testi (solo negli ambienti che possono creare immagini), collocata in una colonna verticale a destra con il titolo a sinistra e senza sovrapposizioni;
+- numerazione progressiva nell'angolo superiore destro; nella cover con visuale resta dentro la colonna testuale;
 - font e pesi derivati dal profilo approvato, senza imporre un carattere fisso.
 
 ## Installazione locale
@@ -101,18 +103,18 @@ Il contenuto di `agent-plugin/skills/carousel-builder/` è una copia esatta dell
 
 ## Diagnosi del workflow locale
 
-La versione 2.9 aggiunge un controllo JSON unico e read-only. Valida manifest, proof e sessione, segnala feedback pendente e indica il prossimo passo sicuro senza modificare lo stato:
+La versione 2.10 mantiene un controllo JSON unico e read-only. Valida manifest, proof e sessione, segnala feedback pendente e indica il prossimo passo sicuro senza modificare lo stato:
 
 ```bash
 python3 scripts/carousel_status.py /percorso/manifest.json \
   --session-dir /percorso/sessione
 ```
 
-Il campo `next_action` restituisce la fase di revisione, il comando di apply/advance o gli output attesi dall'export. Senza `--session-dir` il comando esegue una validazione statica e dichiara esplicitamente che lo stato del feedback non è verificabile.
+Il campo `next_action` restituisce la fase di revisione, il comando sicuro o gli output attesi dall'export. Il percorso normale usa `process_review.py` per applicare e avanzare il solo checkpoint approvato, `attach_cover_asset.py` per collegare una cover dopo i testi e `finalize_delivery.py` per i due gate finali. Senza `--session-dir` lo status esegue una validazione statica e dichiara esplicitamente che lo stato del feedback non è verificabile.
 
 ## Sviluppo
 
-I cinque entrypoint del percorso `local-editor` sono coperti da test automatici. Il contratto manifest e gli strumenti Python usano la sola libreria standard; l'esportatore PDF usa le librerie Node già disponibili nell'ambiente. La CI esegue anche il percorso completo con server e Chromium reali, usando dipendenze di test bloccate nel lockfile. L'export può pubblicare un risultato JSON con digest degli artefatti, poi legato alle ricevute di stato e al report QA:
+Gli entrypoint del percorso `local-editor` sono coperti da test automatici. Il contratto manifest e gli strumenti Python usano la sola libreria standard; l'esportatore PDF usa le librerie Node già disponibili nell'ambiente. La CI esegue anche il percorso completo con server e Chromium reali, usando dipendenze di test bloccate nel lockfile. L'export può pubblicare un risultato JSON con digest degli artefatti, poi legato alle ricevute di stato e al report QA:
 
 ```bash
 python3 -m unittest discover -s tests -t tests -v

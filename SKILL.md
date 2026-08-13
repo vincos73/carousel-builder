@@ -5,17 +5,17 @@ description: Trasforma URL, articoli, newsletter, note e testi in caroselli edit
 
 # Carousel Builder
 
-Versione: **2.9.1**
+Versione: **2.10.0**
 
-Creare caroselli separando fonte, identità, testi, prova visuale, produzione e QA. Richiedere due approvazioni distinte prima del rendering completo: prima profilo e testi, poi la prova visuale. Una richiesta iniziale di creare un carosello autorizza la proposta editoriale, non la produzione grafica.
+Separare fonte, identità, testi, prova visuale, produzione e QA. Prima del rendering completo richiedere due approvazioni: profilo e testi, poi prova visuale. La richiesta iniziale autorizza solo la proposta editoriale.
 
 Non ricavare identità, logo, URL, firma o attribuzioni dalla fonte, dalla memoria o dal profilo personale. Usare solo ciò che l'utente fornisce o approva esplicitamente.
 
-Usare soltanto strumenti già disponibili. Non installare pacchetti e non scaricare browser, font o dipendenze. Nel percorso locale eseguire esclusivamente gli script inclusi e verificati dalla skill: `scripts/review_server.py`, `scripts/apply_review.py`, `scripts/advance_workflow.py`, `scripts/carousel_status.py` e `scripts/export_review_pdf.cjs`. Recuperare risorse esterne soltanto da una fonte fornita o approvata dall'utente.
+Usare soltanto strumenti disponibili: non installare pacchetti né scaricare browser, font o dipendenze. Nel percorso locale eseguire esclusivamente `scripts/review_server.py`, `scripts/process_review.py`, `scripts/attach_cover_asset.py`, `scripts/carousel_status.py`, `scripts/advance_workflow.py`, `scripts/finalize_delivery.py`, `scripts/apply_review.py` e `scripts/export_review_pdf.cjs`. Recuperare risorse esterne soltanto da fonti approvate.
 
-Il workflow canonico è `bozza` → `testi_approvati` → `prova_visuale_approvata` → `rendering` → `qa` → `consegnato`. Nel percorso `local-editor` avanzare soltanto con `advance_workflow.py`, usando sessione, revisione attesa ed evidenza richiesta: non modificare `workflow_state` o le ricevute a mano e non auto-approvare. `apply_review.py` non avanza mai; quando arriva una correzione dopo un checkpoint, riapre atomicamente l'ultimo checkpoint ancora valido. Nei percorsi `adapter` e `layout` applicare gli stessi checkpoint con il contratto del produttore disponibile, senza invocare o simulare le attestazioni del renderer locale.
+Il workflow è `bozza` → `testi_approvati` → `prova_visuale_approvata` → `rendering` → `qa` → `consegnato`. In `local-editor` non modificare a mano stato o ricevute. `process_review.py` applica il batch e avanza solo l'approvazione valida; `apply_review.py` resta il livello atomico e di recovery senza avanzamento. Usare `advance_workflow.py` per entrare in `rendering` e `finalize_delivery.py` per le transizioni finali. `adapter` e `layout` applicano gli stessi checkpoint senza simulare attestazioni locali.
 
-Prima di decidere il passo successivo o dopo un recovery, eseguire `carousel_status.py` con manifest e cartella di sessione. Usare `next_action` come diagnosi, ma applicare comunque i gate dello script indicato: il comando non modifica file né approva.
+Prima del passo successivo o dopo un recovery, eseguire `carousel_status.py` con manifest e sessione. `next_action` diagnostica senza modificare file né sostituire i gate.
 
 ## Routing delle istruzioni
 
@@ -48,29 +48,29 @@ Usare `conversation` quando almeno una capacità è realmente assente o fallisce
 
 1. Costruire copertina e sequenza secondo [editorial-workflow.md](references/editorial-workflow.md). Nel percorso rapido mostrare nella stessa revisione prima `Anteprima profilo brand` e poi `Anteprima testi`; nel guidato approvare prima il profilo.
 2. Indicare profilo, fonte, `sequence_mode`, master 1080×1350, export previsto, numero di slide e testi esatti. Ogni frase compiuta inizia su una nuova riga. Mostrare solo contenuti destinati alle slide e le minime informazioni di revisione, non manifest o note tecniche.
-3. Proporre i tre sistemi di [visual-systems.md](references/visual-systems.md) sullo stesso contenuto e identità. Salvare la scelta in `visual_style_system`; un nome, una palette o un font senza firma strutturale non costituiscono una prova valida.
-4. Nel percorso locale creare uno schema 1.4 in stato `bozza`, con `workflow_receipts: []`. Se la copertina userà un asset generato o fornito, prepararlo e collegarlo al manifest prima di aprire la prima sessione: l'editor lo tiene nascosto fino al checkpoint visuale. Non aggiungere direttamente asset al manifest dopo l'approvazione dei testi, perché cambierebbe l'impronta della sessione; se una modifica editoriale successiva rende il visuale incoerente, rigenerarlo in un nuovo manifest pulito `bozza` e riapprovare i testi. Prima di aprire l'editor, controllare tutte le card nei tre sistemi, anche a 480 px: nessuna slide iniziale deve mostrare avvisi di densità o overflow. Il copy generato con titolo è lungo al massimo 180 caratteri, quello senza titolo al massimo 320 caratteri. Correggere o dividere finché il fit è pulito senza scendere sotto il 92% della scala.
+3. Selezionare e mostrare un solo sistema consigliato secondo [visual-systems.md](references/visual-systems.md). Offrire un'alternativa soltanto su richiesta o quando la classificazione è incerta; mantenere `editorial-halftone` come opzione avanzata. Salvare la scelta in `visual_style_system`; un nome, una palette o un font senza firma strutturale non costituiscono una prova valida.
+4. Registrare `typographic` per default, oppure `generated`/`provided` se l'utente sceglie un visuale; non generare ancora l'immagine. Nel percorso locale creare uno schema 1.4 `bozza` con `workflow_receipts: []`. Controllare tutte le card nel sistema selezionato anche a 480 px: nessuna slide iniziale deve mostrare avvisi di densità o overflow. Il copy generato ha massimo 180 caratteri con titolo e 320 senza. Correggere o dividere senza scendere sotto il 92% della scala.
 5. Avviare e aprire l'editor come descritto in [visual-review.md](references/visual-review.md). Restare in ascolto dell'evento: non terminare il turno e non chiedere all'utente di scrivere «fatto».
-6. Alla ricezione, confermare subito che il batch è in lavorazione. Applicare il percorso append-only con `apply_review.py`; esaminare commenti, warning, alt text e trascrizione stale. Conservare il testo scritto dall'utente salvo incompatibilità dichiarata con fonte, modalità `verbatim` o produzione.
-7. Dopo ogni batch ripetere i controlli e lasciare che l'editor ricarichi il manifest. Una richiesta `approve` è esplicita ma non sufficiente: avanzare a `testi_approvati` soltanto con i gate descritti in [workflow-state.md](references/workflow-state.md). Se resta un blocco, mantenere `bozza` e mostrarlo.
+6. Alla ricezione, confermare subito che il batch è in lavorazione. Elaborare il batch append-only con `process_review.py`; esaminare commenti, warning, alt text e trascrizione stale. Conservare il testo scritto dall'utente salvo incompatibilità dichiarata con fonte, modalità `verbatim` o produzione.
+7. Dopo ogni batch ripetere i controlli e lasciare che l'editor ricarichi il manifest. `process_review.py` avanza a `testi_approvati` solo per una richiesta `approve` valida; se resta un blocco, mantiene `bozza` e lo espone nell'output.
 8. Nel percorso conversazionale mostrare prima le slide cambiate e poi l'intera sequenza. Offrire `Approva profilo e testi`, `Modifica il profilo` o `Modifica i testi`.
 
 ## Fase 2: prova visuale
 
-1. Estrarre 2-3 concetti e tradurli in una sola metafora secondo [cover-visual.md](references/cover-visual.md). Usare un'immagine solo per la copertina e solo se generatore o asset fornito sono disponibili; altrimenti creare una copertina tipografica completa. Nel percorso locale usare l'asset già collegato al manifest prima della prima sessione; nel percorso conversazionale generarlo dopo l'approvazione dei testi.
+1. Se `cover_mode` richiede un visuale, estrarre 2-3 concetti e tradurli in una sola metafora secondo [cover-visual.md](references/cover-visual.md), quindi generare o acquisire l'immagine soltanto ora. Nel percorso locale collegarla attraverso `attach_cover_asset.py`, mai modificando il manifest a mano. Se la modalità è `typographic` o l'immagine non è producibile, mantenere una copertina tipografica completa.
 2. Applicare la firma del sistema selezionato alle card interne e alla chiusura, mai alla copertina. Convertire le enfasi approvate in campi espliciti e rimuovere gli asterischi.
 3. Preparare il manifest conforme a [carousel-schema.md](references/carousel-schema.md), con produzione, accessibilità e prova canonica: copertina, card interna più densa e chiusura se presente.
 4. Verificare il campione a 480×600 e a risoluzione leggibile secondo [production-qa.md](references/production-qa.md). Controllare font reali, fit, contrasto, crop e firma strutturale.
-5. Mostrare la prova e offrire `Approva la prova visuale`, `Cambia la direzione grafica` o `Torna ai testi`. Nel percorso locale restare in attesa attiva anche in questo checkpoint e in ogni prova successiva.
-6. Applicare il batch visuale e avanzare a `prova_visuale_approvata` soltanto quando fingerprint, campione, stile, browser Chromium e produttore superano i gate. Dopo una modifica grafica mostrare una nuova prova; non riaprire i testi se il copy è identico.
+5. Mostrare la prova e offrire approvazione, cambio grafico o ritorno ai testi. La cover visuale usa titolo a sinistra e immagine verticale a destra, senza overlay o trasparenza. Nel percorso locale restare in attesa attiva a ogni prova.
+6. Elaborare il batch visuale con `process_review.py`: avanza a `prova_visuale_approvata` soltanto quando fingerprint, campione, stile, browser Chromium e produttore superano i gate. Dopo una modifica grafica mostrare una nuova prova; non riaprire i testi se il copy è identico.
 
 ## Fase 3: produzione, QA e consegna
 
 1. Leggere integralmente [production-qa.md](references/production-qa.md). Nel percorso locale seguire anche [workflow-state.md](references/workflow-state.md) e avanzare a `rendering` soltanto con proof corrente e output attesi dichiarati.
 2. Nel percorso locale esportare dallo stesso DOM `.slide-preview` e dallo stesso CSS approvati, con l'invocazione documentata in [production-qa.md](references/production-qa.md#invocazione-local-editor). Non creare un secondo template. Richiedere parità esatta di contenuto, revisione, fingerprint, geometria e pixel prima e dopo la cattura.
 3. Se manca un controllo tipografico affidabile o il produttore non implementa il sistema selezionato, non generare card complete: consegnare un layout dettagliato dichiarando il limite.
-4. Per sequenze fino a 10 slide ispezionare contact sheet e ogni card a dimensione leggibile; per sequenze più lunghe seguire il campionamento del QA. Se emerge un difetto, applicare la correzione, lasciare che il workflow riapra il checkpoint ancora valido e ripetere proof e transizioni richieste prima di tornare a `rendering`: non riesportare direttamente dagli stati `qa` o `consegnato`.
-5. Avanzare `rendering` → `qa` soltanto con il risultato verificato dell'export. Avanzare `qa` → `consegnato` soltanto con report QA positivo, revisione e fingerprint correnti e digest degli artefatti verificati. Non presentare output parziali come finali.
+4. Controllare automaticamente tutte le slide. Umanamente ispezionare la contact sheet e aprire copertina, card più densa, chiusura e anomalie; ampliare solo se emerge un difetto. Dopo correzioni ripetere proof e transizioni prima di `rendering`; non riesportare da `qa` o `consegnato`.
+5. Dopo export e ispezione, usare `finalize_delivery.py` con risultato di render e report QA. Lo script avanza `rendering` → `qa` e poi `qa` → `consegnato` soltanto con revisione, fingerprint, campione umano e digest validi; se il secondo gate fallisce conserva lo stato `qa`. Non presentare output parziali come finali.
 6. Consegnare solo artefatti realmente prodotti e aperti, indicando quantità, dimensioni, formato e modalità. Creare uno ZIP soltanto su richiesta esplicita.
 
 ## Contratto editoriale essenziale
@@ -80,7 +80,7 @@ Usare `conversation` quando almeno una capacità è realmente assente o fallisce
 - Includere sempre la copertina e, per `newsletter` e `article`, la chiusura salvo scelta diversa. Il sottotitolo è opzionale e mai inventato. Generare la CTA dalla fonte corrente, non dal profilo riutilizzabile.
 - Separare le frasi con `\n`, senza righe vuote; non spezzare abbreviazioni, iniziali, decimali, domini o URL. Nel render ogni frase è un blocco con `sentence_gap_em: 0.6` oltre a `body_line_height`.
 - Usare i font approvati nei ruoli `display`, `body` ed eventuale `emphasis_italic`; non sintetizzare il corsivo. `*_bold`, `*_italic`, `*_underline` e `*_accent` contengono locuzioni esatte, distinte e non sovrapposte. Il grassetto suggerito resta rimovibile e non blocca l'approvazione.
-- Usare HTML/CSS/SVG deterministici. Le slide interne restano tipografiche salvo richiesta esplicita; gli SVG strutturali del sistema sono ammessi. Numerare ogni pagina in alto a destra dentro la safe area.
+- Usare HTML/CSS/SVG deterministici. Le slide interne restano tipografiche salvo richiesta esplicita; gli SVG strutturali del sistema sono ammessi. Numerare ogni pagina in alto a destra dentro la safe area; nella cover split il numero resta in alto a destra nella colonna testuale e non invade l'immagine.
 - Il master è 1080×1350 in 4:5, l'export 1440×1800 e la prova 480×600, senza reflow. Per rapporti diversi creare una variante separata e una nuova approvazione. L'adattamento automatico non supera l'8%; altrimenti si rivede il copy.
 - Verificare accessibilità, ordine di lettura, trascrizione o alt text, contrasto e leggibilità a dimensione feed. Non affidare significati soltanto a colore, peso, corsivo, famiglia o posizione.
 

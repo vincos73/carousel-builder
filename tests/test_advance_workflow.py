@@ -20,6 +20,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import advance_workflow  # noqa: E402
+import finalize_delivery  # noqa: E402
 import review_core  # noqa: E402
 import review_server  # noqa: E402
 
@@ -418,6 +419,8 @@ class AdvanceWorkflowTest(unittest.TestCase):
                 "evidence_sha256"
             ],
             "checks": {key: True for key in advance_workflow.QA_REQUIRED_CHECKS},
+            "human_sample_slide_ids": model["proof"]["required_slide_ids"],
+            "flagged_slide_ids": [],
             "artifacts": artifacts,
         }
 
@@ -449,6 +452,40 @@ class AdvanceWorkflowTest(unittest.TestCase):
         self.assertEqual(
             self.read_manifest()["workflow_receipts"][-1]["to"], "consegnato"
         )
+
+    def test_finalize_delivery_traverses_both_machine_checked_final_gates(self) -> None:
+        manifest = self.approved_manifest("rendering")
+        self.write_manifest(manifest)
+        pdf, png_dir, result = self.make_render_outputs(manifest)
+        result_path = self.workdir / "render-result.json"
+        write_json(result_path, result)
+        report = self.qa_report(manifest, pdf, png_dir)
+        report["render_evidence_sha256"] = "auto"
+        report_path = self.workdir / "qa-report.json"
+        write_json(report_path, report)
+
+        finalized = finalize_delivery.finalize_delivery(
+            self.manifest_path,
+            session_dir_path=self.session_dir,
+            render_result_path=result_path,
+            qa_report_path=report_path,
+        )
+
+        self.assertEqual(finalized["status"], "finalized")
+        self.assertEqual(
+            [transition["to"] for transition in finalized["transitions"]],
+            ["qa", "consegnato"],
+        )
+        self.assertTrue(finalized["qa_report_bound"])
+        bound_report = Path(finalized["qa_report"])
+        self.assertTrue(bound_report.is_file())
+        self.assertEqual(
+            json.loads(bound_report.read_text(encoding="utf-8"))[
+                "render_evidence_sha256"
+            ],
+            review_core.sha256_json(result),
+        )
+        self.assertEqual(self.read_manifest()["workflow_state"], "consegnato")
 
     def test_render_result_rejects_a_tampered_artifact_before_qa(self) -> None:
         manifest = self.approved_manifest("rendering")
