@@ -1,21 +1,21 @@
 ---
 name: carousel-builder
-description: Trasforma URL, articoli, newsletter, note e testi in caroselli editoriali verticali 4:5 per Instagram, LinkedIn e altri canali social. Configura o riutilizza un'identità visiva, guida l'approvazione editoriale, usa un editor HTML locale quando la sessione supporta Python, browser locale e ricezione degli eventi, e passa automaticamente alla revisione conversazionale negli altri ambienti.
+description: Trasforma URL, articoli e testi in caroselli editoriali 4:5, guidando identità visiva e approvazione in editor locale o conversazione.
 ---
 
 # Carousel Builder
 
-Versione: **2.11.3**
+Versione: **2.11.4**
 
-Separare fonte, identità, testi, prova visuale, produzione e QA. Usare il consenso combinato solo per una preview tipografica già definitiva che supera i gate di [visual-review.md](references/visual-review.md); altrimenti mantenere due approvazioni. Conservare sempre due ricevute durevoli prima del rendering. La richiesta iniziale autorizza solo la proposta editoriale.
+Separare fonte, identità, testi, prova visuale, produzione e QA. Il consenso combinato vale solo per una preview tipografica definitiva conforme a [visual-review.md](references/visual-review.md); altrimenti servono due approvazioni e due ricevute durevoli prima del rendering. La richiesta iniziale autorizza solo la proposta editoriale.
 
-Non ricavare identità, logo, URL, firma o attribuzioni dalla fonte, dalla memoria o dal profilo personale. Usare solo ciò che l'utente fornisce o approva esplicitamente.
+Identità, logo, URL, firma e attribuzioni devono essere forniti o approvati dall'utente; non ricavarli da fonte, memoria o profilo personale.
 
-Usare soltanto strumenti disponibili: non installare pacchetti né scaricare browser, font o dipendenze. Nel percorso locale eseguire esclusivamente `scripts/review_server.py`, `scripts/process_review.py`, `scripts/attach_cover_asset.py`, `scripts/carousel_status.py`, `scripts/advance_workflow.py`, `scripts/finalize_delivery.py`, `scripts/apply_review.py` e `scripts/export_review_pdf.cjs`. Recuperare risorse esterne soltanto da fonti approvate.
+Usare solo strumenti disponibili, senza installare pacchetti né scaricare browser, font o dipendenze. Nel percorso locale eseguire esclusivamente `scripts/review_server.py`, `scripts/process_review.py`, `scripts/attach_cover_asset.py`, `scripts/carousel_status.py`, `scripts/advance_workflow.py`, `scripts/finalize_delivery.py`, `scripts/apply_review.py` e `scripts/export_review_pdf.cjs`. Risorse esterne solo da fonti approvate.
 
-Il workflow è `bozza` → `testi_approvati` → `prova_visuale_approvata` → `rendering` → `qa` → `consegnato`. In `local-editor` non modificare a mano stato o ricevute. `process_review.py` applica il batch e avanza i checkpoint coperti; nel percorso combinato registra in sequenza le prime due ricevute. `apply_review.py` resta il livello atomico e di recovery senza avanzamento. Usare `advance_workflow.py` per entrare in `rendering` e `finalize_delivery.py` per le transizioni finali. `adapter` e `layout` applicano gli stessi checkpoint senza simulare attestazioni locali.
+Il workflow è `bozza` → `testi_approvati` → `prova_visuale_approvata` → `rendering` → `qa` → `consegnato`. In `local-editor` non modificare stato o ricevute. `process_review.py` applica i checkpoint coperti; `apply_review.py` è di recovery, `advance_workflow.py` entra in `rendering` e `finalize_delivery.py` chiude i gate. `adapter` e `layout` rispettano gli stessi checkpoint senza simulare attestazioni locali.
 
-Prima del passo successivo o dopo un recovery, eseguire `carousel_status.py` con manifest e sessione. `next_action` diagnostica senza modificare file né sostituire i gate.
+Prima del passo successivo o dopo recovery, eseguire `carousel_status.py` con manifest e sessione. `next_action` diagnostica senza modificare file.
 
 ## Routing delle istruzioni
 
@@ -51,6 +51,7 @@ Usare `conversation` quando almeno una capacità è realmente assente o fallisce
 3. Selezionare e mostrare un solo sistema consigliato secondo [visual-systems.md](references/visual-systems.md). Offrire un'alternativa soltanto su richiesta o quando la classificazione è incerta; mantenere `editorial-halftone` come opzione avanzata. Salvare la scelta in `visual_style_system`; un nome, una palette o un font senza firma strutturale non costituiscono una prova valida.
 4. Registrare `typographic` per default, oppure `generated`/`provided` se l'utente sceglie un visuale; non generare ancora l'immagine. Nel percorso locale creare uno schema 1.4 `bozza` con `workflow_receipts: []`. Controllare tutte le card nel sistema selezionato anche a 480 px: nessuna slide iniziale deve mostrare avvisi di densità o overflow. Il copy generato ha massimo 180 caratteri con titolo e 320 senza. Correggere o dividere senza scendere sotto il 92% della scala.
 5. Avviare e aprire l'editor come descritto in [visual-review.md](references/visual-review.md). Restare in ascolto dell'evento: non terminare il turno e non chiedere all'utente di scrivere «fatto».
+   Subito dopo l'apertura entrare nel ciclo di ricezione del processo già avviato, con attese di massimo 50 secondi. Finché l'editor mostra `Ora tocca a te`, non inviare una risposta finale e non lasciare il server senza una chiamata di attesa attiva. Quando arriva un evento `feedback`, inviare immediatamente un aggiornamento in chat che confermi ID, azione e prossimo passo; soltanto dopo eseguire `process_review.py`.
 6. Alla ricezione, confermare subito in chat il batch e l'azione successiva. Elaborare il batch append-only con `process_review.py`; esaminare commenti, warning, alt text e trascrizione stale. Conservare il testo scritto dall'utente salvo incompatibilità dichiarata con fonte, modalità `verbatim` o produzione.
 7. Dopo ogni batch ripetere i controlli e lasciare che l'editor ricarichi il manifest. Quando [visual-review.md](references/visual-review.md) abilita `Approva e produci`, `process_review.py` registra in sequenza `testi_approvati` e `prova_visuale_approvata`; altrimenti avanza solo il primo checkpoint. Se resta un blocco, mantiene `bozza` e lo espone nell'output.
 8. Nel percorso conversazionale mostrare prima le slide cambiate e poi l'intera sequenza. Offrire `Approva profilo e testi`, `Modifica il profilo` o `Modifica i testi`.

@@ -3430,7 +3430,10 @@
   }
 
   function schedulePoll(delay = null) {
-    if (productionRender || document.hidden) return;
+    // A pending submission is a durable handoff to the agent. Keep polling it
+    // even when the in-app browser moves this tab to the background; otherwise
+    // the server receives the batch but the editor never observes its outcome.
+    if (productionRender || (document.hidden && !hasPendingLock())) return;
     window.clearTimeout(pollTimer);
     const backoff = Math.min(POLL_MAX_DELAY, POLL_BASE_DELAY * (2 ** Math.min(pollFailures, 4)));
     pollTimer = window.setTimeout(pollStatus, delay ?? backoff);
@@ -3447,7 +3450,7 @@
   }
 
   async function pollStatus() {
-    if (pollInFlight || productionRender || document.hidden) return;
+    if (pollInFlight || productionRender || (document.hidden && !hasPendingLock())) return;
     pollInFlight = true;
     pollAbortController = new AbortController();
     try {
@@ -3892,8 +3895,10 @@
   });
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
-      window.clearTimeout(pollTimer);
-      pollAbortController?.abort();
+      if (!hasPendingLock()) {
+        window.clearTimeout(pollTimer);
+        pollAbortController?.abort();
+      }
       return;
     }
     schedulePoll(0);

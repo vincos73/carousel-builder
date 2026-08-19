@@ -151,7 +151,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('"/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"', between)
         self.assertIn('Accept: application/octet-stream', between)
         self.assertIn("sha256sum --check SHA256SUMS", between)
-        self.assertIn('unzip -t "$download_dir/carousel-builder.zip"', between)
+        self.assertIn('unzip -t "$download_dir/$root_archive"', between)
         self.assertIn('test "$(jq -r \'.prerelease\'', between)
         self.assertIn("Riprendo la release draft", RELEASE)
 
@@ -198,10 +198,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Genera checksum pubblici", RELEASE)
         self.assertIn("> SHA256SUMS", RELEASE)
         self.assertIn("dist/SHA256SUMS", RELEASE)
-        self.assertIn(
-            '"SHA256SUMS,carousel-builder-agent-plugin.zip,carousel-builder.zip"',
-            RELEASE,
-        )
+        self.assertIn('root_archive="carousel-builder-${TAG}.zip"', RELEASE)
+        self.assertIn('plugin_archive="carousel-builder-agent-plugin-${TAG}.zip"', RELEASE)
+        self.assertIn('expected_assets="SHA256SUMS,$plugin_archive,$root_archive"', RELEASE)
         downloaded_compare = 'cmp dist/SHA256SUMS "$download_dir/SHA256SUMS"'
         self.assertIn(downloaded_compare, RELEASE)
         self.assertLess(
@@ -223,8 +222,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "npm audit --audit-level=high",
             "node --test tests/test_export_review_pdf_e2e.cjs",
             "Verifica il mirror Agent Plugin",
-            "unzip -t dist/carousel-builder.zip",
-            "unzip -t dist/carousel-builder-agent-plugin.zip",
+            'unzip -t "dist/$root_archive"',
+            'unzip -t "dist/$plugin_archive"',
             'diff -r "$root_stage" "$root_extract/carousel-builder"',
             'diff -r "$plugin_stage" "$plugin_extract"',
         ]
