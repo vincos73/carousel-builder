@@ -199,6 +199,17 @@
     validationList: document.querySelector("#validation-list"),
     retrySubmitButton: document.querySelector("#retry-submit-button"),
     exportRecoveryButton: document.querySelector("#export-recovery-button"),
+    workflowJourney: document.querySelector("#workflow-journey"),
+    workflowJourneyTitle: document.querySelector("#workflow-journey-title"),
+    workflowJourneyCopy: document.querySelector("#workflow-journey-copy"),
+    workflowSteps: document.querySelector("#workflow-steps"),
+    agentStatusCard: document.querySelector("#agent-status-card"),
+    agentStatusLabel: document.querySelector("#agent-status-label"),
+    agentStatusDetail: document.querySelector("#agent-status-detail"),
+    toggleProofEditing: document.querySelector("#toggle-proof-editing"),
+    proofEditingNote: document.querySelector("#proof-editing-note"),
+    guidanceTitle: document.querySelector("#guidance-title"),
+    guidanceList: document.querySelector("#guidance-list"),
   };
 
   let model = null;
@@ -240,6 +251,7 @@
   let previewContractRun = 0;
   let validationMode = false;
   let activeValidationIssues = [];
+  let proofEditingExpanded = true;
   const fitWarnings = new Map();
   const pendingPreviewIds = new Set();
   const fontLoadCache = new Map();
@@ -1101,6 +1113,124 @@
     return staleRevision !== null || staleWorkflowState !== null || staleApprovalCheckpoint !== null;
   }
 
+  function workflowPhase() {
+    const state = model?.workflow_state || "bozza";
+    if (state === "testi_approvati") return "visual";
+    if (["prova_visuale_approvata", "rendering", "qa", "consegnato"].includes(state)) return "production";
+    return "content";
+  }
+
+  function renderProofMode() {
+    const proofStage = model?.workflow_state === "testi_approvati" && !productionRender;
+    elements.editor?.classList.toggle("proof-mode", proofStage);
+    elements.editor?.classList.toggle("proof-editing", proofStage && proofEditingExpanded);
+    if (elements.toggleProofEditing) {
+      elements.toggleProofEditing.hidden = !proofStage;
+      elements.toggleProofEditing.setAttribute("aria-expanded", String(proofEditingExpanded));
+      elements.toggleProofEditing.textContent = proofEditingExpanded
+        ? "Torna alla prova visiva"
+        : "Modifica contenuti o grafica";
+    }
+    if (elements.proofEditingNote) elements.proofEditingNote.hidden = !proofStage;
+  }
+
+  function renderGuidance(phase) {
+    if (!elements.guidanceList || !elements.guidanceTitle) return;
+    const guidance = phase === "visual"
+      ? {
+          title: "Come controllare la prova",
+          items: [
+            "Apri le slide richieste e controlla composizione, gerarchia e leggibilità.",
+            "Verifica copertina, logo o firma e sistema visivo.",
+            "Per correggere qualcosa, seleziona Modifica contenuti o grafica.",
+            "Approva la prova visiva: è il secondo consenso, distinto da quello sui testi.",
+          ],
+        }
+      : phase === "production"
+        ? {
+            title: "Che cosa succede ora",
+            items: [
+              "L’agente esegue rendering e controlli sul carosello approvato.",
+              "Puoi chiudere questa scheda: la consegna finale arriverà nella chat.",
+            ],
+          }
+        : {
+            title: "Come revisionare",
+            items: [
+              "Correggi i testi nell’editor accanto all’anteprima.",
+              "Seleziona una parola o una frase per applicare uno stile o aggiungere un commento.",
+              "Sposta o elimina le slide interne con i comandi della slide.",
+              "Approva i testi per dare il primo consenso e chiedere la prova visiva.",
+            ],
+          };
+    elements.guidanceTitle.textContent = guidance.title;
+    elements.guidanceList.replaceChildren(...guidance.items.map((item) => create("li", "", item)));
+  }
+
+  function renderWorkflowJourney() {
+    if (!model || !elements.workflowJourney) return;
+    const phase = workflowPhase();
+    const fast = fastApprovalEligible();
+    const waiting = hasPendingLock();
+    const delivered = model.workflow_state === "consegnato";
+    const titles = {
+      content: "Revisione di profilo e testi",
+      visual: "Controlla la prova visiva",
+      production: delivered ? "Carosello consegnato" : "Produzione del carosello",
+    };
+    const copies = {
+      content: fast
+        ? "La prova tipografica è già definitiva: il prossimo consenso approverà insieme testi e grafica."
+        : "Questo è il primo checkpoint: approva profilo e testi per richiedere una prova visiva separata.",
+      visual: "Questo è il secondo checkpoint: controlla la resa grafica prima di autorizzare la produzione.",
+      production: delivered
+        ? "Rendering e controlli sono completati. Trovi i file finali nella chat."
+        : "I due consensi sono registrati. L’agente sta completando rendering e controlli.",
+    };
+    elements.workflowJourneyTitle.textContent = titles[phase];
+    elements.workflowJourneyCopy.textContent = copies[phase];
+    const order = ["content", "visual", "production"];
+    const currentIndex = order.indexOf(phase);
+    for (const step of elements.workflowSteps?.querySelectorAll("[data-workflow-step]") || []) {
+      const index = order.indexOf(step.dataset.workflowStep);
+      const complete = delivered || index < currentIndex || (phase === "production" && index < 2);
+      step.classList.toggle("is-complete", complete);
+      step.classList.toggle("is-current", !delivered && index === currentIndex);
+      if (!delivered && index === currentIndex) step.setAttribute("aria-current", "step");
+      else step.removeAttribute("aria-current");
+    }
+
+    let statusLabel = "Ora tocca a te";
+    let statusDetail = phase === "visual"
+      ? "Esamina la prova; quando sei pronto, approvala oppure riapri le modifiche."
+      : "Rivedi il carosello e scegli come proseguire.";
+    let status = "review";
+    if (submissionError) {
+      status = "error";
+      statusLabel = "Invio da controllare";
+      statusDetail = "La bozza è al sicuro. Segui le indicazioni mostrate per ritentare o recuperarla.";
+    } else if (waiting) {
+      status = "working";
+      statusLabel = foreignFeedbackId ? "Aggiornamento in corso in un’altra scheda" : "Richiesta ricevuta";
+      statusDetail = "L’agente sta elaborando la richiesta. Resta in questa scheda: la nuova revisione comparirà automaticamente.";
+    } else if (phase === "production") {
+      status = delivered ? "complete" : "working";
+      statusLabel = delivered ? "Consegna completata" : "Produzione in corso";
+      statusDetail = delivered
+        ? "Puoi chiudere questa scheda e usare i file finali ricevuti nella chat."
+        : "Puoi chiudere questa scheda: rendering, controlli e consegna proseguono nella chat.";
+    } else if (fast) {
+      status = "ready";
+      statusLabel = "Consenso unico disponibile";
+      statusDetail = "Il pulsante approverà esplicitamente sia i testi sia la prova grafica definitiva.";
+    }
+    elements.agentStatusCard.dataset.state = status;
+    elements.agentStatusLabel.textContent = statusLabel;
+    elements.agentStatusDetail.textContent = statusDetail;
+    renderProofMode();
+    renderGuidance(phase);
+  }
+
   function syncMobileActions() {
     const pairs = [
       [elements.mobileUndoButton, elements.undoButton],
@@ -1176,6 +1306,7 @@
       ...elements.coverChoice?.querySelectorAll("button") || [],
       elements.compareVisualSystems,
       elements.showAdvancedVisualSystem,
+      elements.toggleProofEditing,
     ]) {
       if (node) node.disabled = false;
     }
@@ -2767,6 +2898,7 @@
     staleWorkflowState = null;
     staleApprovalCheckpoint = null;
     hydrateDraft();
+    proofEditingExpanded = model.workflow_state !== "testi_approvati" || computeChangeCount() > 0;
     renderAll();
   }
 
@@ -2973,17 +3105,17 @@
       : visualApproved
         ? "Prova visuale approvata"
         : visualProofStage
-          ? "Approva"
-          : "Approva";
+          ? "Approva la prova visiva"
+          : fast ? "Approva testi e grafica" : "Approva i testi";
     if (elements.approveButton) elements.approveButton.textContent = approvalLabel;
     if (elements.mobileApproveButton) elements.mobileApproveButton.textContent = approvalLabel;
     if (elements.confirmApproval) {
-      elements.confirmApproval.textContent = "Approva";
+      elements.confirmApproval.textContent = approvalLabel;
     }
     if (elements.approvalDialogTitle) {
       elements.approvalDialogTitle.textContent = fast
         ? "Confermi testi e grafica?"
-        : visualProofStage ? "Confermi la prova visiva?" : "Confermi l’approvazione?";
+        : visualProofStage ? "Confermi la prova visiva?" : "Confermi profilo e testi?";
     }
     if (elements.approvalDialogCopy) {
       const coverMode = resolvedCoverMode();
@@ -2991,11 +3123,29 @@
         ? "immagine generata"
         : coverMode === "provided" ? "immagine fornita" : "copertina tipografica";
       elements.approvalDialogCopy.textContent = fast
-        ? `Con un solo consenso approvi i testi mostrati e la prova grafica definitiva con ${coverLabel}. Dopo i controlli automatici il carosello passerà direttamente alla produzione.`
+        ? `Questa anteprima soddisfa i requisiti del percorso rapido. Con un solo consenso approvi i testi mostrati e la prova grafica definitiva con ${coverLabel}; il carosello passerà quindi alla produzione.`
         : visualProofStage
-          ? `Confermi composizione, ${coverLabel}, gerarchia tipografica, sito e firma. Il rendering completo inizierà soltanto dopo questa approvazione.`
-          : `Le modifiche e i commenti saranno inviati insieme. L’agente eseguirà ancora i controlli editoriali prima di avanzare lo stato. Se la preview è già definitiva e senza avvisi, potrai approvare testi e grafica con un solo consenso; altrimenti verrà mostrata una prova visuale separata con ${coverLabel}.`;
+          ? `Questo è il secondo consenso. Confermi composizione, ${coverLabel}, gerarchia tipografica e identificazione del brand. Gli avvisi sono informativi e saranno accettati con questo consenso. L’agente potrà quindi avviare rendering e controlli finali.`
+          : `Questo è il primo consenso. Confermi profilo, sequenza e testi; modifiche e commenti saranno inviati insieme. L’agente preparerà poi una prova visiva separata con ${coverLabel}, che richiederà un secondo consenso.`;
     }
+    renderWorkflowJourney();
+  }
+
+  function approvalBrandSummary(metrics) {
+    const brand = previewBrand();
+    const hasTextSignature = Boolean(String(brand.signature || "").trim() || String(brand.website || "").trim());
+    const logoCount = logoMode === "auto" ? metrics.logoSlides : 0;
+    const fallbackCount = hasTextSignature ? metrics.logoTotal - logoCount : 0;
+    if (logoMode === "hidden") {
+      return hasTextSignature
+        ? `Logo nascosto; firma testuale applicata su ${metrics.logoTotal}/${metrics.logoTotal} slide`
+        : "Logo nascosto; nessuna firma testuale disponibile";
+    }
+    if (logoCount === metrics.logoTotal) return `Logo applicato su ${logoCount}/${metrics.logoTotal} slide`;
+    if (logoCount > 0 && fallbackCount > 0) return `Logo applicato su ${logoCount}/${metrics.logoTotal} slide; firma testuale sulle altre ${fallbackCount}`;
+    if (logoCount > 0) return `Logo applicato su ${logoCount}/${metrics.logoTotal} slide; ${metrics.logoTotal - logoCount} senza identificazione del brand`;
+    if (fallbackCount > 0) return `Firma testuale applicata su ${fallbackCount}/${metrics.logoTotal} slide`;
+    return "Nessun logo o firma disponibile nelle slide";
   }
 
   function validationTarget(issue) {
@@ -3323,6 +3473,10 @@
           );
           const styleName = definition.label.replace(/^[A-Z] · /, "");
           showToast(`Bozza inviata e applicata. Sistema visivo: ${styleName}. Revisione ${model.revision}.`);
+        } else if (submittedAction === "approve" && model.workflow_state === "testi_approvati") {
+          showToast("Testi approvati. Ora controlla la prova visiva.");
+        } else if (submittedAction === "approve" && ["prova_visuale_approvata", "rendering", "qa", "consegnato"].includes(model.workflow_state)) {
+          showToast("Prova visiva approvata. La produzione può iniziare.");
         } else {
           showToast("Le modifiche dirette sono state applicate. Controlla la nuova revisione.");
         }
@@ -3600,6 +3754,16 @@
     setCoverChoice(values[nextIndex], { focus: true });
   });
   elements.styleExportButton?.addEventListener("click", exportStyleProfile);
+  elements.toggleProofEditing?.addEventListener("click", () => {
+    proofEditingExpanded = !proofEditingExpanded;
+    renderProofMode();
+    if (proofEditingExpanded) {
+      elements.visualSystemPicker?.querySelector("[tabindex='0']")?.focus({ preventScroll: true });
+    } else {
+      elements.workflowJourney?.scrollIntoView({ block: "start", behavior: "smooth" });
+      elements.toggleProofEditing.focus({ preventScroll: true });
+    }
+  });
   elements.undoButton?.addEventListener("click", undoLastChange);
   elements.resetButton?.addEventListener("click", resetDraft);
   elements.sendButton?.addEventListener("click", () => submit("feedback"));
@@ -3618,12 +3782,14 @@
       const warnings = [...fitWarnings.values()].filter((warning) => warning.schema || warning.overflow).length;
       const advisoryCount = collectApprovalAdvisories().length;
       const metrics = approvalMetrics();
-      const logoSummary = logoMode === "hidden" ? "Logo nascosto" : `Logo disponibile su ${metrics.logoSlides}/${metrics.logoTotal} slide`;
+      const logoSummary = approvalBrandSummary(metrics);
       const densitySummary = warnings === 0 ? "Nessun avviso di densità." : `${warnings} ${warnings === 1 ? "avviso" : "avvisi"} di densità da considerare.`;
       const advisorySummary = advisoryCount === 0 ? "Nessun altro avviso." : `${advisoryCount} ${advisoryCount === 1 ? "avviso informativo" : "avvisi informativi"}.`;
       const scopeSummary = combinedApproval
         ? "Questo unico consenso copre testi e prova grafica definitiva."
-        : "Gli avvisi editoriali e le slide non ancora viste non bloccano questa approvazione.";
+        : model.workflow_state === "testi_approvati"
+          ? "Questo è il secondo consenso e autorizza la produzione."
+          : "Questo è il primo consenso e riguarda profilo, sequenza e testi.";
       elements.approvalSummary.textContent = `Hai visualizzato ${viewedSlideIds.size} di ${draftSlides.length} slide. ${logoSummary}. Enfasi applicate: ${metrics.bold} ${metrics.bold === 1 ? "grassetto" : "grassetti"}, ${metrics.italic} ${metrics.italic === 1 ? "corsivo" : "corsivi"}, ${metrics.underline} ${metrics.underline === 1 ? "sottolineatura" : "sottolineature"}, ${metrics.accent} ${metrics.accent === 1 ? "evidenziazione" : "evidenziazioni"}. ${densitySummary} ${advisorySummary} ${scopeSummary}`;
     }
     elements.approvalDialog?.showModal();

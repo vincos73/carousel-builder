@@ -59,6 +59,41 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertIn("Invia bozza · poi riapprova", pending)
         self.assertIn("elements.mobileSendButton", pending)
 
+    def test_workflow_journey_distinguishes_both_consents_and_proof_mode(self) -> None:
+        self.assertIn('id="workflow-journey"', self.html)
+        self.assertIn('data-workflow-step="content"', self.html)
+        self.assertIn('data-workflow-step="visual"', self.html)
+        self.assertIn('data-workflow-step="production"', self.html)
+        approval = self.source.split("function updateApprovalCopy()", 1)[1].split(
+            "function approvalBrandSummary", 1
+        )[0]
+        self.assertIn('"Approva i testi"', approval)
+        self.assertIn('"Approva la prova visiva"', approval)
+        self.assertIn('"Approva testi e grafica"', approval)
+        self.assertIn("Questo è il primo consenso", approval)
+        self.assertIn("Questo è il secondo consenso", approval)
+        self.assertIn("renderWorkflowJourney();", approval)
+        self.assertIn('classList.toggle("proof-mode", proofStage)', self.source)
+        self.assertIn('classList.toggle("proof-editing", proofStage && proofEditingExpanded)', self.source)
+        self.assertIn('id="toggle-proof-editing"', self.html)
+        self.assertIn('.editor.proof-mode:not(.proof-editing) .slide-form', self.stylesheet)
+        self.assertIn("scroll-snap-type: inline mandatory", self.stylesheet)
+
+    def test_agent_status_and_logo_fallback_are_described_as_outcomes(self) -> None:
+        self.assertIn('id="agent-status-card"', self.html)
+        journey = self.source.split("function renderWorkflowJourney()", 1)[1].split(
+            "function syncMobileActions", 1
+        )[0]
+        self.assertIn("Richiesta ricevuta", journey)
+        self.assertIn("Resta in questa scheda", journey)
+        self.assertIn("Puoi chiudere questa scheda", journey)
+        brand = self.source.split("function approvalBrandSummary", 1)[1].split(
+            "function validationTarget", 1
+        )[0]
+        self.assertIn("Firma testuale applicata", brand)
+        self.assertIn("Nessun logo o firma disponibile", brand)
+        self.assertNotIn("Logo disponibile su", brand)
+
     def test_sent_draft_confirms_the_persisted_visual_system(self) -> None:
         poll = self.source.split("async function pollStatus()", 1)[1].split(
             "function clearPendingSelection", 1
@@ -67,6 +102,8 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertIn('submittedVisualSystem === modelVisualSystem()', poll)
         self.assertIn('Bozza inviata e applicata. Sistema visivo:', poll)
         self.assertIn('Revisione ${model.revision}', poll)
+        self.assertIn("Testi approvati. Ora controlla la prova visiva.", poll)
+        self.assertIn("Prova visiva approvata. La produzione può iniziare.", poll)
         self.assertIn("Invia bozza per applicare le modifiche", self.html)
 
     def test_fast_approval_is_strict_and_sends_one_combined_scope(self) -> None:
@@ -207,7 +244,7 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         self.assertIn('engine, major', self.source)
         self.assertNotIn('["firefox",', self.source)
         self.assertNotIn('["webkit",', self.source)
-        self.assertIn("Gli avvisi editoriali e le slide non ancora viste non bloccano", self.source)
+        self.assertIn("Gli avvisi sono informativi", self.source)
 
     def test_slide_is_seen_only_after_half_of_the_preview_is_observed(self) -> None:
         jump = self.source.split("function jumpToSlide(slideId)", 1)[1].split(

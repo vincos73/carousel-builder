@@ -237,6 +237,17 @@ async function closePage(client, page) {
   await client.send("Target.disposeBrowserContext", { browserContextId: page.browserContextId }).catch(() => {});
 }
 
+async function captureReviewScreenshot(client, page, filename) {
+  const directory = process.env.UX_SCREENSHOT_DIR;
+  if (!directory) return;
+  await fs.mkdir(directory, { recursive: true });
+  const screenshot = await client.send("Page.captureScreenshot", {
+    format: "png",
+    captureBeyondViewport: false,
+  }, page.sessionId);
+  await fs.writeFile(path.join(directory, filename), Buffer.from(screenshot.data, "base64"));
+}
+
 function manifestFixture() {
   return {
     schema_version: "1.4",
@@ -363,6 +374,138 @@ test("stopProcess cancella il timer sul termine rapido e forza SIGKILL dopo la d
   };
   await stopProcess(stuck, 25);
   assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("browser reale: i due consensi restano distinti e la prova visiva è read-first anche su mobile", { timeout: 90_000 }, async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "carousel-browser-proof-"));
+  const manifestPath = path.join(directory, "manifest.json");
+  const sessionDirectory = path.join(directory, "session");
+  const chromeDirectory = path.join(directory, "chrome-profile");
+  let server = null;
+  let chrome = null;
+  let client = null;
+  context.after(async () => {
+    if (client) {
+      await client.send("Browser.close").catch(() => {});
+      client.close();
+    }
+    await Promise.all([
+      ...(chrome ? [stopProcess(chrome.processHandle)] : []),
+      ...(server ? [stopProcess(server.processHandle)] : []),
+    ]);
+    for (const reader of [...(chrome?.readers || []), ...(server?.readers || [])]) reader.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifestFixture(), null, 2)}\n`, "utf8");
+  await fs.copyFile(path.join(ROOT, "assets", "fonts", "Inter-Variable.ttf"), path.join(directory, "display.ttf"));
+  await fs.mkdir(chromeDirectory);
+
+  server = await startServer(manifestPath, sessionDirectory);
+  chrome = await startChrome(chromeDirectory);
+  client = new CdpClient(chrome.webSocketUrl);
+  await client.connect();
+  const page = await newIncognitoPage(client);
+  await navigate(client, page, server.ready.url);
+  await waitFor(client, page, "document.documentElement.dataset.previewReady === 'true'", "anteprima editoriale pronta");
+  assert.deepEqual(
+    await evaluate(client, page, `({
+      cta: document.querySelector('#approve-button').textContent,
+      title: document.querySelector('#workflow-journey-title').textContent,
+      current: document.querySelector('#workflow-steps [aria-current="step"] strong').textContent,
+    })`),
+    { cta: "Approva i testi", title: "Revisione di profilo e testi", current: "Profilo e testi" },
+  );
+
+  await evaluate(client, page, `document.querySelector('#approve-button').click()`);
+  await waitFor(client, page, "document.querySelector('#approval-dialog').open", "dialog primo consenso");
+  assert.equal(
+    await evaluate(client, page, "document.querySelector('#approval-dialog-copy').textContent.includes('primo consenso')"),
+    true,
+  );
+  await evaluate(client, page, `document.querySelector('#confirm-approval').click()`);
+  const feedbackPath = path.join(sessionDirectory, "feedback.json");
+  const approval = await readJsonWhen(feedbackPath, (value) => value.action === "approve", "Persistenza primo consenso");
+  assert.equal(approval.approval_scope, undefined);
+  const sessionState = JSON.parse(await fs.readFile(path.join(sessionDirectory, "session-state.json"), "utf8"));
+  const processed = spawnSync(process.env.PYTHON || "python3", [
+    path.join(ROOT, "scripts", "process_review.py"),
+    manifestPath,
+    sessionState.last_feedback_path,
+    "--session-dir",
+    sessionDirectory,
+  ], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(processed.status, 0, processed.stderr || processed.stdout);
+  await waitFor(
+    client,
+    page,
+    `document.querySelector('#editor').classList.contains('proof-mode')
+      && !document.querySelector('#editor').classList.contains('proof-editing')
+      && document.querySelector('#approve-button').textContent === 'Approva la prova visiva'`,
+    "secondo checkpoint read-first",
+  );
+  assert.deepEqual(
+    await evaluate(client, page, `({
+      title: document.querySelector('#workflow-journey-title').textContent,
+      current: document.querySelector('#workflow-steps [aria-current="step"] strong').textContent,
+      formDisplay: getComputedStyle(document.querySelector('.slide-form')).display,
+      filmstripFlow: getComputedStyle(document.querySelector('#slides')).gridAutoFlow,
+      toggle: document.querySelector('#toggle-proof-editing').textContent,
+      toast: document.querySelector('#toast').textContent,
+    })`),
+    {
+      title: "Controlla la prova visiva",
+      current: "Prova visiva",
+      formDisplay: "none",
+      filmstripFlow: "column",
+      toggle: "Modifica contenuti o grafica",
+      toast: "Testi approvati. Ora controlla la prova visiva.",
+    },
+  );
+  await captureReviewScreenshot(client, page, "proof-desktop.png");
+  await evaluate(client, page, `document.querySelector('#toggle-proof-editing').click()`);
+  await waitFor(
+    client,
+    page,
+    `document.querySelector('#editor').classList.contains('proof-editing')
+      && getComputedStyle(document.querySelector('.slide-form')).display !== 'none'`,
+    "riapertura esplicita delle modifiche",
+  );
+  assert.match(
+    await evaluate(client, page, "document.querySelector('#proof-editing-note').textContent"),
+    /riapriranno anche l’approvazione editoriale/,
+  );
+  await evaluate(client, page, `document.querySelector('#toggle-proof-editing').click()`);
+
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 1,
+    mobile: true,
+  }, page.sessionId);
+  await waitFor(client, page, "window.innerWidth === 390", "viewport mobile 390 px");
+  const mobile = await evaluate(client, page, `(() => {
+    const journey = document.querySelector('#workflow-journey').getBoundingClientRect();
+    const slides = document.querySelector('#slides');
+    const preview = document.querySelector('.slide-preview').getBoundingClientRect();
+    return {
+      bodyWidth: document.body.scrollWidth,
+      viewportWidth: window.innerWidth,
+      journeyLeft: journey.left,
+      journeyRight: journey.right,
+      filmstripScrollable: slides.scrollWidth > slides.clientWidth,
+      previewWidth: preview.width,
+      desktopActions: getComputedStyle(document.querySelector('.actions')).display,
+      mobileActions: getComputedStyle(document.querySelector('#mobile-actions-button')).display,
+    };
+  })()`);
+  assert.ok(mobile.bodyWidth <= mobile.viewportWidth, JSON.stringify(mobile));
+  assert.ok(mobile.journeyLeft >= 0 && mobile.journeyRight <= mobile.viewportWidth, JSON.stringify(mobile));
+  assert.equal(mobile.filmstripScrollable, true);
+  assert.ok(mobile.previewWidth >= 280 && mobile.previewWidth < 390, JSON.stringify(mobile));
+  assert.equal(mobile.desktopActions, "none");
+  assert.notEqual(mobile.mobileActions, "none");
+  await captureReviewScreenshot(client, page, "proof-mobile.png");
+  await closePage(client, page);
 });
 
 test("browser reale: consenso combinato, fresh production 480x600, riordino, submit e recovery", { timeout: 90_000 }, async (context) => {
@@ -508,8 +651,10 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
     await evaluate(client, approvalPage, `({
       label: document.querySelector('#approve-button').textContent,
       scope: document.querySelector('#approval-dialog').dataset.approvalScope || "",
+      title: document.querySelector('#approval-dialog-title').textContent,
+      currentStep: document.querySelector('#workflow-steps [aria-current="step"] strong').textContent,
     })`),
-    { label: "Approva", scope: "" },
+    { label: "Approva i testi", scope: "", title: "Confermi profilo e testi?", currentStep: "Profilo e testi" },
   );
   await evaluate(client, approvalPage, "document.querySelector('#approval-dialog').close()");
 
@@ -527,8 +672,18 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   await waitFor(
     client,
     approvalPage,
-    "document.querySelector('#approve-button').textContent === 'Approva'",
+    "document.querySelector('#approve-button').textContent === 'Approva testi e grafica'",
     "abilitazione consenso combinato",
+  );
+  assert.deepEqual(
+    await evaluate(client, approvalPage, `({
+      status: document.querySelector('#agent-status-label').textContent,
+      copy: document.querySelector('#workflow-journey-copy').textContent,
+    })`),
+    {
+      status: "Consenso unico disponibile",
+      copy: "La prova tipografica è già definitiva: il prossimo consenso approverà insieme testi e grafica.",
+    },
   );
   await evaluate(client, approvalPage, `document.querySelector('#approve-button').click()`);
   await waitFor(client, approvalPage, "document.querySelector('#approval-dialog').open === true", "dialog approvazione combinata");

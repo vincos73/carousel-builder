@@ -51,6 +51,23 @@
             </div>
             <p id="font-status" class="font-status" hidden aria-live="polite"></p>
           </div>
+          <section id="workflow-journey" class="workflow-journey" aria-labelledby="workflow-journey-title">
+            <div class="workflow-journey-copy">
+              <h2 id="workflow-journey-title">Revisione di profilo e testi</h2>
+              <p id="workflow-journey-copy">Controlla i contenuti prima di chiedere la prova visiva.</p>
+              <button id="toggle-proof-editing" class="button button-secondary proof-editing-toggle" type="button" aria-expanded="false" hidden>Modifica contenuti o grafica</button>
+              <p id="proof-editing-note" class="proof-editing-note" hidden>Le modifiche grafiche richiederanno una nuova prova; quelle ai testi riapriranno anche l’approvazione editoriale.</p>
+            </div>
+            <ol id="workflow-steps" class="workflow-steps" aria-label="Avanzamento della revisione">
+              <li data-workflow-step="content"><span>1</span><strong>Profilo e testi</strong><small>Primo consenso</small></li>
+              <li data-workflow-step="visual"><span>2</span><strong>Prova visiva</strong><small>Secondo consenso</small></li>
+              <li data-workflow-step="production"><span>3</span><strong>Produzione</strong><small>Rendering e controlli</small></li>
+            </ol>
+            <div id="agent-status-card" class="agent-status-card" role="status" aria-live="polite">
+              <strong id="agent-status-label">Ora tocca a te</strong>
+              <p id="agent-status-detail">Rivedi il carosello e scegli come proseguire.</p>
+            </div>
+          </section>
           <section class="visual-systems" aria-labelledby="visual-systems-title">
             <div class="visual-systems-copy">
               <h3 id="visual-systems-title">Sistema visivo</h3>
@@ -117,8 +134,8 @@
           </section>
 
           <section class="panel guidance-panel">
-            <h2>Come revisionare</h2>
-            <ol>
+            <h2 id="guidance-title">Come revisionare</h2>
+            <ol id="guidance-list">
               <li>Correggi i testi nell’editor accanto all’anteprima.</li>
               <li>Seleziona una parola o una frase per applicare uno stile o aggiungere un commento.</li>
               <li>Sposta o elimina le slide interne con i comandi della slide.</li>
@@ -146,7 +163,7 @@
         <button id="undo-button" class="button button-ghost" type="button" disabled>Annulla ultima</button>
         <button id="reset-button" class="button button-ghost" type="button">Ripristina</button>
         <button id="send-button" class="button button-secondary" type="button">Invia bozza</button>
-        <button id="approve-button" class="button button-primary" type="button">Approva</button>
+        <button id="approve-button" class="button button-primary" type="button">Approva i testi</button>
       </div>
       <button id="mobile-actions-button" class="button button-secondary" type="button" aria-haspopup="dialog">Azioni di revisione</button>
     </footer>
@@ -171,7 +188,7 @@
         <p id="approval-summary" class="approval-summary" aria-live="polite"></p>
         <div class="dialog-actions">
           <button class="button button-ghost" value="cancel">Torna alla revisione</button>
-          <button id="confirm-approval" class="button button-primary" type="button">Approva</button>
+          <button id="confirm-approval" class="button button-primary" type="button">Approva i testi</button>
         </div>
       </form>
     </dialog>
@@ -183,7 +200,7 @@
         <div class="mobile-actions-list">
           <button id="mobile-undo-button" class="button button-ghost" type="button" disabled>Annulla ultima modifica</button>
           <button id="mobile-send-button" class="button button-secondary" type="button">Invia bozza</button>
-          <button id="mobile-approve-button" class="button button-primary" type="button">Approva</button>
+          <button id="mobile-approve-button" class="button button-primary" type="button">Approva i testi</button>
           <button id="mobile-reset-button" class="button button-ghost" type="button">Ripristina modifiche</button>
         </div>
         <div class="dialog-actions">

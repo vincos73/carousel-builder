@@ -5,7 +5,7 @@ description: Trasforma URL, articoli, newsletter, note e testi in caroselli edit
 
 # Carousel Builder
 
-Versione: **2.11.2**
+Versione: **2.11.3**
 
 Separare fonte, identità, testi, prova visuale, produzione e QA. Usare il consenso combinato solo per una preview tipografica già definitiva che supera i gate di [visual-review.md](references/visual-review.md); altrimenti mantenere due approvazioni. Conservare sempre due ricevute durevoli prima del rendering. La richiesta iniziale autorizza solo la proposta editoriale.
 
@@ -32,7 +32,7 @@ Caricare solo ciò che serve alla fase corrente:
 
 ## Percorso di revisione
 
-Usare `local-editor` solo se è possibile eseguire Python 3.10 o successivo, aprire `127.0.0.1` nel browser dell'utente e ricevere gli eventi del server. Quando tutte e tre le capacità esistono, `local-editor` è obbligatorio: aprirlo nello stesso turno appena manifest e preflight sono pronti, senza chiedere se l'utente lo desidera. Non dichiararlo disponibile finché non è visibile.
+Usare `local-editor` solo se è possibile eseguire Python 3.10 o successivo, aprire `127.0.0.1` nel browser dell'utente e ricevere gli eventi del server. `local-editor` è obbligatorio quando le capacità esistono: aprirlo subito una sola volta nella superficie già assegnata, senza chiedere conferma. Non dichiararlo disponibile finché non è visibile.
 
 Usare `conversation` quando almeno una capacità è realmente assente o fallisce. Mostrare sezioni Markdown normali e modificabili, mai HTML stampato, code fence o blocchi monospazio. Dichiarare il fallback e mantenere gli stessi checkpoint.
 
@@ -51,7 +51,7 @@ Usare `conversation` quando almeno una capacità è realmente assente o fallisce
 3. Selezionare e mostrare un solo sistema consigliato secondo [visual-systems.md](references/visual-systems.md). Offrire un'alternativa soltanto su richiesta o quando la classificazione è incerta; mantenere `editorial-halftone` come opzione avanzata. Salvare la scelta in `visual_style_system`; un nome, una palette o un font senza firma strutturale non costituiscono una prova valida.
 4. Registrare `typographic` per default, oppure `generated`/`provided` se l'utente sceglie un visuale; non generare ancora l'immagine. Nel percorso locale creare uno schema 1.4 `bozza` con `workflow_receipts: []`. Controllare tutte le card nel sistema selezionato anche a 480 px: nessuna slide iniziale deve mostrare avvisi di densità o overflow. Il copy generato ha massimo 180 caratteri con titolo e 320 senza. Correggere o dividere senza scendere sotto il 92% della scala.
 5. Avviare e aprire l'editor come descritto in [visual-review.md](references/visual-review.md). Restare in ascolto dell'evento: non terminare il turno e non chiedere all'utente di scrivere «fatto».
-6. Alla ricezione, confermare subito che il batch è in lavorazione. Elaborare il batch append-only con `process_review.py`; esaminare commenti, warning, alt text e trascrizione stale. Conservare il testo scritto dall'utente salvo incompatibilità dichiarata con fonte, modalità `verbatim` o produzione.
+6. Alla ricezione, confermare subito in chat il batch e l'azione successiva. Elaborare il batch append-only con `process_review.py`; esaminare commenti, warning, alt text e trascrizione stale. Conservare il testo scritto dall'utente salvo incompatibilità dichiarata con fonte, modalità `verbatim` o produzione.
 7. Dopo ogni batch ripetere i controlli e lasciare che l'editor ricarichi il manifest. Quando [visual-review.md](references/visual-review.md) abilita `Approva e produci`, `process_review.py` registra in sequenza `testi_approvati` e `prova_visuale_approvata`; altrimenti avanza solo il primo checkpoint. Se resta un blocco, mantiene `bozza` e lo espone nell'output.
 8. Nel percorso conversazionale mostrare prima le slide cambiate e poi l'intera sequenza. Offrire `Approva profilo e testi`, `Modifica il profilo` o `Modifica i testi`.
 
