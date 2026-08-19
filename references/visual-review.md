@@ -14,8 +14,8 @@ Usare questa modalità soltanto quando Python 3.10 o successivo e un browser loc
 python3 <skill>/scripts/review_server.py <manifest.json> --session-dir <session-dir>
 ```
 
-4. Aprire subito nel browser l'indirizzo della prima riga JSON: con capacità locali, l'apertura dell'editor è obbligatoria. Prima di consegnarlo, controllare copertina e card nel sistema consigliato a 480 px; controllare l'alternativa solo se verrà mostrata. Correggere soglie o overflow finché la proposta visibile è pulita.
-5. Mantenere attivo il processo e ascoltarlo in ogni checkpoint dell'editor: testi, prova visuale e nuove prove. Non concludere il turno dopo l'apertura né chiedere di scrivere «fatto».
+4. Assegnare una sola superficie browser alla sessione prima di aprire l'indirizzo della prima riga JSON. Preferire e riusare la scheda del browser interno quando disponibile; usare Chrome o un launcher di sistema soltanto se l'utente lo richiede o se il browser interno non è utilizzabile. Non aprire lo stesso editor in entrambe le superfici. Con capacità locali, l'apertura dell'editor è obbligatoria. Prima di consegnarlo, controllare copertina e card nel sistema consigliato a 480 px; controllare l'alternativa solo se verrà mostrata. Correggere soglie o overflow finché la proposta visibile è pulita.
+5. Mantenere attivo il processo e ascoltarlo in ogni checkpoint dell'editor: testi, prova visuale e nuove prove. Non concludere il turno dopo l'apertura né chiedere di scrivere «fatto». Appena arriva un batch, confermarne la ricezione in chat prima di elaborarlo; l'utente non deve interpretare il silenzio come un blocco.
 6. Attendere al massimo 50 secondi per volta. Senza output, leggere `session-state.json`: se `last_feedback_id` differisce da `applied_feedback_id`, usare `last_action` e `last_feedback_path` come segnale durevole. Per stati legacy usare `feedback.json`. Ripetere finché arriva un batch o l'utente interrompe.
 7. Considerare l'output del processo una notifica immediata e `session-state.json` la fonte durevole per il recupero. Se la sessione non consente un'attesa attiva sufficientemente lunga né la lettura dello stato, dichiarare il limite prima di consegnare l'editor e usare come fallback la ripresa manuale in chat.
 
@@ -30,6 +30,8 @@ Nel checkpoint visuale `proof.required_slide_ids` contiene copertina, card più 
 ## Interazioni dell'editor
 
 L'interfaccia rende disponibili modifica, riordino, commenti, enfasi tipografiche, scelta progressiva del sistema visivo, modalità del logo e intenzione della copertina. `Con visuale` non blocca l'approvazione editoriale: nello stato `testi_approvati` segnala che l'asset va prodotto e collegato prima della prova. Nel percorso normale affidarsi ai controlli e ai messaggi dell'editor. Leggere [editor-capabilities.md](editor-capabilities.md) soltanto se l'utente chiede istruzioni su questi comandi o se occorre diagnosticare un blocco dell'interfaccia.
+
+L'editor mostra tre passaggi persistenti: profilo e testi, prova visiva, produzione. Il consenso sui testi e quello sulla prova visiva devono avere etichette diverse. Il percorso combinato è ammesso soltanto quando viene annunciato prima del click come consenso unico su testi e grafica. Nello stato `testi_approvati`, mostrare per default la galleria della prova; riaprire i controlli soltanto dopo l'azione esplicita `Modifica contenuti o grafica`, spiegando quali checkpoint verranno invalidati.
 
 ## Ricezione e applicazione
 
