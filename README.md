@@ -11,13 +11,13 @@ Se usi Claude tieni presente che Anthropic non dispone di un modello nativo per 
 
 ## Inizia da qui
 
-Puoi scaricare subito il pacchetto in formato ZIP:
+Puoi scaricare subito il pacchetto ZIP versionato:
 
-[**Scarica Carousel Builder**](https://github.com/vincos73/carousel-builder/releases/latest/download/carousel-builder.zip)
+[**Apri l'ultima release di Carousel Builder**](https://github.com/vincos73/carousel-builder/releases/latest)
 
 Non serve conoscere GitHub o usare il terminale per iniziare.
 
-1. Scarica il file ZIP dal link qui sopra.
+1. Scarica il file `carousel-builder-vX.Y.Z.zip` dall'ultima release.
 2. Se il tuo strumento IA permette di caricare una skill, carica direttamente il file ZIP. Se chiede una cartella, scompatta il file e seleziona la cartella `carousel-builder`.
 3. Dopo l'installazione, invoca la skill con `$carousel-builder` o `/carousel-builder` e incolla un URL, un testo o le tue note.
 
@@ -87,8 +87,7 @@ Tre i modelli di carosello disponibili. Il percorso normale ne consiglia uno; l'
 Questa procedura serve soltanto per installare la skill nella directory locale di Codex. Apri il terminale e scrivi:
 
 ```bash
-curl -L https://github.com/vincos73/carousel-builder/releases/latest/download/carousel-builder.zip -o carousel-builder.zip
-unzip -q carousel-builder.zip
+unzip -q carousel-builder-vX.Y.Z.zip
 mkdir -p ~/.codex/skills
 cp -R carousel-builder ~/.codex/skills/
 ```
