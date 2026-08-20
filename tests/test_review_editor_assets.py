@@ -68,10 +68,9 @@ class ReviewEditorAssetTest(unittest.TestCase):
             "function approvalBrandSummary", 1
         )[0]
         self.assertIn('"Approva i testi"', approval)
-        self.assertIn('"Approva la prova visiva"', approval)
-        self.assertIn('"Approva testi e grafica"', approval)
+        self.assertIn('"Genera"', approval)
         self.assertIn("Questo è il primo consenso", approval)
-        self.assertIn("Questo è il secondo consenso", approval)
+        self.assertIn("Genera ciò che vedi", approval)
         self.assertIn("renderWorkflowJourney();", approval)
         self.assertIn('classList.toggle("proof-mode", proofStage)', self.source)
         self.assertIn('classList.toggle("proof-editing", proofStage && proofEditingExpanded)', self.source)
@@ -85,8 +84,15 @@ class ReviewEditorAssetTest(unittest.TestCase):
             "function syncMobileActions", 1
         )[0]
         self.assertIn("Richiesta ricevuta", journey)
-        self.assertIn("Resta in questa scheda", journey)
-        self.assertIn("Puoi chiudere questa scheda", journey)
+        self.assertIn('const productionReady = workflowState === "prova_visuale_approvata"', journey)
+        self.assertIn('const rendering = workflowState === "rendering"', journey)
+        self.assertIn('const qualityAssurance = workflowState === "qa"', journey)
+        self.assertIn("Pronto per la produzione", journey)
+        self.assertIn("Produzione in corso", journey)
+        self.assertIn("Controlli in corso", journey)
+        self.assertIn('waiting || phase === "production"', journey)
+        self.assertNotIn("Puoi chiudere questa scheda", self.source)
+        self.assertIn("I consensi sono registrati, ma il rendering non è ancora iniziato", self.source)
         brand = self.source.split("function approvalBrandSummary", 1)[1].split(
             "function validationTarget", 1
         )[0]
@@ -113,13 +119,12 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertIn('model?.workflow_state !== "bozza"', fast)
         self.assertIn('resolvedCoverMode() !== "typographic"', fast)
         self.assertIn('model?.production?.mode !== "renderer"', fast)
-        self.assertIn("proofSlidesAtCanonicalSize()", fast)
+        self.assertIn("browserProofDescriptor()", fast)
         self.assertIn("collectApprovalIssues", fast)
-        self.assertIn("collectApprovalAdvisories", fast)
         self.assertIn('const combinedApprovalScope = "profile_text_and_visual"', self.source)
         self.assertIn("payload.approval_scope = combinedApprovalScope", self.source)
         self.assertIn('const approvalLabel = delivered', self.source)
-        self.assertIn("Questo unico consenso copre testi e prova grafica definitiva.", self.source)
+        self.assertIn("Generare il carosello?", self.source)
 
     def test_stale_pending_is_recovered_and_never_retried_against_a_new_base(self) -> None:
         hydrate = self.source.split("function hydrateDraft()", 1)[1].split("function fontStack", 1)[0]
@@ -235,7 +240,7 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         self.assertNotIn("collectPaletteContrastIssues()", gate)
         self.assertIn("collectPaletteContrastIssues()", advisories)
         self.assertIn("payload.proof_slide_ids = requiredProofSlideIds()", submit)
-        self.assertIn("payload.style_system_verified = true", submit)
+        self.assertNotIn("payload.style_system_verified", submit)
         self.assertIn("payload.proof_browser = browserProofDescriptor()", submit)
         self.assertIn("proof: clone(model?.proof || {})", snapshot)
         self.assertIn("production: clone(model?.production || {})", snapshot)
@@ -244,7 +249,7 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         self.assertIn('engine, major', self.source)
         self.assertNotIn('["firefox",', self.source)
         self.assertNotIn('["webkit",', self.source)
-        self.assertIn("Gli avvisi sono informativi", self.source)
+        self.assertIn("gli avvisi restano consultivi", self.source)
 
     def test_slide_is_seen_only_after_half_of_the_preview_is_observed(self) -> None:
         jump = self.source.split("function jumpToSlide(slideId)", 1)[1].split(
@@ -296,8 +301,9 @@ assert.equal(previewReadyForApproval({ previewReady: "false" }), false);
         self.assertIn("requirePreviewReady: false", publisher)
         self.assertIn("if (!(await configurePreviewTypography(run))) return;", publisher)
         self.assertIn("if (!fontAssetRequiresVerifiedLoad(asset))", typography)
-        self.assertIn('failure.code = "FONT_ASSET_LOAD_FAILED"', typography)
-        self.assertNotIn("fallback dichiarato (caricamento non riuscito)", typography)
+        self.assertIn("fontAdvisories.push", typography)
+        self.assertIn("l’anteprima usa un fallback", typography)
+        self.assertIn("Puoi comunque generare", typography)
         self.assertLess(
             typography.index("if (run !== previewContractRun) return false;"),
             typography.index('document.documentElement.style.setProperty("--preview-display"'),
@@ -629,16 +635,15 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         self.assertGreaterEqual(stylesheet.count("width: 88%;"), 3)
         self.assertIn("hyphens: none", stylesheet)
 
-    def test_local_editor_requires_clean_initial_fit(self) -> None:
+    def test_local_editor_starts_with_a_clean_proposal_and_advisory_fit(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         workflow = (ROOT / "references" / "editorial-workflow.md").read_text(encoding="utf-8")
         visual_review = (ROOT / "references" / "visual-review.md").read_text(encoding="utf-8")
-        self.assertIn("nessuna slide iniziale deve mostrare avvisi di densità o overflow", skill)
         self.assertIn("`local-editor` è obbligatorio", skill)
-        self.assertIn("massimo 180 caratteri", skill)
-        self.assertIn("320 senza", skill)
-        self.assertIn("una prima proposta già impaginabile", workflow)
-        self.assertIn("trattare le soglie come limiti rigidi", workflow)
+        self.assertIn("180 caratteri con titolo e 320 senza come obiettivi editoriali", skill)
+        self.assertIn("avvisi consultivi", skill)
+        self.assertIn("La prima proposta dovrebbe rispettarli", workflow)
+        self.assertIn("avviso consultivo", workflow)
         self.assertIn("sistema consigliato", visual_review)
         self.assertIn("l'apertura dell'editor è obbligatoria", visual_review)
 

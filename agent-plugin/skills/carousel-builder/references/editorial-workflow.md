@@ -61,7 +61,7 @@ Se la distinzione è incerta e cambia sensibilmente il risultato, proporre la mo
 - Dividere soltanto sui doppi a capo.
 - Copiare ogni paragrafo senza riscriverlo.
 - Formulare la copertina senza alterare le card.
-- Se un paragrafo non entra dopo la riduzione massima dell'8%, fermarsi. In modalità `verbatim`, chiedere se dividerlo su più card o cambiare formato senza riscriverlo; nelle altre modalità richiedere una revisione del copy. Non ridurre ulteriormente il font.
+- Se un paragrafo non entra dopo la riduzione massima dell'8%, segnalarlo senza ridurre ulteriormente il font. In modalità `verbatim`, proporre di dividerlo su più card o cambiare formato senza riscriverlo; nelle altre modalità proporre una revisione del copy. L'utente può comunque scegliere `Genera` assumendosi la responsabilità del risultato.
 
 ## Chiusura
 
@@ -87,9 +87,9 @@ Se la distinzione è incerta e cambia sensibilmente il risultato, proporre la mo
 
 - In modalità `sectional`, preferire titoli entro 10 parole. In modalità `narrative`, verificare che i titoli interni siano vuoti.
 - Evitare che il corpo ripeta letteralmente il titolo senza aggiungere informazione.
-- Per il copy generato, trattare le soglie come limiti rigidi: massimo 320 caratteri nelle card senza titolo e massimo 180 caratteri nei riassunti con titolo. Non consegnare né aprire nell'editor una bozza generata che li superi.
+- Per il copy generato, usare come obiettivi massimo 320 caratteri nelle card senza titolo e massimo 180 caratteri nei riassunti con titolo. La prima proposta dovrebbe rispettarli; le modifiche successive dell'utente possono superarli e ricevono un avviso consultivo.
 - Per testo `verbatim` o scritto dall'utente, mostrare il superamento senza riscriverlo automaticamente e proporre una divisione. Anche sotto soglia, la decisione finale dipende dal fit reale sul master 1080×1350 e dalla prova a 480 px.
-- Prima di invitare l'utente nell'editor locale, verificare l'intera bozza nel sistema visivo consigliato. Se compare un avviso di soglia o il testo non entra dopo l'adattamento massimo dell'8%, riscrivere o dividere la slide e ripetere il controllo: l'utente deve ricevere una prima proposta già impaginabile, non un errore da risolvere. Verificare un'alternativa soltanto se verrà realmente mostrata.
+- Prima di invitare l'utente nell'editor locale, verificare l'intera bozza nel sistema visivo consigliato. Se compare un avviso di soglia o il testo non entra dopo l'adattamento massimo dell'8%, migliorare la prima proposta quando possibile. Nell'editor non correggere automaticamente né bloccare una scelta successiva dell'utente. Verificare un'alternativa soltanto se verrà realmente mostrata.
 - Nel fallback conversazionale verificare gli asterischi bilanciati. Nel manifest e nell'editor proporre un grassetto nelle card interne con corpo, senza renderlo obbligatorio; consentire più trattamenti su parole o locuzioni distinte e impedire stili multipli sulla stessa unità o selezioni sovrapposte.
 - Trattare nomi propri composti come unità indivisibili.
 - Verificare che nessuna riga contenga due frasi compiute.

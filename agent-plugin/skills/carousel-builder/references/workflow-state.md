@@ -76,7 +76,7 @@ Se parte da `rendering`, il wrapper valida il risultato e avanza a `qa`, poi val
 I gate sono cumulativi:
 
 - `bozza -> testi_approvati`: batch `approve` applicato alla revisione corrente, stage `profile_text`, digest del feedback valido e zero commenti pendenti;
-- `testi_approvati -> prova_visuale_approvata`: batch `approve` allo stage `visual_proof`, campione visto, proof e fingerprint correnti, Chromium attestato, produttore locale e zero commenti pendenti;
+- `testi_approvati -> prova_visuale_approvata`: batch `approve` allo stage `visual_proof`, proof e fingerprint correnti, Chromium attestato, produttore locale e zero commenti pendenti; il campione visto e gli avvisi visuali restano consultivi;
 - `prova_visuale_approvata -> rendering`: proof ancora corrente e `production.expected_outputs` non vuoto. Nel renderer locale sono ammessi `pdf`, `png` e `contact_sheet` (`contact-sheet` è alias); il PDF è obbligatorio;
 - `rendering -> qa`: `render-result` corrente e artefatti esistenti con digest SHA-256 coincidenti;
 - `qa -> consegnato`: lo stesso `render-result` già legato alla ricevuta, report QA positivo e gli stessi artefatti ancora presenti.
@@ -98,7 +98,7 @@ I percorsi degli artefatti sono assoluti. `artifact_sha256` deve coprire esattam
 
 ## Report QA
 
-Creare `qa-report.json` soltanto dopo aver aperto e ispezionato gli artefatti secondo [production-qa.md](production-qa.md). Non impostare un controllo a `true` sulla sola base dell'esito dell'esportatore. La forma richiesta è:
+Creare `qa-report.json` dopo aver verificato struttura, leggibilità dei file, digest e corrispondenza degli artefatti secondo [production-qa.md](production-qa.md). La revisione umana è consigliata ma consultiva; non impostare comunque un controllo tecnico a `true` sulla sola base dell'esito dell'esportatore. La forma richiesta è:
 
 ```json
 {
@@ -128,7 +128,7 @@ Creare `qa-report.json` soltanto dopo aver aperto e ispezionato gli artefatti se
 }
 ```
 
-Usare la revisione, il fingerprint e il browser correnti. `automated_all_slides` attesta che i controlli deterministici hanno coperto l'intera sequenza; `human_sample_review` attesta l'ispezione umana dell'intera contact sheet e, a dimensione leggibile, almeno copertina, card più densa, chiusura se presente e tutte le slide elencate in `flagged_slide_ids`. `human_sample_slide_ids` deve contenere questi ID senza duplicati. Con `finalize_delivery.py`, lasciare `render_evidence_sha256: "auto"`: dopo `rendering -> qa` il wrapper crea una copia privata e immutata negli altri campi, sostituendo soltanto questo valore con il digest durevole dell'oggetto `render-result`. Se si usa direttamente `advance_workflow.py`, copiare invece quel digest dall'ultima ricevuta. In `artifacts` ripetere l'insieme completo e i digest correnti del risultato di export; l'esempio mostra il solo caso `expected_outputs: ["pdf"]`.
+Usare la revisione, il fingerprint e il browser correnti. `automated_all_slides` attesta che i controlli tecnici deterministici hanno coperto l'intera sequenza ed è bloccante. `fonts` e `human_sample_review` sono advisory: registrarli come `true` o `false` in base a ciò che è stato realmente verificato. Quando l'ispezione umana avviene, `human_sample_slide_ids` elenca gli ID osservati senza duplicati; può restare vuoto. Con `finalize_delivery.py`, lasciare `render_evidence_sha256: "auto"`: dopo `rendering -> qa` il wrapper crea una copia privata e immutata negli altri campi, sostituendo soltanto questo valore con il digest durevole dell'oggetto `render-result`. Se si usa direttamente `advance_workflow.py`, copiare invece quel digest dall'ultima ricevuta. In `artifacts` ripetere l'insieme completo e i digest correnti del risultato di export; l'esempio mostra il solo caso `expected_outputs: ["pdf"]`.
 
 ## Ricevute durevoli
 

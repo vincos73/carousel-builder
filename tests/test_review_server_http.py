@@ -293,12 +293,6 @@ class ReviewServerHTTPTest(unittest.TestCase):
             {
                 "/assets/fonts/InstrumentSerif-Regular.ttf",
                 "/assets/fonts/Inter-Variable.ttf",
-                "/assets/fonts/Onest-Bold.ttf",
-                "/assets/fonts/Onest-Medium.ttf",
-                "/assets/fonts/Onest-Regular.ttf",
-                "/assets/fonts/Onest-Semibold.ttf",
-                "/assets/fonts/Orbitron-Variable.ttf",
-                "/assets/fonts/PlayfairDisplay-Italic-Variable.ttf",
             },
         )
         for path in font_paths:

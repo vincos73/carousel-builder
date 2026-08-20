@@ -1202,10 +1202,7 @@ def main() -> int:
             for item in new_items
         ]
         approval_issues = approval_warnings(new_items) + copy_limit_issues(approval_slides)
-        if feedback["action"] == "approve" and approval_issues:
-            raise ValueError("Approvazione bloccata: " + "; ".join(approval_issues))
-        if feedback["action"] == "feedback":
-            warnings.extend(approval_issues)
+        warnings.extend(approval_issues)
 
         if bind_approved_proof:
             expected_proof_slide_ids = canonical_proof_slide_ids(
@@ -1216,10 +1213,6 @@ def main() -> int:
                 raise ValueError(
                     "proof_slide_ids non coincide con il campione canonico della prova"
                 )
-            if feedback.get("style_system_verified") is not True:
-                raise ValueError(
-                    "La prova visuale richiede style_system_verified: true"
-                )
             proof_browser = validated_proof_browser(feedback.get("proof_browser"))
             if proof is None:
                 proof = {}
@@ -1228,8 +1221,9 @@ def main() -> int:
                 proof["slide_ids"] = expected_proof_slide_ids
                 if "proof.slide_ids" not in changed:
                     changed.append("proof.slide_ids")
-            if proof.get("style_system_verified") is not True:
-                proof["style_system_verified"] = True
+            style_system_verified = feedback.get("style_system_verified") is True
+            if proof.get("style_system_verified") is not style_system_verified:
+                proof["style_system_verified"] = style_system_verified
                 changed.append("proof.style_system_verified")
             if proof.get("browser") != proof_browser:
                 proof["browser"] = proof_browser

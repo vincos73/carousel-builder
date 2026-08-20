@@ -128,6 +128,10 @@
   const token = queryParams.get("token") || "";
   const productionRender = queryParams.get("render") === "production";
   const parityCapture = queryParams.get("capture") === "parity";
+  const validReturnUrl = (value) => (
+    typeof value === "string"
+    && /^codex:\/\/threads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+  );
   if (productionRender) document.documentElement.classList.add("production-render");
   if (parityCapture) document.documentElement.dataset.captureTarget = "true";
   const api = (path) => {
@@ -206,6 +210,7 @@
     agentStatusCard: document.querySelector("#agent-status-card"),
     agentStatusLabel: document.querySelector("#agent-status-label"),
     agentStatusDetail: document.querySelector("#agent-status-detail"),
+    returnChatButton: document.querySelector("#return-chat-button"),
     toggleProofEditing: document.querySelector("#toggle-proof-editing"),
     proofEditingNote: document.querySelector("#proof-editing-note"),
     guidanceTitle: document.querySelector("#guidance-title"),
@@ -213,6 +218,7 @@
   };
 
   let model = null;
+  let returnUrl = "";
   let baselineSlides = [];
   let draftSlides = [];
   let selectionComments = [];
@@ -252,6 +258,7 @@
   let validationMode = false;
   let activeValidationIssues = [];
   let proofEditingExpanded = true;
+  let fontAdvisories = [];
   const fitWarnings = new Map();
   const pendingPreviewIds = new Set();
   const fontLoadCache = new Map();
@@ -1136,6 +1143,37 @@
 
   function renderGuidance(phase) {
     if (!elements.guidanceList || !elements.guidanceTitle) return;
+    const productionGuidance = model?.workflow_state === "consegnato"
+      ? {
+          title: "Consegna completata",
+          items: [
+            "Rendering e controlli sono completati.",
+            "Usa Torna alla chat per aprire i file finali.",
+          ],
+        }
+      : model?.workflow_state === "qa"
+        ? {
+            title: "Controlli in corso",
+            items: [
+              "Gli artefatti sono stati prodotti e sono sottoposti ai controlli finali.",
+              "La consegna comparirà nella chat quando il QA sarà completato.",
+            ],
+          }
+        : model?.workflow_state === "rendering"
+          ? {
+              title: "Produzione in corso",
+              items: [
+                "Il rendering degli artefatti è stato avviato.",
+                "Controlli e consegna proseguono nella chat.",
+              ],
+            }
+          : {
+              title: "Produzione da avviare",
+              items: [
+                "I consensi sono registrati, ma il rendering non è ancora iniziato.",
+                "Usa Torna alla chat: l’agente avvierà produzione e controlli.",
+              ],
+            };
     const guidance = phase === "visual"
       ? {
           title: "Come controllare la prova",
@@ -1147,13 +1185,7 @@
           ],
         }
       : phase === "production"
-        ? {
-            title: "Che cosa succede ora",
-            items: [
-              "L’agente esegue rendering e controlli sul carosello approvato.",
-              "Puoi chiudere questa scheda: la consegna finale arriverà nella chat.",
-            ],
-          }
+        ? productionGuidance
         : {
             title: "Come revisionare",
             items: [
@@ -1167,16 +1199,32 @@
     elements.guidanceList.replaceChildren(...guidance.items.map((item) => create("li", "", item)));
   }
 
+  function returnToChat() {
+    if (!returnUrl) return;
+    elements.returnChatButton?.setAttribute("aria-busy", "true");
+    window.location.assign(returnUrl);
+  }
+
   function renderWorkflowJourney() {
     if (!model || !elements.workflowJourney) return;
     const phase = workflowPhase();
     const fast = fastApprovalEligible();
     const waiting = hasPendingLock();
-    const delivered = model.workflow_state === "consegnato";
+    const workflowState = model.workflow_state;
+    const productionReady = workflowState === "prova_visuale_approvata";
+    const rendering = workflowState === "rendering";
+    const qualityAssurance = workflowState === "qa";
+    const delivered = workflowState === "consegnato";
     const titles = {
       content: "Revisione di profilo e testi",
       visual: "Controlla la prova visiva",
-      production: delivered ? "Carosello consegnato" : "Produzione del carosello",
+      production: delivered
+        ? "Carosello consegnato"
+        : qualityAssurance
+          ? "Controlli finali"
+          : rendering
+            ? "Produzione del carosello"
+            : "Pronto per la produzione",
     };
     const copies = {
       content: fast
@@ -1185,7 +1233,11 @@
       visual: "Questo è il secondo checkpoint: controlla la resa grafica prima di autorizzare la produzione.",
       production: delivered
         ? "Rendering e controlli sono completati. Trovi i file finali nella chat."
-        : "I due consensi sono registrati. L’agente sta completando rendering e controlli.",
+        : qualityAssurance
+          ? "Gli artefatti sono pronti e i controlli finali sono in corso."
+          : rendering
+            ? "Il rendering è stato avviato. Produzione e controlli proseguono nella chat."
+            : "I due consensi sono registrati. Il rendering non è ancora iniziato.",
     };
     elements.workflowJourneyTitle.textContent = titles[phase];
     elements.workflowJourneyCopy.textContent = copies[phase];
@@ -1212,13 +1264,29 @@
     } else if (waiting) {
       status = "working";
       statusLabel = foreignFeedbackId ? "Aggiornamento in corso in un’altra scheda" : "Richiesta ricevuta";
-      statusDetail = "L’agente sta elaborando la richiesta. Resta in questa scheda: la nuova revisione comparirà automaticamente.";
+      statusDetail = returnUrl
+        ? "L’agente sta elaborando la richiesta. Il batch è salvato; puoi tornare alla chat dal pulsante qui sotto."
+        : "L’agente sta elaborando la richiesta. Il batch è salvato e la nuova revisione comparirà automaticamente.";
     } else if (phase === "production") {
-      status = delivered ? "complete" : "working";
-      statusLabel = delivered ? "Consegna completata" : "Produzione in corso";
+      status = delivered ? "complete" : productionReady ? "ready" : "working";
+      statusLabel = delivered
+        ? "Consegna completata"
+        : qualityAssurance
+          ? "Controlli in corso"
+          : rendering
+            ? "Produzione in corso"
+            : "Pronto per la produzione";
       statusDetail = delivered
-        ? "Puoi chiudere questa scheda e usare i file finali ricevuti nella chat."
-        : "Puoi chiudere questa scheda: rendering, controlli e consegna proseguono nella chat.";
+        ? returnUrl
+          ? "La consegna è completa. Torna alla chat per usare i file finali."
+          : "La consegna è completa. Usa i file finali ricevuti nella chat."
+        : qualityAssurance
+          ? "Gli artefatti sono pronti; il QA finale deve ancora concludersi."
+          : rendering
+            ? "Il rendering è iniziato; controlli e consegna proseguono nella chat."
+            : returnUrl
+              ? "L’approvazione è registrata. Torna alla chat per avviare rendering e controlli."
+              : "L’approvazione è registrata; rendering e controlli devono ancora iniziare.";
     } else if (fast) {
       status = "ready";
       statusLabel = "Consenso unico disponibile";
@@ -1227,6 +1295,12 @@
     elements.agentStatusCard.dataset.state = status;
     elements.agentStatusLabel.textContent = statusLabel;
     elements.agentStatusDetail.textContent = statusDetail;
+    if (elements.returnChatButton) {
+      const canReturn = Boolean(returnUrl && (waiting || phase === "production"));
+      elements.returnChatButton.hidden = !canReturn;
+      elements.returnChatButton.disabled = !canReturn;
+      elements.returnChatButton.setAttribute("aria-hidden", String(!canReturn));
+    }
     renderProofMode();
     renderGuidance(phase);
   }
@@ -1532,14 +1606,13 @@
     return fontLoadCache.get(key);
   }
 
-  function setFontStatus(message, error = false) {
+  function setFontStatus(message, warning = false) {
     if (!elements.fontStatus) return;
-    elements.fontStatus.hidden = !error;
-    elements.fontStatus.textContent = error
-      ? message || "Un carattere dichiarato non si è caricato: l’anteprima non può essere approvata."
-      : "";
-    elements.fontStatus.setAttribute("role", error ? "alert" : "status");
-    elements.fontStatus.setAttribute("aria-live", error ? "assertive" : "polite");
+    elements.fontStatus.hidden = !message;
+    elements.fontStatus.textContent = message || "";
+    elements.fontStatus.classList.toggle("is-warning", warning);
+    elements.fontStatus.setAttribute("role", "status");
+    elements.fontStatus.setAttribute("aria-live", "polite");
   }
 
   async function configurePreviewTypography(run) {
@@ -1549,13 +1622,17 @@
     const fallbacks = { display: sansFallback, body: sansFallback, serif: "Georgia, 'Times New Roman', serif" };
     const labels = { display: "Titoli", body: "Testi", serif: "Secondario corsivo", italic: "Corsivo" };
     const loaded = {};
-    const outcomes = [];
+    fontAdvisories = [];
     const resolvedItalic = italicFontAsset();
     const italicAvailableBefore = hasRealItalicFont();
     for (const kind of ["display", "body", "serif", "italic"]) {
       const asset = kind === "italic" ? resolvedItalic : assets[kind] || (kind === "body" ? assets.sans : null);
       if (!fontAssetRequiresVerifiedLoad(asset)) {
-        outcomes.push(`${labels[kind]}: fallback dichiarato`);
+        const declaredFamily = String(asset?.family || "").trim();
+        if (declaredFamily) {
+          const message = `${labels[kind]}: ${declaredFamily} non è disponibile; l’anteprima usa un fallback dichiarato.`;
+          fontAdvisories.push({ key: `font-${kind}-unavailable`, message });
+        }
         continue;
       }
       try {
@@ -1564,14 +1641,10 @@
         }
         const style = kind === "serif" || kind === "italic" ? "italic" : "normal";
         loaded[kind] = await loadFontAsset(asset, fontAssetDescriptors(kind, style));
-        outcomes.push(`${labels[kind]}: ${asset.family}`);
       } catch (_error) {
         if (run !== previewContractRun) return false;
-        const failure = new Error(
-          `Font approvato non caricabile (${labels[kind]}: ${asset.family || "famiglia non dichiarata"}). Correggi l’asset e riprova.`,
-        );
-        failure.code = "FONT_ASSET_LOAD_FAILED";
-        throw failure;
+        const message = `${labels[kind]}: ${asset.family || "font dichiarato"} non si è caricato; l’anteprima usa un fallback.`;
+        fontAdvisories.push({ key: `font-${kind}-load`, message });
       }
     }
     // Font loads are shared and cannot be cancelled. A superseded publisher may
@@ -1583,8 +1656,10 @@
     document.documentElement.style.setProperty("--preview-serif", fontStack(loaded.serif, fallbacks.serif));
     document.documentElement.style.setProperty("--preview-italic", fontStack(loaded.italic, loaded.serif || fallbacks.serif));
     setFontStatus(
-      `Tipografia anteprima — ${outcomes.join(" · ")} · Non verifica immagini o crop finali.`,
-      outcomes.some((outcome) => outcome.includes("non riuscito")),
+      fontAdvisories.length
+        ? `Avviso tipografia — ${fontAdvisories.map((item) => item.message).join(" · ")} Puoi comunque generare.`
+        : "",
+      fontAdvisories.length > 0,
     );
     if (italicAvailableBefore !== hasRealItalicFont() && elements.slides?.childElementCount) {
       // The publisher awaiting this typography pass will certify the rebuilt DOM.
@@ -2836,7 +2911,6 @@
       refreshApprovalValidation();
     } catch (error) {
       if (run !== previewContractRun) return;
-      if (error?.code === "FONT_ASSET_LOAD_FAILED") setFontStatus(error.message, true);
       document.documentElement.dataset.productionError = error?.message || "Anteprima non pronta";
       updateChangeSummary();
       refreshApprovalValidation();
@@ -2894,6 +2968,7 @@
     const { response, data } = await fetchJson("/api/session", { cache: "no-store" });
     if (!response.ok) throw new Error(data.error || "Impossibile caricare la sessione");
     model = data;
+    returnUrl = validReturnUrl(model.return_url) ? model.return_url : "";
     staleRevision = null;
     staleWorkflowState = null;
     staleApprovalCheckpoint = null;
@@ -2975,16 +3050,6 @@
         targetId: "visual-system-picker",
       });
     }
-    for (const slide of draftSlides) {
-      const warning = fitWarnings.get(slide.id) || {
-        schema: schemaWarning(slide),
-        overflow: "",
-        emphasis: ["title", "summary"].flatMap((field) => emphasisWarningsFor(slide, field).map((entry) => ({ field, ...entry }))),
-      };
-      const index = draftSlides.indexOf(slide);
-      const label = displayLabel(slide, index);
-      if (warning.overflow) issues.push({ key: `overflow-${slide.id}`, message: `${label}: ${warning.overflow}`, slideId: slide.id, targetId: `field-${slide.id}-summary` });
-    }
     const requiresFreshVisualProof = model?.approval_checkpoint === "visual_proof"
       && model?.proof_approved !== true
       && !productionRender;
@@ -3036,6 +3101,7 @@
       const index = draftSlides.indexOf(slide);
       const label = displayLabel(slide, index);
       if (warning.schema) advisories.push({ key: `schema-${slide.id}`, message: `${label}: ${warning.schema}` });
+      if (warning.overflow) advisories.push({ key: `overflow-${slide.id}`, message: `${label}: ${warning.overflow}` });
       for (const [warningIndex, emphasis] of (warning.emphasis || []).entries()) {
         advisories.push({ key: `emphasis-${slide.id}-${warningIndex}`, message: `${label}: ${emphasis.message}` });
       }
@@ -3063,6 +3129,7 @@
         }
       }
     }
+    advisories.push(...fontAdvisories);
     advisories.push(...collectPaletteContrastIssues());
     return advisories;
   }
@@ -3087,11 +3154,8 @@
       || brandNote.trim()
       || overallNote.trim()
     ) return false;
-    const required = requiredProofSlideIds();
-    if (!required.length || required.some((slideId) => !viewedSlideIds.has(slideId))) return false;
-    if (!proofSlidesAtCanonicalSize()) return false;
-    return collectApprovalIssues({ includeProofInteraction: false }).length === 0
-      && collectApprovalAdvisories().length === 0;
+    return requiredProofSlideIds().length > 0
+      && collectApprovalIssues({ includeProofInteraction: false }).length === 0;
   }
 
   function updateApprovalCopy() {
@@ -3105,8 +3169,8 @@
       : visualApproved
         ? "Prova visuale approvata"
         : visualProofStage
-          ? "Approva la prova visiva"
-          : fast ? "Approva testi e grafica" : "Approva i testi";
+          ? "Genera"
+          : fast ? "Genera" : "Approva i testi";
     if (elements.approveButton) elements.approveButton.textContent = approvalLabel;
     if (elements.mobileApproveButton) elements.mobileApproveButton.textContent = approvalLabel;
     if (elements.confirmApproval) {
@@ -3114,8 +3178,8 @@
     }
     if (elements.approvalDialogTitle) {
       elements.approvalDialogTitle.textContent = fast
-        ? "Confermi testi e grafica?"
-        : visualProofStage ? "Confermi la prova visiva?" : "Confermi profilo e testi?";
+        ? "Generare il carosello?"
+        : visualProofStage ? "Generare il carosello?" : "Confermi profilo e testi?";
     }
     if (elements.approvalDialogCopy) {
       const coverMode = resolvedCoverMode();
@@ -3123,9 +3187,9 @@
         ? "immagine generata"
         : coverMode === "provided" ? "immagine fornita" : "copertina tipografica";
       elements.approvalDialogCopy.textContent = fast
-        ? `Questa anteprima soddisfa i requisiti del percorso rapido. Con un solo consenso approvi i testi mostrati e la prova grafica definitiva con ${coverLabel}; il carosello passerà quindi alla produzione.`
+        ? `Genera ciò che vedi con ${coverLabel}. Gli avvisi visuali ed editoriali restano consultivi: confermando, accetti le scelte correnti e ne assumi la responsabilità finale.`
         : visualProofStage
-          ? `Questo è il secondo consenso. Confermi composizione, ${coverLabel}, gerarchia tipografica e identificazione del brand. Gli avvisi sono informativi e saranno accettati con questo consenso. L’agente potrà quindi avviare rendering e controlli finali.`
+          ? `Genera ciò che vedi con ${coverLabel}. Gli avvisi visuali ed editoriali non bloccano la produzione: confermando, accetti le scelte correnti e ne assumi la responsabilità finale.`
           : `Questo è il primo consenso. Confermi profilo, sequenza e testi; modifiche e commenti saranno inviati insieme. L’agente preparerà poi una prova visiva separata con ${coverLabel}, che richiederà un secondo consenso.`;
     }
     renderWorkflowJourney();
@@ -3413,12 +3477,10 @@
       payload.base_workflow_state = model.workflow_state || "";
       if (model.approval_checkpoint === "visual_proof") {
         payload.proof_slide_ids = requiredProofSlideIds();
-        payload.style_system_verified = true;
         payload.proof_browser = browserProofDescriptor();
       } else if (combinedApproval) {
         payload.approval_scope = combinedApprovalScope;
         payload.proof_slide_ids = requiredProofSlideIds();
-        payload.style_system_verified = true;
         payload.proof_browser = browserProofDescriptor();
       }
     }
@@ -3789,7 +3851,7 @@
       const densitySummary = warnings === 0 ? "Nessun avviso di densità." : `${warnings} ${warnings === 1 ? "avviso" : "avvisi"} di densità da considerare.`;
       const advisorySummary = advisoryCount === 0 ? "Nessun altro avviso." : `${advisoryCount} ${advisoryCount === 1 ? "avviso informativo" : "avvisi informativi"}.`;
       const scopeSummary = combinedApproval
-        ? "Questo unico consenso copre testi e prova grafica definitiva."
+        ? "Genera ciò che vedi: gli avvisi restano consultivi e la decisione finale è tua."
         : model.workflow_state === "testi_approvati"
           ? "Questo è il secondo consenso e autorizza la produzione."
           : "Questo è il primo consenso e riguarda profilo, sequenza e testi.";
@@ -3808,7 +3870,7 @@
       && !fastApprovalEligible()
     ) {
       elements.approvalDialog?.close();
-      showToast("La preview non soddisfa più il percorso rapido: ricontrollala prima di approvare.", true);
+      showToast("La base tecnica della preview è cambiata: riaprila prima di generare.", true);
       updateApprovalCopy();
       return;
     }
@@ -3857,6 +3919,7 @@
     elements.mobileActionsDialog?.close();
     elements.approveButton?.click();
   });
+  elements.returnChatButton?.addEventListener("click", returnToChat);
   document.addEventListener("keydown", (event) => {
     if (!event.altKey || event.ctrlKey || event.metaKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
     const index = draftSlides.findIndex((slide) => slide.id === currentSlideId);

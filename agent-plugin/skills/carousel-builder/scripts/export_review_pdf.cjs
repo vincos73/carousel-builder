@@ -436,7 +436,6 @@ function assertRenderContract(value, expectedProduction, label, currentBrowser =
     !proof
     || typeof proof !== "object"
     || Array.isArray(proof)
-    || proof.style_system_verified !== true
     || proof.preview_width !== 480
     || !Array.isArray(proof.slide_ids)
     || !Array.isArray(proof.required_slide_ids)

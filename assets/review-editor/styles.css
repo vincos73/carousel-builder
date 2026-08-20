@@ -7,58 +7,10 @@
 }
 
 @font-face {
-  font-family: "Playfair Display";
-  src: url("/assets/fonts/PlayfairDisplay-Italic-Variable.ttf") format("truetype");
-  font-style: italic;
-  font-weight: 400 900;
-  font-display: swap;
-}
-
-@font-face {
   font-family: "Instrument Serif";
   src: url("/assets/fonts/InstrumentSerif-Regular.ttf") format("truetype");
   font-style: normal;
   font-weight: 400;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Onest";
-  src: url("/assets/fonts/Onest-Regular.ttf") format("truetype");
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Onest";
-  src: url("/assets/fonts/Onest-Medium.ttf") format("truetype");
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Onest";
-  src: url("/assets/fonts/Onest-Semibold.ttf") format("truetype");
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Onest";
-  src: url("/assets/fonts/Onest-Bold.ttf") format("truetype");
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Orbitron";
-  src: url("/assets/fonts/Orbitron-Variable.ttf") format("truetype");
-  font-style: normal;
-  font-weight: 400 900;
   font-display: swap;
 }
 
@@ -75,7 +27,7 @@
   --preview-sans: "Inter", ui-sans-serif, sans-serif;
   --preview-display: var(--preview-sans);
   --preview-body: var(--preview-sans);
-  --preview-serif: "Playfair Display", Georgia, serif;
+  --preview-serif: Georgia, "Times New Roman", serif;
   --preview-scale: 1;
   --actionbar-space: 98px;
   color: var(--ink);
@@ -2002,7 +1954,7 @@ textarea:focus-visible,
   --vincos-cream: #fefdfb;
   color: var(--editor-ink);
   background: var(--editor-cream);
-  font-family: "Onest", ui-sans-serif, sans-serif;
+  font-family: "Inter", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 html,
@@ -2077,11 +2029,10 @@ input:focus {
   align-items: baseline;
   gap: 0.42em;
   color: var(--editor-plum-on-dark);
-  font-family: "Orbitron", "Onest", ui-sans-serif, sans-serif;
-  font-size: clamp(16px, 1.4vw, 21px);
-  letter-spacing: 0.045em;
+  font-family: "Instrument Serif", Georgia, serif;
+  font-size: clamp(22px, 1.7vw, 28px);
+  letter-spacing: -0.015em;
   line-height: 1;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -2091,13 +2042,13 @@ input:focus {
 
 .product-title-primary {
   color: #e4bfd5;
-  font-weight: 750;
+  font-weight: 400;
 }
 
 .product-title-secondary {
   color: var(--editor-plum-on-dark);
   font-weight: 400;
-  letter-spacing: 0.085em;
+  letter-spacing: -0.015em;
 }
 
 .product-byline {
@@ -2105,7 +2056,7 @@ input:focus {
   align-items: center;
   gap: 7px;
   color: rgba(255, 255, 255, 0.72);
-  font-family: "Onest", ui-sans-serif, sans-serif;
+  font-family: "Inter", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.08em;
@@ -2127,7 +2078,7 @@ input:focus {
 .char-count,
 .meta-label,
 .workflow-status {
-  font-family: "Onest", ui-sans-serif, sans-serif;
+  font-family: "Inter", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2223,7 +2174,7 @@ input:focus {
 .content-header h2 {
   color: var(--editor-ink);
   font-size: clamp(31px, 3vw, 44px);
-  font-style: italic;
+  font-style: normal;
   letter-spacing: -0.025em;
   line-height: 1;
 }
@@ -2235,6 +2186,10 @@ input:focus {
 .font-status {
   max-width: 58ch;
   font-size: 12px;
+}
+
+.font-status.is-warning {
+  color: #7a4b18;
 }
 
 .workflow-journey {
@@ -2258,7 +2213,7 @@ input:focus {
   color: var(--editor-navy);
   font-family: "Instrument Serif", Georgia, serif;
   font-size: clamp(23px, 2vw, 30px);
-  font-style: italic;
+  font-style: normal;
   font-weight: 400;
   letter-spacing: -0.02em;
   line-height: 1.05;
@@ -2846,7 +2801,7 @@ input:focus {
 .panel h2 {
   color: var(--editor-navy);
   font-size: 25px;
-  font-style: italic;
+  font-style: normal;
   letter-spacing: -0.02em;
 }
 
@@ -2957,7 +2912,7 @@ input:focus {
 .comment-dialog h2 {
   color: var(--editor-navy);
   font-size: 33px;
-  font-style: italic;
+  font-style: normal;
 }
 
 .dialog-copy,

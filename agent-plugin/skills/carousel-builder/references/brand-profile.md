@@ -74,6 +74,7 @@ Usare per i nuovi profili questo schema:
 - Trattare `emphasis_italic` come ruolo espressivo opzionale per sottotitolo di copertina ed enfasi semantiche. Può coincidere con `body_italic`, cioè la vera variante corsiva del carattere principale, oppure indicare un secondo carattere corsivo approvato.
 - Risolvere il ruolo corsivo nell'ordine `emphasis_italic`, `body_italic`, `serif_italic` legacy. Non derivare un corsivo inclinando artificialmente il file regular e non usarlo come sostituto del ruolo `body`.
 - Se l'utente richiede un font esatto e il file non è disponibile, chiedere il file. Se indica soltanto una famiglia o un tono, proporre un sostituto disponibile e attenderne l'approvazione.
+- Il profilo neutro usa Inter per `display` e `body`. Playfair Display Italic è soltanto un'opzione per `emphasis_italic` del carosello; il chrome dell'editor usa Inter per i controlli e Instrument Serif per i titoli editoriali.
 - Inter e Playfair Display inclusi sono fallback del profilo neutro, non fallback automatici di ogni brand. Playfair Display va sempre usato nella variante corsiva.
 - Un font con `source: system` può essere usato dopo verifica locale, dichiarando che non è portabile senza il relativo file.
 - Usare la scala tipografica nominale indicata nel profilo. Scostamenti richiedono approvazione e restano soggetti al limite di riduzione dell'8%.

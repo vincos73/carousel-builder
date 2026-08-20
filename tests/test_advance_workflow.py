@@ -664,10 +664,10 @@ class AdvanceWorkflowTest(unittest.TestCase):
             )
         self.assertEqual(self.read_manifest()["workflow_state"], "qa")
 
-    def test_tampered_artifact_or_failed_check_never_delivers(self) -> None:
+    def test_tampered_artifact_or_failed_technical_check_never_delivers(self) -> None:
         manifest, pdf, png_dir, result_path = self.prepare_qa()
         report = self.qa_report(manifest, pdf, png_dir)
-        report["checks"]["fonts"] = False
+        report["checks"]["dimensions"] = False
         report_path = self.workdir / "qa-report.json"
         write_json(report_path, report)
         with self.assertRaisesRegex(ValueError, "controlli obbligatori"):
@@ -677,7 +677,7 @@ class AdvanceWorkflowTest(unittest.TestCase):
             )
         self.assertEqual(self.read_manifest()["workflow_state"], "qa")
 
-        report["checks"]["fonts"] = True
+        report["checks"]["dimensions"] = True
         write_json(report_path, report)
         pdf.write_bytes(b"tampered")
         with self.assertRaisesRegex(ValueError, "Digest artefatto"):

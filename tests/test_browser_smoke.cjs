@@ -99,16 +99,18 @@ async function startChrome(directory) {
   }
 }
 
-async function startServer(manifestPath, sessionDirectory) {
+async function startServer(manifestPath, sessionDirectory, returnThreadId = "") {
   const python = process.env.PYTHON || "python3";
-  const processHandle = spawn(python, [
+  const args = [
     path.join(ROOT, "scripts", "review_server.py"),
     manifestPath,
     "--session-dir",
     sessionDirectory,
     "--port",
     "0",
-  ], {
+  ];
+  if (returnThreadId) args.push("--return-thread-id", returnThreadId);
+  const processHandle = spawn(python, args, {
     cwd: ROOT,
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
     stdio: ["ignore", "pipe", "pipe"],
@@ -396,7 +398,9 @@ test("browser reale: i due consensi restano distinti e la prova visiva è read-f
     for (const reader of [...(chrome?.readers || []), ...(server?.readers || [])]) reader.close();
     await fs.rm(directory, { recursive: true, force: true });
   });
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifestFixture(), null, 2)}\n`, "utf8");
+  const twoCheckpointManifest = manifestFixture();
+  twoCheckpointManifest.cover_mode = "generated";
+  await fs.writeFile(manifestPath, `${JSON.stringify(twoCheckpointManifest, null, 2)}\n`, "utf8");
   await fs.copyFile(path.join(ROOT, "assets", "fonts", "Inter-Variable.ttf"), path.join(directory, "display.ttf"));
   await fs.mkdir(chromeDirectory);
 
@@ -440,7 +444,7 @@ test("browser reale: i due consensi restano distinti e la prova visiva è read-f
     page,
     `document.querySelector('#editor').classList.contains('proof-mode')
       && !document.querySelector('#editor').classList.contains('proof-editing')
-      && document.querySelector('#approve-button').textContent === 'Approva la prova visiva'`,
+      && document.querySelector('#approve-button').textContent === 'Genera'`,
     "secondo checkpoint read-first",
   );
   assert.deepEqual(
@@ -533,7 +537,8 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   await fs.copyFile(path.join(ROOT, "assets", "fonts", "Inter-Variable.ttf"), displayFontPath);
   await fs.mkdir(chromeDirectory);
 
-  server = await startServer(manifestPath, sessionDirectory);
+  const returnThreadId = "01a01e64-3e6e-7b71-950d-c425e032e34e";
+  server = await startServer(manifestPath, sessionDirectory, returnThreadId);
   chrome = await startChrome(chromeDirectory);
   client = new CdpClient(chrome.webSocketUrl);
   await client.connect();
@@ -544,6 +549,7 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   assert.equal(sessionResponse.status, 200);
   const session = await sessionResponse.json();
   assert.equal(session.schema_version, "1.4");
+  assert.equal(session.return_url, `codex://threads/${returnThreadId}`);
   assert.equal(session.production.producer, "approved-preview-dom-v2");
   assert.deepEqual(session.proof.required_slide_ids, ["cover", "item-2", "outro"]);
 
@@ -599,14 +605,24 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
     `!document.querySelector('[data-slide-id="cover"] .slide-preview').classList.contains('cover-split')`,
     "ripristino cover tipografica",
   );
+  await waitFor(
+    client,
+    approvalPage,
+    "document.documentElement.dataset.previewReady === 'true' || Boolean(document.documentElement.dataset.productionError)",
+    "nuovo contratto dopo il ripristino della cover",
+  );
   const approvalPreviewState = await evaluate(client, approvalPage, `({
     ready: document.documentElement.dataset.previewReady || "",
     error: document.documentElement.dataset.productionError || "",
     approveDisabled: document.querySelector('#approve-button').disabled,
+    fontAlertHidden: document.querySelector('#font-status').hidden,
+    fontAlert: document.querySelector('#font-status').textContent,
   })`);
-  assert.equal(approvalPreviewState.ready, "");
-  assert.match(approvalPreviewState.error, /Font approvato non caricabile/);
-  assert.equal(approvalPreviewState.approveDisabled, true);
+  assert.equal(approvalPreviewState.ready, "true");
+  assert.equal(approvalPreviewState.error, "");
+  assert.equal(approvalPreviewState.approveDisabled, false);
+  assert.equal(approvalPreviewState.fontAlertHidden, false);
+  assert.match(approvalPreviewState.fontAlert, /fallback/);
 
   // The rejected promise must leave the cache. Restoring reachability and
   // asking for a fresh render must retry the same URL and certify it without
@@ -634,8 +650,8 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   })`);
   assert.deepEqual(retryPreviewState, { ready: "true", error: "", fontAlertHidden: true });
 
-  // Navigation intent alone does not mark the sample as viewed. Approval is
-  // still available, but it remains the editorial-only checkpoint.
+  // Navigation intent alone does not mark the sample as viewed. This remains
+  // an advisory and never prevents the explicit combined consent.
   await evaluate(client, approvalPage, `(() => {
     for (const slideId of ['cover', 'item-2', 'outro']) {
       document.querySelector('[data-sequence-slide="' + slideId + '"]').click();
@@ -654,7 +670,7 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
       title: document.querySelector('#approval-dialog-title').textContent,
       currentStep: document.querySelector('#workflow-steps [aria-current="step"] strong').textContent,
     })`),
-    { label: "Approva i testi", scope: "", title: "Confermi profilo e testi?", currentStep: "Profilo e testi" },
+    { label: "Genera", scope: "profile_text_and_visual", title: "Generare il carosello?", currentStep: "Profilo e testi" },
   );
   await evaluate(client, approvalPage, "document.querySelector('#approval-dialog').close()");
 
@@ -672,7 +688,7 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   await waitFor(
     client,
     approvalPage,
-    "document.querySelector('#approve-button').textContent === 'Approva testi e grafica'",
+    "document.querySelector('#approve-button').textContent === 'Genera'",
     "abilitazione consenso combinato",
   );
   assert.deepEqual(
@@ -696,7 +712,7 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   const approval = await readJsonWhen(feedbackPath, (value) => value.action === "approve", "Persistenza approvazione");
   assert.equal(approval.approval_scope, "profile_text_and_visual");
   assert.deepEqual(approval.proof_slide_ids, ["cover", "item-2", "outro"]);
-  assert.equal(approval.style_system_verified, true);
+  assert.equal(approval.style_system_verified, false);
   assert.equal(approval.proof_browser.engine, "chromium");
   assert.ok(Number.isInteger(approval.proof_browser.major) && approval.proof_browser.major > 0);
 
@@ -729,6 +745,28 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   const approvedSession = await approvedResponse.json();
   assert.equal(approvedSession.proof_approved, true);
   assert.equal(approvedSession.workflow_state, "prova_visuale_approvata");
+  await waitFor(
+    client,
+    approvalPage,
+    "document.querySelector('#agent-status-label').textContent === 'Pronto per la produzione'",
+    "stato pre-produzione non fuorviante",
+  );
+  assert.deepEqual(
+    await evaluate(client, approvalPage, `({
+      status: document.querySelector('#agent-status-label').textContent,
+      detail: document.querySelector('#agent-status-detail').textContent,
+      copy: document.querySelector('#workflow-journey-copy').textContent,
+      returnHidden: document.querySelector('#return-chat-button').hidden,
+      returnLabel: document.querySelector('#return-chat-button').textContent.trim(),
+    })`),
+    {
+      status: "Pronto per la produzione",
+      detail: "L’approvazione è registrata. Torna alla chat per avviare rendering e controlli.",
+      copy: "I due consensi sono registrati. Il rendering non è ancora iniziato.",
+      returnHidden: false,
+      returnLabel: "Torna alla chat",
+    },
+  );
   await closePage(client, approvalPage);
 
   const productionPage = await newIncognitoPage(client);

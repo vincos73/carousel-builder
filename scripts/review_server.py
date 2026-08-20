@@ -66,7 +66,7 @@ from manifest_contract import (  # noqa: E402
 
 MAX_BODY_BYTES = 1_000_000
 MAX_COMMENTS = 200
-EDITOR_VERSION = "2.11.4"
+EDITOR_VERSION = "2.12.2"
 RENDER_CONTRACT = "approved-preview-dom-v2"
 TYPOGRAPHY_DEFAULTS = {
     "cover_px": 112,
@@ -133,6 +133,10 @@ if frozenset(VISUAL_STYLE_SYSTEMS) != VISUAL_STYLE_IDS:
 
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
+THREAD_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 def valid_session_token(value: object) -> str | None:
@@ -145,6 +149,28 @@ class IdempotencyConflictError(RuntimeError):
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def return_url_for_thread(thread_id: str | None) -> str | None:
+    """Build a native Codex task link without accepting arbitrary URLs."""
+    if thread_id is None:
+        return None
+    normalized = thread_id.strip()
+    if not THREAD_ID_RE.fullmatch(normalized):
+        raise ValueError("return-thread-id non valido")
+    return f"codex://threads/{normalized}"
+
+
+def valid_return_url(value: object) -> str | None:
+    """Accept only return links previously constructed by this server."""
+    if not isinstance(value, str):
+        return None
+    pattern = (
+        r"codex://threads/"
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+        r"[0-9a-f]{4}-[0-9a-f]{12}"
+    )
+    return value if re.fullmatch(pattern, value, re.IGNORECASE) else None
 
 
 def read_json(path: Path) -> dict:
@@ -1043,6 +1069,7 @@ def manifest_model(
     *,
     manifest: dict | None = None,
     include_internal: bool = False,
+    return_url: str | None = None,
 ) -> dict:
     manifest = read_json(manifest_path) if manifest is None else manifest
     contract = validate_manifest_contract(manifest)
@@ -1191,6 +1218,7 @@ def manifest_model(
     model = {
         "editor_version": EDITOR_VERSION,
         "render_contract": RENDER_CONTRACT,
+        "return_url": return_url,
         "schema_version": contract["schema_version"],
         "legacy_manifest": contract["legacy"],
         "revision": revision,
@@ -1258,7 +1286,6 @@ def manifest_model(
     model["proof_approved"] = bool(
         proof.get("approved") is True
         and proof.get("render_fingerprint") == model["render_fingerprint"]
-        and contract["proof"]["style_system_verified"]
         and contract["proof"]["slide_ids"] == contract["proof"]["required_slide_ids"]
         and contract["proof"]["browser"] is not None
         and contract["production"]["mode"] in {"renderer", "adapter"}
@@ -1329,8 +1356,6 @@ def validate_feedback(
             validate_emphasis_overlap(values, content, field=f"slides[{position}].{field}")
             if (values["italic"] or values["serif"]) and not italic_font_available:
                 message = f"{slide_id}.{field} usa il corsivo senza un font corsivo reale disponibile"
-                if action == "approve":
-                    raise ValueError(message)
                 warnings.append(message)
             emphasis.update({f"{field}_{role}": phrases for role, phrases in values.items()})
 
@@ -1363,10 +1388,7 @@ def validate_feedback(
             for slide in normalized_slides
             if slide["kind"] == "item" and slide["title"].strip()
         )
-    if action == "approve" and approval_issues:
-        raise ValueError("Approvazione bloccata: " + "; ".join(approval_issues))
-    if action == "feedback":
-        warnings.extend(approval_issues)
+    warnings.extend(approval_issues)
 
     comments = payload.get("comments", [])
     if not isinstance(comments, list) or len(comments) > MAX_COMMENTS:
@@ -1521,11 +1543,9 @@ def validate_feedback(
                 raise ValueError(
                     "proof_slide_ids non coincide con il campione visuale richiesto"
                 )
-            if payload.get("style_system_verified") is not True:
-                raise ValueError(
-                    "style_system_verified=true è obbligatorio per approvare la prova visuale"
-                )
-            style_system_verified = True
+            # Campo legacy, conservato come dato diagnostico ma non più usato
+            # come certificazione visuale o gate di produzione.
+            style_system_verified = payload.get("style_system_verified") is True
             proof_browser = normalized_proof_browser(
                 payload.get("proof_browser"), required=True
             )
@@ -1552,10 +1572,6 @@ def validate_feedback(
                 if normalized_comments or not isinstance(raw_note, str) or raw_note.strip():
                     raise ValueError(
                         "L'approvazione combinata non può includere commenti o note pendenti"
-                    )
-                if warnings:
-                    raise ValueError(
-                        "L'approvazione combinata richiede una preview senza avvisi"
                     )
 
     result = {
@@ -1594,9 +1610,11 @@ def main() -> int:
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--session-dir", type=Path, required=True)
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--return-thread-id", help="Task Codex a cui tornare dopo l'invio")
     args = parser.parse_args()
 
     try:
+        return_url = return_url_for_thread(args.return_thread_id)
         manifest_path = absolute_input_path(args.manifest)
         session_dir = absolute_input_path(args.session_dir)
         reject_symlink_path(manifest_path, field="Il manifest")
@@ -1651,11 +1669,17 @@ def main() -> int:
         try:
             for lock in startup_locks:
                 lock.acquire()
-            initial_model = manifest_model(manifest_path)
+            initial_model = manifest_model(manifest_path, return_url=return_url)
             if path_entry_exists(state_path):
                 state = read_private_json(state_path)
                 validate_state_manifest(state, manifest_path)
                 token = valid_session_token(state.get("token")) or secrets.token_urlsafe(24)
+                stored_return_url = state.get("return_url")
+                if stored_return_url is not None and valid_return_url(stored_return_url) is None:
+                    raise ValueError("La sessione contiene un return_url non valido")
+                if stored_return_url and return_url and stored_return_url != return_url:
+                    raise ValueError("La sessione è già associata a un task Codex diverso")
+                return_url = return_url or stored_return_url
             else:
                 token = secrets.token_urlsafe(24)
                 state = {"manifest": str(manifest_path)}
@@ -1676,6 +1700,7 @@ def main() -> int:
                     "manifest": str(manifest_path),
                     "manifest_revision": initial_model["revision"],
                     "server_started_at": now_iso(),
+                    "return_url": return_url,
                 }
             )
             atomic_write_json(state_path, state)
@@ -1745,7 +1770,7 @@ def main() -> int:
                 current_state = read_private_json(state_path)
                 validate_state_manifest(current_state, manifest_path)
                 value = (
-                    manifest_model(manifest_path)
+                    manifest_model(manifest_path, return_url=return_url)
                     if include_model
                     else manifest_status(manifest_path)
                 )
@@ -2113,7 +2138,9 @@ def main() -> int:
                             pending_feedback_id = last_feedback_id
                         else:
                             current_model = manifest_model(
-                                manifest_path, include_internal=True
+                                manifest_path,
+                                include_internal=True,
+                                return_url=return_url,
                             )
                             feedback = validate_feedback(
                                 payload,

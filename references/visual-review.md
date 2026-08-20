@@ -11,20 +11,20 @@ Usare questa modalità soltanto quando Python 3.10 o successivo e un browser loc
 3. Avviare il server con percorsi assoluti:
 
 ```text
-python3 <skill>/scripts/review_server.py <manifest.json> --session-dir <session-dir>
+python3 <skill>/scripts/review_server.py <manifest.json> --session-dir <session-dir> [--return-thread-id <thread-id>]
 ```
 
-4. Assegnare una sola superficie browser alla sessione prima di aprire l'indirizzo della prima riga JSON. Preferire e riusare la scheda del browser interno quando disponibile; usare Chrome o un launcher di sistema soltanto se l'utente lo richiede o se il browser interno non è utilizzabile. Non aprire lo stesso editor in entrambe le superfici. Con capacità locali, l'apertura dell'editor è obbligatoria. Prima di consegnarlo, controllare copertina e card nel sistema consigliato a 480 px; controllare l'alternativa solo se verrà mostrata. Correggere soglie o overflow finché la proposta visibile è pulita.
-5. Mantenere attivo il processo e ascoltarlo in ogni checkpoint dell'editor: testi, prova visuale e nuove prove. Non concludere il turno dopo l'apertura né chiedere di scrivere «fatto». Appena arriva un batch, confermarne la ricezione in chat prima di elaborarlo; l'utente non deve interpretare il silenzio come un blocco.
-   La ricezione è una fase obbligatoria del workflow, non un controllo successivo: subito dopo aver aperto la scheda, attendere sul processo del server per intervalli non superiori a 50 secondi e ripetere l'attesa finché arriva l'evento o l'utente interrompe. Non inviare una risposta finale mentre l'editor attende un'azione. Se l'ambiente restituisce un identificativo di processo o sessione, riutilizzare esattamente quello per tutte le attese; non affidarsi al solo polling del browser.
+4. Usare una sola superficie: preferire e riusare il browser interno; usare Chrome solo su richiesta o se quello interno non funziona. Con capacità locali, l'apertura dell'editor è obbligatoria. Controllare la proposta a 480 px prima di mostrarla.
+5. Mantenere il processo in ascolto in ogni checkpoint dell'editor. Non concludere il turno dopo l'apertura né chiedere «fatto». Confermare subito in chat ogni batch ricevuto. Con `--return-thread-id`, mostrare `Torna alla chat` dopo l'invio e negli stati successivi, usando solo `codex://threads/<thread-id>`. A ogni turno acquisire o riusare la tab e chiamare `markHandoff()` prima del lavoro e prima di una possibile fine; reclamare una tab visibile con binding stale. Il ritorno avviene solo dopo il click dell'utente, mai automaticamente.
+   Dopo l'apertura attendere sul processo per intervalli fino a 50 secondi, riusando il suo identificativo. Ripetere finché arriva l'evento o l'utente interrompe; non inviare una risposta finale durante l'attesa.
 6. Attendere al massimo 50 secondi per volta. Senza output, leggere `session-state.json`: se `last_feedback_id` differisce da `applied_feedback_id`, usare `last_action` e `last_feedback_path` come segnale durevole. Per stati legacy usare `feedback.json`. Ripetere finché arriva un batch o l'utente interrompe.
-7. Considerare l'output del processo una notifica immediata e `session-state.json` la fonte durevole per il recupero. Se la sessione non consente un'attesa attiva sufficientemente lunga né la lettura dello stato, dichiarare il limite prima di consegnare l'editor e usare come fallback la ripresa manuale in chat.
+7. Usare l'output come notifica e `session-state.json` come fonte durevole. Se attesa e lettura dello stato non sono possibili, dichiararlo e usare la ripresa manuale in chat.
 
 Il server deve restare vincolato a `127.0.0.1`, usare un token casuale e servire soltanto gli asset inclusi e il modello editoriale ricavato dal manifest.
 
-`/api/session` espone `render_fingerprint` e stato durevole del feedback sotto lock. Il fingerprint lega snapshot, contratto di produzione/output, bundle e asset, ma non il checkpoint né l'elenco dichiarativo dei sistemi supportati. Su `approve`, il browser invia fingerprint e `base_workflow_state`; il server deriva lo stage e calcola il candidato. Lo stato base impedisce comunque a un click stale di attraversare un checkpoint. `/api/status` espone stato e checkpoint anche senza nuova revisione.
+`/api/session` espone `render_fingerprint` e feedback durevole sotto lock. Il fingerprint lega snapshot, produzione, bundle e asset. Su `approve`, il browser invia fingerprint e `base_workflow_state`; il server deriva lo stage. `/api/status` espone stato e checkpoint.
 
-Nel checkpoint visuale `proof.required_slide_ids` contiene copertina, card più densa e chiusura. L'editor lega il campione visto a revisione, checkpoint, fingerprint e sistema, poi invia ID, verifica stile e major Chromium. Inviare prima ogni correzione locale. Solo Chromium può firmare il proof esportabile.
+Nel checkpoint visuale `proof.required_slide_ids` contiene copertina, card più densa e chiusura. L'editor lega revisione, checkpoint, fingerprint e sistema, poi invia gli ID canonici e la major Chromium. Il campo legacy `proof.style_system_verified` è soltanto diagnostico e può restare `false`: la decisione visuale appartiene all'utente. Inviare prima ogni correzione locale. Solo Chromium può firmare il contratto tecnico esportabile.
 
 `?render=production` carica il manifest approvato, ignora bozze e pubblica `approved-preview-dom-v2`. L'esportatore acquisisce ogni `.slide-preview` e rifiuta geometrie diverse dall'anteprima pulita.
 
@@ -32,7 +32,7 @@ Nel checkpoint visuale `proof.required_slide_ids` contiene copertina, card più 
 
 L'interfaccia rende disponibili modifica, riordino, commenti, enfasi tipografiche, scelta progressiva del sistema visivo, modalità del logo e intenzione della copertina. `Con visuale` non blocca l'approvazione editoriale: nello stato `testi_approvati` segnala che l'asset va prodotto e collegato prima della prova. Nel percorso normale affidarsi ai controlli e ai messaggi dell'editor. Leggere [editor-capabilities.md](editor-capabilities.md) soltanto se l'utente chiede istruzioni su questi comandi o se occorre diagnosticare un blocco dell'interfaccia.
 
-L'editor mostra tre passaggi persistenti: profilo e testi, prova visiva, produzione. Il consenso sui testi e quello sulla prova visiva devono avere etichette diverse. Il percorso combinato è ammesso soltanto quando viene annunciato prima del click come consenso unico su testi e grafica. Nello stato `testi_approvati`, mostrare per default la galleria della prova; riaprire i controlli soltanto dopo l'azione esplicita `Modifica contenuti o grafica`, spiegando quali checkpoint verranno invalidati.
+L'editor mostra tre passaggi persistenti: profilo e testi, prova visiva, produzione. Nel percorso normale espone una sola azione primaria, `Genera`, che registra la decisione dell'utente e copre i due checkpoint iniziali quando il contratto tecnico lo consente. `Invia bozza` resta secondaria per commenti e correzioni. Nello stato `testi_approvati`, mostrare per default la galleria della prova; riaprire i controlli soltanto dopo l'azione esplicita `Modifica contenuti o grafica`, spiegando quali checkpoint verranno invalidati.
 
 ## Ricezione e applicazione
 
@@ -42,7 +42,7 @@ Quando il server segnala un batch, riprendere automaticamente il lavoro e legger
 - `base_revision` corrisponda alla revisione corrente del manifest;
 - tutti gli ID delle slide appartengano al manifest corrente;
 - resti almeno una slide interna;
-- il batch non superi i limiti dichiarati dal server.
+- il batch rispetti dimensioni, numero di slide e limiti strutturali dichiarati dal server.
 
 Elaborare il batch normale con:
 
@@ -50,7 +50,7 @@ Elaborare il batch normale con:
 python3 <skill>/scripts/process_review.py <manifest.json> <feedback-path> --session-dir <session-dir>
 ```
 
-`process_review.py` invoca `apply_review.py` e legge lo status. `approve` avanza solo il checkpoint valido, mai `rendering`; con `approval_scope: profile_text_and_visual` avanza in sequenza i due checkpoint iniziali e conserva due ricevute. Il server accetta questo scope soltanto da `bozza`, con cover tipografica, renderer canonico, campione completo in Chromium, stile supportato e nessuna nota, commento o warning. `feedback` non avanza. Accetta l'alias `feedback.json` o un batch della sessione in `feedback-batches/`; alias e batch append-only devono coincidere.
+`process_review.py` applica il batch e legge lo status. `approve` avanza solo i checkpoint coperti, mai `rendering`; lo scope combinato conserva due ricevute ed è ammesso solo da `bozza` con cover tipografica, renderer canonico, Chromium, stile supportato e nessuna nota o commento. Gli avvisi non lo bloccano; `feedback` non avanza. Dopo `prova_visuale_approvata`, confermare in chat e continuare subito con `next_action`, export, QA e consegna.
 
 `apply_review.py` limita i campi, crea backup e incrementa `revision` quando serve. Copy, ordine, profilo o richieste ambigue riaprono `bozza`; sistema, logo, cover o enfasi mantengono `testi_approvati`. Il visual proof ricontrolla il fingerprint e lega `proof.approved`.
 
@@ -72,7 +72,7 @@ Lo script riallinea inoltre i riferimenti derivati dai testi:
 
 Leggere `warnings`, `stale_alt_text` e `stale_transcript`. Rigenerare i testi descrittivi stale. Le correzioni invalidano proof e browser quando necessario. Un `approve` visuale non include modifiche editoriali; un feedback vuoto non riapre checkpoint.
 
-L'editor carica separatamente `display` per copertina e titoli e `body` per testi e metadati. Nei profili legacy usa `sans` per entrambi. Risolve `emphasis_italic` secondo [brand-profile.md](brand-profile.md), ne mostra il nome nell'interfaccia e non sintetizza un corsivo mancante. Espone inoltre `cover_subtitle` come campo opzionale e lo rende nello stesso ruolo corsivo.
+L'editor carica separatamente `display` per copertina e titoli e `body` per testi e metadati. Nei profili legacy usa `sans` per entrambi. Risolve `emphasis_italic` secondo [brand-profile.md](brand-profile.md), ne mostra il nome nell'interfaccia e non sintetizza un corsivo mancante. Se un asset non è disponibile o non si carica, mostra esplicitamente il fallback effettivo e lascia disponibile `Genera`. Espone inoltre `cover_subtitle` come campo opzionale e lo rende nello stesso ruolo corsivo quando disponibile.
 
 Per l'anteprima dei logo servire soltanto asset raster autorizzati. Quando il master dichiarato è SVG e nella stessa cartella esiste un PNG omonimo, usare il PNG come derivato di anteprima e indicarlo nel pannello Brand. Non servire SVG non sanitizzati e non sostituire il master usato nella produzione finale.
 

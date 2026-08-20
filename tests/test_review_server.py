@@ -32,6 +32,24 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(review_server)
 
 
+class ReturnUrlTest(unittest.TestCase):
+    def test_accepts_only_canonical_codex_thread_urls(self) -> None:
+        thread_id = "01a01e64-3e6e-7b71-950d-c425e032e34e"
+        return_url = f"codex://threads/{thread_id}"
+        self.assertEqual(review_server.return_url_for_thread(thread_id), return_url)
+        self.assertEqual(review_server.valid_return_url(return_url), return_url)
+        for invalid in (
+            "",
+            "not-a-thread",
+            f"https://example.test/{thread_id}",
+            f"codex://threads/{thread_id}/extra",
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    review_server.return_url_for_thread(invalid)
+                self.assertIsNone(review_server.valid_return_url(invalid))
+
+
 class ManifestModelTest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -688,7 +706,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.11.4")
+        self.assertEqual(model["editor_version"], "2.12.2")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
@@ -1030,7 +1048,7 @@ class ValidateFeedbackTest(unittest.TestCase):
             result["slides"][1]["summary_accent"], ["Uno", "due", "tre"]
         )
 
-    def test_approval_enforces_documented_internal_copy_limits(self) -> None:
+    def test_approval_reports_documented_internal_copy_limits(self) -> None:
         slides = self.payload()["slides"]
         slides[0]["title_serif"] = []
         slides[1].update(
@@ -1040,17 +1058,17 @@ class ValidateFeedbackTest(unittest.TestCase):
                 "summary_serif": [],
             }
         )
-        with self.assertRaisesRegex(ValueError, "massimo 180"):
-            review_server.validate_feedback(
-                self.payload(slides, action="approve"), self.model
-            )
+        approved = review_server.validate_feedback(
+            self.payload(slides, action="approve"), self.model
+        )
+        self.assertTrue(any("massimo 180" in warning for warning in approved["warnings"]))
 
         slides[1]["title"] = ""
         slides[1]["summary"] = "x" * 321
-        with self.assertRaisesRegex(ValueError, "massimo 320"):
-            review_server.validate_feedback(
-                self.payload(slides, action="approve"), self.model
-            )
+        approved = review_server.validate_feedback(
+            self.payload(slides, action="approve"), self.model
+        )
+        self.assertTrue(any("massimo 320" in warning for warning in approved["warnings"]))
 
         feedback = review_server.validate_feedback(self.payload(slides), self.model)
         self.assertTrue(any("massimo 320" in warning for warning in feedback["warnings"]))
@@ -1294,7 +1312,7 @@ class ValidateFeedbackTest(unittest.TestCase):
             "base_workflow_state": model["workflow_state"],
             "render_fingerprint": model["render_fingerprint"],
         }
-        for missing in ("proof_slide_ids", "style_system_verified", "proof_browser"):
+        for missing in ("proof_slide_ids", "proof_browser"):
             payload = self.payload(slides, **common)
             payload.update(
                 {
@@ -1306,6 +1324,15 @@ class ValidateFeedbackTest(unittest.TestCase):
             payload.pop(missing)
             with self.subTest(missing=missing), self.assertRaises(ValueError):
                 review_server.validate_feedback(payload, model)
+
+        advisory_payload = self.payload(
+            slides,
+            **common,
+            proof_slide_ids=model["proof"]["required_slide_ids"],
+            proof_browser={"engine": "chromium", "major": 140},
+        )
+        advisory_result = review_server.validate_feedback(advisory_payload, model)
+        self.assertFalse(advisory_result["style_system_verified"])
 
         invalid_browser = self.payload(
             slides,
@@ -1408,15 +1435,16 @@ class ValidateFeedbackTest(unittest.TestCase):
         self.assertEqual(approved["slides"][1]["summary_underline"], ["seconda"])
         self.assertEqual(approved["slides"][1]["summary_accent"], ["terza."])
 
-    def test_approve_rejects_italic_when_no_real_italic_font_is_available(self) -> None:
+    def test_approve_reports_missing_real_italic_font_as_an_advisory(self) -> None:
         slides = self.payload()["slides"]
         slides[0]["title_serif"] = []
         slides[1].update({"summary_bold": ["Prima"], "summary_serif": ["frase."]})
         slides[2]["summary_bold"] = ["Seconda"]
-        with self.assertRaisesRegex(ValueError, "font corsivo reale"):
-            review_server.validate_feedback(
-                self.payload(slides, action="approve"), self.model
-            )
+        slides[2]["summary_accent"] = []
+        approved = review_server.validate_feedback(
+            self.payload(slides, action="approve"), self.model
+        )
+        self.assertTrue(any("font corsivo reale" in warning for warning in approved["warnings"]))
 
     def test_validates_and_transports_logo_mode(self) -> None:
         result = review_server.validate_feedback(self.payload(logo_mode="hidden"), self.model)

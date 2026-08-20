@@ -36,7 +36,7 @@ Se preferisci installarla dalla riga di comando, trovi il comando nella sezione 
 - offre un editor locale per correggere, riordinare, commentare e approvare le slide quando l'ambiente lo consente (con ChatGPT desktop e Claude Code);
 - usa la revisione conversazionale come fallback negli altri ambienti;
 - produce PNG, PDF o un layout dettagliato, secondo gli strumenti messi a disposizione dall'ambiente di lavoro;
-- controlla leggibilità, contrasto, font, ritagli e corrispondenza con i testi approvati;
+- segnala leggibilità, contrasto, font, ritagli e densità come avvisi consultivi, lasciando all'utente la decisione finale;
 - nel percorso locale lega approvazioni, export e QA a revisione, fingerprint e digest degli artefatti, con recovery coordinato dopo un'interruzione.
 
 ## Un'unica skill, due modalità
@@ -55,7 +55,7 @@ In un ambiente agentivo compatibile, come ChatGPT Desktop e Claude Code, può ap
 1. **Fonte**: tu gli dai un URL, un testo o un file e gli chiedi di creare un carosello
 2. **Brand**: la skill ti chiederà quali sono le caratteristiche del tuo brand (puoi anche caricare file di brand identity)
 3. **Anteprima editoriale**: si aprirà un editor che ti farà vedere e modificare il carosello.
-4. **Produzione**: dopo le due approvazioni il sistema genera gli output disponibili e li consegna soltanto dopo il QA
+4. **Produzione**: nel caso normale premi `Genera`; i checkpoint tecnici restano tracciati internamente e gli output vengono consegnati dopo i controlli di integrità
 
 ## Modalità editoriali
 

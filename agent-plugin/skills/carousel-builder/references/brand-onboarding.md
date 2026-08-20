@@ -14,7 +14,7 @@ Se la richiesta è generica, spiegare in massimo cinque punti che Carousel Build
 
 - trasformare URL, articoli, newsletter, note o testi in un carosello verticale 4:5;
 - usare un tema neutro, configurare un brand o riutilizzare un profilo JSON;
-- definire logo, palette, font, sistema visivo, copertina e chiusura;
+- definire logo, palette, font e chiusura, proponendo automaticamente sistema visivo e copertina;
 - far revisionare tutti i testi prima della produzione;
 - produrre artefatti finali quando la sessione lo consente oppure un layout pronto da impaginare.
 
@@ -74,7 +74,6 @@ Chiedere di completare in un'unica risposta questo schema, consentendo `Decidi t
 ```text
 Nome, sito e logo:
 Colori e tipografia:
-Stile delle immagini e composizione:
 Slide finale e obiettivo della CTA:
 ```
 
@@ -102,9 +101,9 @@ Chiedere il carattere per titoli (`display`) e quello per testi (`body`); posson
 - Se si usa un font di sistema, avvertire che la portabilità richiede il file o un brand pack.
 - Se un brand kit dichiara ruoli come display, heading, headline, text, body o copy, preservarli invece di ridurre automaticamente tutto a un solo font.
 
-#### D: sistema visivo, immagini e composizione
+#### D: direzione visiva facoltativa
 
-Leggere [visual-systems.md](visual-systems.md). Chiedere il sistema visivo, la direzione della copertina, eventuali riferimenti e ciò che va evitato. Se non è disponibile generazione immagini, dichiarare `typographic` come fallback universale e accettare un'immagine fornita.
+Leggere [visual-systems.md](visual-systems.md). Non chiedere all'utente di scegliere sistema visivo o tipo di copertina: selezionare internamente il sistema consigliato e usare `typographic` come copertina predefinita. Mostrare entrambe le proposte nell'editor, dove restano modificabili. Chiedere riferimenti, immagini o elementi da evitare soltanto se l'utente li menziona, richiede una direzione dettagliata oppure fornisce già un visuale.
 
 #### E: chiusura
 

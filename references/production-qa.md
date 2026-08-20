@@ -104,7 +104,7 @@ Usare sul canvas 1080×1350 questa scala nominale:
 - spazio aggiuntivo dopo ogni frase: 0.6 em;
 - tracking del corpo: -0.025 em.
 
-Adattare le dimensioni alle metriche reali del font mantenendo gerarchia e rapporti. Consentire una riduzione automatica massima dell'8%, quindi non scendere sotto il 92% della dimensione scelta. Se il contenuto continua a non entrare, restituire un errore di fit e richiedere una revisione del copy. Non ridurre ancora il carattere.
+Adattare le dimensioni alle metriche reali del font mantenendo gerarchia e rapporti. Consentire una riduzione automatica massima dell'8%, quindi non scendere sotto il 92% della dimensione scelta. Se il contenuto continua a non entrare, mostrare un avviso di fit e proporre una revisione del copy, senza bloccare `Genera`. Non ridurre ancora il carattere.
 
 Un profilo può proporre una scala diversa soltanto con approvazione esplicita. Restano obbligatori la prova a 480 px e il limite di riduzione dell'8%.
 
@@ -116,7 +116,7 @@ Dopo l'approvazione dei testi creare una prova con gli elementi seguenti, salvo 
 2. card con maggiore densità testuale;
 3. chiusura, quando prevista.
 
-Controllare obbligatoriamente la prova anche a 480×600, ottenuta dal master senza reflow, per simulare una visualizzazione desktop ridotta. Verificare inoltre la prova a risoluzione leggibile. Controllare gerarchia, densità, crop, famiglia e peso effettivi del font, ritorni a capo, contrasto e coerenza con il profilo. Verificare che la copertina sia priva di cornice, costellazione e indice modulare; sulla card densa e sulla chiusura verificare invece la firma strutturale obbligatoria descritta in [visual-systems.md](visual-systems.md). Impostare `proof.style_system_verified: true` soltanto dopo entrambi i controlli. Mostrare la prova all'utente e attendere l'approvazione prima di produrre le altre card. Ripetere la prova per ogni variante con rapporto diverso dal master.
+Mostrare la prova anche a 480×600, ottenuta dal master senza reflow, e a risoluzione leggibile. Segnalare gerarchia, densità, crop, famiglia e peso effettivi del font, ritorni a capo, contrasto e coerenza con il profilo. Il campo legacy `proof.style_system_verified` può registrare l'ispezione, ma non è una certificazione né un gate. Mostrare la prova all'utente: `Genera` accetta le scelte correnti e i relativi avvisi. Ripetere la prova per ogni variante con rapporto diverso dal master.
 
 ## Controllo testuale
 
@@ -137,7 +137,7 @@ Confrontare ogni card con l'ultima anteprima approvata e verificare:
 
 ## Controllo visivo
 
-Generare una contact sheet dell'intera sequenza. Eseguire i controlli deterministici del renderer su tutte le slide: contenuto, ordine, dimensioni, fit, caricamento asset e font, geometria, pixel, digest e parità anteprima-produzione. Il report QA li attesta con `automated_all_slides: true` soltanto se l'intero set passa.
+Generare una contact sheet dell'intera sequenza. Eseguire i controlli deterministici del renderer su tutte le slide. Contenuto, ordine, dimensioni, apertura degli asset, geometria, pixel, digest e parità anteprima-produzione sono gate tecnici. Fit e caricamento dei font sono controlli consultivi: registrarne gli esiti e gli eventuali fallback senza bloccare artefatti altrimenti validi. `automated_all_slides: true` attesta la copertura tecnica dell'intero set, non l'assenza di avvisi visivi.
 
 Il controllo umano normale è mirato:
 
@@ -146,7 +146,7 @@ Il controllo umano normale è mirato:
 3. aprire inoltre ogni slide segnalata dai controlli automatici o sospetta nella contact sheet;
 4. ampliare il campione a tutte le card soltanto se emerge un difetto sistemico, manca la contact sheet o una slide non è valutabile nel riepilogo.
 
-Registrare gli ID realmente aperti in `human_sample_slide_ids` e le anomalie automatiche in `flagged_slide_ids`. Il campione deve includere sempre il proof canonico e tutte le anomalie. Questa riduzione riguarda la controverifica umana ripetitiva, non la copertura automatica né l'ispezione dell'intera sequenza nella contact sheet.
+Quando viene svolta una revisione umana, registrare gli ID realmente aperti in `human_sample_slide_ids` e le anomalie automatiche in `flagged_slide_ids`; il campione dovrebbe includere il proof canonico e le anomalie. Il campione può restare vuoto e il suo esito non blocca la consegna: la responsabilità visiva finale resta all'utente. Questo non riduce la copertura dei gate tecnici automatici.
 
 Verificare:
 
@@ -180,7 +180,7 @@ Verificare inoltre:
 - presenza nel manifest di alt text per ogni slide oppure di una trascrizione completa e ordinata del carosello;
 - descrizione del visuale quando aggiunge informazione non presente nei testi.
 
-Se uno dei cinque colori richiesti (`background_light`, `background_dark`, `text_on_light`, `text_on_dark`, `accent`) non è dichiarato esplicitamente o non usa `#RRGGBB`, non approvare il fallback mostrato dall'anteprima. Se una palette identificativa dichiarata non supera il contrasto minimo, segnalarlo e chiedere una scelta. Non alterarla silenziosamente.
+Se uno dei cinque colori consigliati (`background_light`, `background_dark`, `text_on_light`, `text_on_dark`, `accent`) non è dichiarato esplicitamente o non usa `#RRGGBB`, mostrare il fallback e segnalarlo. Se una palette identificativa dichiarata non supera il contrasto minimo, informare l'utente senza alterarla silenziosamente o bloccare `Genera`.
 
 Se una correzione cambia manifest, profilo, copy, stile, logo o asset, applicarla tramite il flusso di review: `apply_review.py` riapre il checkpoint ancora valido, poi si ripetono le approvazioni e le transizioni richieste fino a `rendering`. Soltanto allora rieseguire l'export e ripetere tutti i controlli; non riesportare direttamente da `qa` o `consegnato`.
 
@@ -192,16 +192,16 @@ Prima della consegna verificare:
 - numero, ordine, nomi, dimensioni e apertura effettiva dei PNG;
 - numero, ordine, formato uniforme e apertura delle pagine PDF;
 - corrispondenza proporzionale tra master 1080×1350 ed export 1440×1800;
-- caricamento dei font previsti e assenza di fallback inattesi;
-- corrispondenza tra font richiesto, font approvato e famiglia effettivamente renderizzata;
+- caricamento dei font previsti ed eventuali fallback dichiarati;
+- corrispondenza tra font richiesto e famiglia effettivamente renderizzata, segnalando ogni sostituzione;
 - corrispondenza tra testi approvati, manifest e artefatti;
-- in modalità `renderer` o `adapter`, presenza di `production.supported_style_systems` con il sistema selezionato e di `proof.style_system_verified: true`;
+- in modalità `renderer` o `adapter`, presenza di `production.supported_style_systems` con il sistema selezionato; `proof.style_system_verified` resta diagnostico;
 - nel percorso `local-editor`, esito positivo del contratto `approved-preview-dom-v2`, prova visuale ancora approvata e legata agli asset correnti, e parità esatta di revisione, contenuto, geometria e pixel tra anteprima e produzione prima e dopo la cattura;
 - assenza di file incompleti o duplicati presentati come finali.
 
-Se un controllo fallisce, conservare gli output validi, mantenere lo stato precedente e offrire ripetizione o fallback. Non avanzare a `consegnato`.
+Se fallisce un controllo tecnico, strutturale, di sicurezza, integrità o workflow, conservare gli output validi, mantenere lo stato precedente e offrire ripetizione o fallback. Non avanzare a `consegnato`. Un avviso visuale, editoriale, tipografico o di revisione umana non impedisce invece la consegna.
 
-Nel percorso `local-editor`, ispezionare prima gli artefatti mentre lo stato è `rendering` e compilare il report `carousel-builder-qa-v1` descritto in [workflow-state.md](workflow-state.md). Con `finalize_delivery.py` è possibile impostare `render_evidence_sha256` a `auto`: il wrapper avanza `rendering -> qa`, crea nella sessione una copia del report legata al digest durevole appena prodotto e la usa per `qa -> consegnato`. Entrambe le transizioni ricalcolano i digest degli artefatti reali; un report già dotato di digest viene invece verificato senza riscrittura. Non compilare il report come semplice copia dell'esito automatico: `human_sample_review` richiede l'ispezione effettiva del campione dichiarato.
+Nel percorso `local-editor`, ispezionare quando possibile gli artefatti mentre lo stato è `rendering` e compilare il report `carousel-builder-qa-v1` descritto in [workflow-state.md](workflow-state.md). Con `finalize_delivery.py` è possibile impostare `render_evidence_sha256` a `auto`: il wrapper avanza `rendering -> qa`, crea nella sessione una copia del report legata al digest durevole appena prodotto e la usa per `qa -> consegnato`. Entrambe le transizioni ricalcolano i digest degli artefatti reali; un report già dotato di digest viene invece verificato senza riscrittura. `fonts` e `human_sample_review` sono booleani consultivi: registrarli onestamente, senza usarli per bloccare artefatti tecnicamente validi.
 
 ## Consegna
 

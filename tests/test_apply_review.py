@@ -1284,16 +1284,18 @@ class ApplyReviewTest(unittest.TestCase):
         result = self.apply(base_manifest(), base_feedback(batch, action="approve"))
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_approval_enforces_internal_copy_limits_server_side(self) -> None:
+    def test_approval_reports_internal_copy_limits_as_advisories(self) -> None:
         batch = self.full_batch()
-        batch[1]["title"] = "Titolo"
-        batch[1]["summary"] = "x" * 181
+        batch[1]["title"] = ""
+        batch[1]["summary"] = "x" * 321
         batch[1]["summary_serif"] = []
         result = self.apply(
             base_manifest(), base_feedback(batch, action="approve")
         )
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("massimo 180", json.loads(result.stderr)["error"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(
+            any("massimo 320" in warning for warning in json.loads(result.stdout)["warnings"])
+        )
 
         batch[1]["title"] = ""
         batch[1]["summary"] = "Uno due tre."
