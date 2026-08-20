@@ -1243,9 +1243,9 @@ class ApplyReviewTest(unittest.TestCase):
         batch[1]["summary_bold"] = ["Prima"]
         result = self.apply(base_manifest(), base_feedback(batch))
         self.assertEqual(result.returncode, 2)
-        self.assertIn("una sola volta", json.loads(result.stderr)["error"])
+        self.assertIn("deve comparire nel testo", json.loads(result.stderr)["error"])
 
-    def test_rejects_overlapping_or_ambiguous_received_emphasis(self) -> None:
+    def test_rejects_overlapping_but_accepts_repeated_received_emphasis(self) -> None:
         batch = self.full_batch()
         batch[1]["summary_bold"] = ["Prima"]
         batch[1]["summary_italic"] = ["Prima frase."]
@@ -1255,9 +1255,13 @@ class ApplyReviewTest(unittest.TestCase):
 
         batch = self.full_batch()
         batch[1]["summary_bold"] = ["a"]
+        batch[1]["summary_bold_ranges"] = [{"text": "a", "start": 4, "end": 5}]
         result = self.apply(base_manifest(), base_feedback(batch))
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("una sola volta", json.loads(result.stderr)["error"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.manifest()["items"][0]["summary_bold_ranges"],
+            [{"text": "a", "start": 4, "end": 5}],
+        )
 
     def test_same_selection_with_two_treatments_has_one_actionable_error(self) -> None:
         batch = self.full_batch()

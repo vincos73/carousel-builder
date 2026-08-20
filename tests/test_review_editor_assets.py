@@ -240,7 +240,8 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("new FontFace(", self.source)
         self.assertIn('asset.source === "system"', self.source)
-        self.assertIn('local("${safeFamily}")', self.source)
+        self.assertIn("function systemFontSource(family, style)", self.source)
+        self.assertIn('local("${String(name)', self.source)
         self.assertIn("fontAssetDescriptors(kind, style)", self.source)
         self.assertIn("fontLoadCache.get(key) === pending", self.source)
         self.assertNotIn("@font-face", self.stylesheet)
@@ -649,7 +650,7 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         self.assertIn(".applied-style-chip", stylesheet)
         self.assertIn("border-radius: 999px", stylesheet)
         self.assertIn("renderAppliedStyles();", self.source)
-        self.assertIn("value !== segment", self.source)
+        self.assertIn("emphasisRanges(slide, field, kind", self.source)
 
     def test_existing_format_is_recognized_and_overlap_is_prevented(self) -> None:
         self.assertIn("const selectionState = (kind, start, end) =>", self.source)
@@ -712,10 +713,6 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
     def test_unavailable_italic_can_still_be_removed(self) -> None:
         self.assertIn(
             'button.disabled = !hasSelection || (!available && !active);',
-            self.source,
-        )
-        self.assertIn(
-            'if (kind === "italic" && !hasRealItalicFont() && !removableSegment) return;',
             self.source,
         )
         self.assertIn(

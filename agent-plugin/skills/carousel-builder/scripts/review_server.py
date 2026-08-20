@@ -47,6 +47,7 @@ from review_core import (  # noqa: E402
     strict_json_loads,
     strict_json_text,
     valid_sha256,
+    validate_emphasis_ranges,
     validate_emphasis_values,
 )
 from manifest_contract import (  # noqa: E402
@@ -66,8 +67,9 @@ from manifest_contract import (  # noqa: E402
 
 MAX_BODY_BYTES = 1_000_000
 MAX_COMMENTS = 200
-EDITOR_VERSION = "2.12.4"
+EDITOR_VERSION = "2.12.5"
 RENDER_CONTRACT = "approved-preview-dom-v2"
+EMPHASIS_RANGE_SUFFIX = "_ranges"
 TYPOGRAPHY_DEFAULTS = {
     "cover_px": 112,
     "cover_subtitle_px": 56,
@@ -555,6 +557,25 @@ def validated_emphasis(value: object, content: str) -> list[str]:
     return result
 
 
+def validated_emphasis_ranges(value: object, content: str, *, field: str) -> list[dict]:
+    return validate_emphasis_ranges(value, content, field=field)
+
+
+def validate_emphasis_range_overlap(values: dict[str, list[dict]], *, field: str) -> None:
+    ranges: list[tuple[int, int, str, str]] = []
+    for role, marks in values.items():
+        for mark in marks:
+            start, end, phrase = mark["start"], mark["end"], mark["text"]
+            for other_start, other_end, other_role, other_phrase in ranges:
+                if role == other_role:
+                    continue
+                if start < other_end and other_start < end:
+                    raise ValueError(
+                        f"{field}: i trattamenti su “{other_phrase}” e “{phrase}” si sovrappongono. Correggi le selezioni oppure mantienine uno solo"
+                    )
+            ranges.append((start, end, role, phrase))
+
+
 def validate_emphasis_overlap(values: dict[str, list[str]], content: str, *, field: str) -> None:
     """Selections for separate visual roles must never share characters."""
     special_roles = {"italic", "serif", "accent", "underline"}
@@ -690,6 +711,12 @@ def _italic_font_asset(manifest: dict, manifest_path: Path) -> tuple[dict, Path 
         if configured is None:
             continue
         family = _short_string(configured.get("family")) if isinstance(configured, dict) else _short_string(configured)
+        fallbacks = []
+        if isinstance(configured, dict) and isinstance(configured.get("fallbacks"), list):
+            fallbacks = [
+                value.strip() for value in configured["fallbacks"]
+                if isinstance(value, str) and value.strip() and len(value.strip()) <= 200
+            ]
         source = "fallback"
         file_name: object = None
         if isinstance(configured, dict):
@@ -719,6 +746,7 @@ def _italic_font_asset(manifest: dict, manifest_path: Path) -> tuple[dict, Path 
                 "available": True,
                 "endpoint": "/api/font/italic" if resolved is not None else "",
                 "role": role,
+                "fallbacks": fallbacks,
             }, resolved
 
     return {
@@ -727,6 +755,7 @@ def _italic_font_asset(manifest: dict, manifest_path: Path) -> tuple[dict, Path 
         "available": False,
         "endpoint": "",
         "role": "",
+        "fallbacks": [],
     }, None
 
 
@@ -999,11 +1028,21 @@ RENDER_SLIDE_FIELDS = (
     "title_serif",
     "title_accent",
     "title_underline",
+    "title_bold_ranges",
+    "title_italic_ranges",
+    "title_serif_ranges",
+    "title_accent_ranges",
+    "title_underline_ranges",
     "summary_bold",
     "summary_italic",
     "summary_serif",
     "summary_accent",
     "summary_underline",
+    "summary_bold_ranges",
+    "summary_italic_ranges",
+    "summary_serif_ranges",
+    "summary_accent_ranges",
+    "summary_underline_ranges",
 )
 
 
@@ -1206,6 +1245,28 @@ def manifest_model(
             }
         )
 
+    for slide in slides:
+        source_field = {
+            "cover": {"title": "cover_title", "summary": "cover_subtitle"},
+            "item": {"title": "title", "summary": "summary"},
+            "outro": {"title": "outro.title", "summary": "outro.body"},
+        }[slide["kind"]]
+        source = manifest if slide["kind"] == "cover" else (
+            contract["outro"] if slide["kind"] == "outro" else next(
+                item for item in contract["items"] if item["id"] == slide["id"]
+            )
+        )
+        for field in ("title", "summary"):
+            content = slide[field]
+            manifest_field = source_field[field]
+            for role in EMPHASIS_ROLES:
+                raw = source.get(f"{manifest_field}_{role}_ranges")
+                slide[f"{field}_{role}_ranges"] = validated_emphasis_ranges(
+                    raw,
+                    content,
+                    field=f"{manifest_field}_{role}_ranges",
+                )
+
     sequence_mode = contract["sequence_mode"]
     format_data = manifest.get("format") if isinstance(manifest.get("format"), dict) else {}
     cover_visual, _ = cover_image_asset(manifest, manifest_path)
@@ -1344,6 +1405,7 @@ def validate_feedback(
             text(slide.get("summary"), field=f"slides[{position}].summary")
         )
         emphasis: dict[str, list[str]] = {}
+        emphasis_ranges: dict[str, list[dict]] = {}
         for field, content in (("title", title), ("summary", summary)):
             values = {
                 role: validate_emphasis_values(
@@ -1353,11 +1415,23 @@ def validate_feedback(
                 )
                 for role in EMPHASIS_ROLES
             }
-            validate_emphasis_overlap(values, content, field=f"slides[{position}].{field}")
+            ranges = {
+                role: validated_emphasis_ranges(
+                    slide.get(f"{field}_{role}_ranges"),
+                    content,
+                    field=f"slides[{position}].{field}_{role}_ranges",
+                )
+                for role in EMPHASIS_ROLES
+            }
+            if any(ranges.values()):
+                validate_emphasis_range_overlap(ranges, field=f"slides[{position}].{field}")
+            else:
+                validate_emphasis_overlap(values, content, field=f"slides[{position}].{field}")
             if (values["italic"] or values["serif"]) and not italic_font_available:
                 message = f"{slide_id}.{field} usa il corsivo senza un font corsivo reale disponibile"
                 warnings.append(message)
             emphasis.update({f"{field}_{role}": phrases for role, phrases in values.items()})
+            emphasis_ranges.update({f"{field}_{role}_ranges": marks for role, marks in ranges.items()})
 
         normalized_slides.append(
             {
@@ -1366,6 +1440,7 @@ def validate_feedback(
                 "title": title,
                 "summary": summary,
                 **emphasis,
+                **emphasis_ranges,
             }
         )
 
@@ -1531,6 +1606,9 @@ def validate_feedback(
                     for role in EMPHASIS_ROLES:
                         normalized[f"{field}_{role}"] = slide.get(
                             f"{field}_{role}", []
+                        )
+                        normalized[f"{field}_{role}_ranges"] = slide.get(
+                            f"{field}_{role}_ranges", []
                         )
                 current_slides.append(normalized)
             if approval_stage == "visual_proof" and normalized_slides != current_slides:

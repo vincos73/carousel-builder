@@ -5,7 +5,7 @@ description: Trasforma URL, articoli e testi in caroselli editoriali 4:5, guidan
 
 # Carousel Builder
 
-Versione: **2.12.4**
+Versione: **2.12.5**
 
 Separare fonte, identità, testi, prova, produzione e QA. L'utente decide le scelte editoriali e visuali: il sistema le segnala, ma blocca solo errori tecnici, strutturali, di sicurezza o del workflow. Nel caso normale l'editor espone una sola azione primaria, `Genera`, conservando le ricevute durevoli. La richiesta iniziale autorizza solo la proposta editoriale.
 

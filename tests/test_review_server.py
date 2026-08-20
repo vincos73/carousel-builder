@@ -706,7 +706,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.12.4")
+        self.assertEqual(model["editor_version"], "2.12.5")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
@@ -954,6 +954,7 @@ class ManifestModelTest(unittest.TestCase):
             "available": True,
             "endpoint": "",
             "role": "emphasis_italic",
+            "fallbacks": [],
         })
 
     def test_exposes_default_system_italic_for_browser_verification(self) -> None:
@@ -1120,6 +1121,11 @@ class ValidateFeedbackTest(unittest.TestCase):
                 "summary": value.get("summary", ""),
                 **{
                     f"{field}_{role}": value.get(f"{field}_{role}", [])
+                    for field in ("title", "summary")
+                    for role in review_server.EMPHASIS_ROLES
+                },
+                **{
+                    f"{field}_{role}_ranges": value.get(f"{field}_{role}_ranges", [])
                     for field in ("title", "summary")
                     for role in review_server.EMPHASIS_ROLES
                 },

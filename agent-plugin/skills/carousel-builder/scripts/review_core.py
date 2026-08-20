@@ -982,9 +982,39 @@ def validate_emphasis_values(value: object, content: str, *, field: str) -> list
             raise ValueError(f"{field}[{index}] deve essere una frase non vuota")
         if phrase in result:
             raise ValueError(f"{field} contiene un valore non univoco: {phrase!r}")
-        if content.count(phrase) != 1:
-            raise ValueError(f"{field}[{index}] deve comparire una sola volta nel testo della card")
+        if phrase not in content:
+            raise ValueError(f"{field}[{index}] deve comparire nel testo della card")
         result.append(phrase)
+    return result
+
+
+def validate_emphasis_ranges(value: object, content: str, *, field: str) -> list[dict]:
+    """Validate occurrence-aware emphasis ranges without requiring unique phrases."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field} deve essere una lista")
+    result: list[dict] = []
+    seen: set[tuple[str, int, int]] = set()
+    for index, mark in enumerate(value):
+        if not isinstance(mark, dict):
+            raise ValueError(f"{field}[{index}] deve essere un oggetto")
+        phrase = mark.get("text")
+        start = mark.get("start")
+        end = mark.get("end")
+        if not isinstance(phrase, str) or not phrase:
+            raise ValueError(f"{field}[{index}].text deve essere una frase non vuota")
+        if not isinstance(start, int) or isinstance(start, bool) or start < 0:
+            raise ValueError(f"{field}[{index}].start deve essere un intero non negativo")
+        if not isinstance(end, int) or isinstance(end, bool) or end <= start:
+            raise ValueError(f"{field}[{index}].end deve essere maggiore di start")
+        if end > len(content) or content[start:end] != phrase:
+            raise ValueError(f"{field}[{index}] non coincide con il testo nella posizione dichiarata")
+        identity = (phrase, start, end)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append({"text": phrase, "start": start, "end": end})
     return result
 
 

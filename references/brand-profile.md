@@ -74,7 +74,7 @@ Usare per i nuovi profili questo schema:
 - Trattare `emphasis_italic` come ruolo espressivo opzionale per sottotitolo di copertina ed enfasi semantiche. Può coincidere con `body_italic`, cioè la vera variante corsiva del carattere principale, oppure indicare un secondo carattere corsivo approvato.
 - Risolvere il ruolo corsivo nell'ordine `emphasis_italic`, `body_italic`, `serif_italic` legacy. Non derivare un corsivo inclinando artificialmente il file regular e non usarlo come sostituto del ruolo `body`.
 - Se l'utente richiede un font esatto e il file non è disponibile, chiedere il file. Se indica soltanto una famiglia o un tono, proporre un sostituto disponibile e attenderne l'approvazione.
-- Il profilo neutro usa Arial di sistema per `display` e `body` e Times New Roman Italic di sistema per `emphasis_italic`. Il browser verifica le varianti locali prima della prova e mostra il fallback effettivo se mancano.
+- Il profilo neutro usa Arial di sistema per `display` e `body` e preferisce la vera variante Arial Italic di sistema per `emphasis_italic`; se non è disponibile può usare Times New Roman Italic di sistema. Il browser verifica la variante locale prima della prova e mostra il fallback effettivo se mancano.
 - Non incorporare font nel pacchetto della skill. Un profilo personalizzato può ancora usare file forniti dall'utente; i font di sistema restano portabili soltanto dove la stessa famiglia è installata.
 - Un font con `source: system` può essere usato dopo verifica locale, dichiarando che non è portabile senza il relativo file.
 - Usare la scala tipografica nominale indicata nel profilo. Scostamenti richiedono approvazione e restano soggetti al limite di riduzione dell'8%.
@@ -128,8 +128,8 @@ Usarlo soltanto dopo scelta esplicita:
 
 - `name`: `Editorial Carousel`;
 - nessun logo, sito, firma o tagline;
-- Arial di sistema nei ruoli `display` e `body`, Times New Roman Italic di sistema come `emphasis_italic`;
-- `surface_mode: alternating` con palette predefinita leggibile;
+- Arial di sistema nei ruoli `display` e `body`, Arial Italic di sistema come `emphasis_italic` quando disponibile, altrimenti Times New Roman Italic di sistema;
+- `surface_mode: alternating` con `background_light: #F8F7F4`, `background_dark: #2D2E2F`, `text_on_light: #2D2E2F`, `text_on_dark: #FFFFFF` e accento melanzana `#6B3F5D`;
 - direzione `editorial-geometric`;
 - `visual_signature.style_system: editorial-frame`;
 - chiusura generata dalla fonte per `newsletter` e `article`.

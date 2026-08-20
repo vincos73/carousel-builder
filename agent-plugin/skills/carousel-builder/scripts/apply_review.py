@@ -38,6 +38,7 @@ from review_core import (  # noqa: E402
     strict_json_loads,
     valid_sha256,
     validated_proof_browser,
+    validate_emphasis_ranges,
     validate_emphasis_values,
 )
 
@@ -284,6 +285,12 @@ EMPHASIS_KEYS = {
     "title": ("title_bold", "title_italic", "title_serif", "title_accent", "title_underline"),
     "summary": ("summary_bold", "summary_italic", "summary_serif", "summary_accent", "summary_underline"),
 }
+EMPHASIS_RANGE_KEYS = {
+    "cover_title": ("cover_title_bold_ranges", "cover_title_italic_ranges", "cover_title_serif_ranges", "cover_title_accent_ranges", "cover_title_underline_ranges"),
+    "cover_subtitle": ("cover_subtitle_bold_ranges", "cover_subtitle_italic_ranges", "cover_subtitle_serif_ranges", "cover_subtitle_accent_ranges", "cover_subtitle_underline_ranges"),
+    "title": ("title_bold_ranges", "title_italic_ranges", "title_serif_ranges", "title_accent_ranges", "title_underline_ranges"),
+    "summary": ("summary_bold_ranges", "summary_italic_ranges", "summary_serif_ranges", "summary_accent_ranges", "summary_underline_ranges"),
+}
 EMPHASIS_ROLES = ("bold", "italic", "serif", "accent", "underline")
 MAX_SLIDES = 50
 RESERVED_SLIDE_IDS = {"cover", "outro"}
@@ -323,6 +330,21 @@ def prune_emphasis(container: dict, field: str, new_text: str) -> list[str]:
                 str(phrase) for phrase in phrases if phrase not in kept
             )
             container[key] = kept
+    for key in EMPHASIS_RANGE_KEYS[field]:
+        marks = container.get(key)
+        if not isinstance(marks, list):
+            continue
+        kept_marks = [
+            mark for mark in marks
+            if isinstance(mark, dict)
+            and isinstance(mark.get("text"), str)
+            and mark.get("text") in new_text
+        ]
+        if kept_marks != marks:
+            dropped.extend(
+                str(mark.get("text")) for mark in marks if mark not in kept_marks
+            )
+            container[key] = kept_marks
     return dropped
 
 
@@ -353,8 +375,13 @@ def sync_emphasis(
     Existing emphasis can still be deliberately cleared with an empty list.
     """
     dropped: list[str] = []
-    for role, key in zip(EMPHASIS_ROLES, EMPHASIS_KEYS[manifest_field]):
+    for role, key, range_key in zip(
+        EMPHASIS_ROLES,
+        EMPHASIS_KEYS[manifest_field],
+        EMPHASIS_RANGE_KEYS[manifest_field],
+    ):
         feedback_key = f"{slide_field}_{role}"
+        feedback_range_key = f"{slide_field}_{role}_ranges"
         if feedback_key in slide:
             received = validate_emphasis_values(
                 slide[feedback_key], new_text, field=feedback_key
@@ -362,6 +389,14 @@ def sync_emphasis(
             kept = received
             if received or key in container:
                 container[key] = kept
+        if feedback_range_key in slide:
+            received_ranges = validate_emphasis_ranges(
+                slide[feedback_range_key],
+                new_text,
+                field=feedback_range_key,
+            )
+            if received_ranges or range_key in container:
+                container[range_key] = received_ranges
         elif text_changed:
             phrases = container.get(key)
             if isinstance(phrases, list):
@@ -372,6 +407,14 @@ def sync_emphasis(
                 ]
                 dropped.extend(str(phrase) for phrase in phrases if phrase not in kept)
                 container[key] = kept
+            marks = container.get(range_key)
+            if isinstance(marks, list):
+                container[range_key] = [
+                    mark for mark in marks
+                    if isinstance(mark, dict)
+                    and isinstance(mark.get("text"), str)
+                    and mark.get("text") in new_text
+                ]
         else:
             phrases = container.get(key)
             stale = (
@@ -868,7 +911,7 @@ def main() -> int:
         cover_emphasis = {
             key: list(manifest[key])
             for field in ("cover_title", "cover_subtitle")
-            for key in EMPHASIS_KEYS[field]
+            for key in EMPHASIS_KEYS[field] + EMPHASIS_RANGE_KEYS[field]
             if isinstance(manifest.get(key), list)
         }
         cover_copy_changed = (
@@ -961,7 +1004,7 @@ def main() -> int:
                 for item in new_items
             )
         )
-        item_emphasis_keys = EMPHASIS_KEYS["title"] + EMPHASIS_KEYS["summary"]
+        item_emphasis_keys = EMPHASIS_KEYS["title"] + EMPHASIS_KEYS["summary"] + EMPHASIS_RANGE_KEYS["title"] + EMPHASIS_RANGE_KEYS["summary"]
         items_emphasis_changed = any(
             any(
                 by_id[str(item["id"])].get(key) != item.get(key)
