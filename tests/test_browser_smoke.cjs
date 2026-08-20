@@ -666,11 +666,12 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   assert.deepEqual(
     await evaluate(client, approvalPage, `({
       label: document.querySelector('#approve-button').textContent,
+      correctionHidden: document.querySelector('#send-button').hidden,
       scope: document.querySelector('#approval-dialog').dataset.approvalScope || "",
       title: document.querySelector('#approval-dialog-title').textContent,
       currentStep: document.querySelector('#workflow-steps [aria-current="step"] strong').textContent,
     })`),
-    { label: "Genera", scope: "profile_text_and_visual", title: "Generare il carosello?", currentStep: "Profilo e testi" },
+    { label: "Genera", correctionHidden: true, scope: "profile_text_and_visual", title: "Generare il carosello?", currentStep: "Profilo e testi" },
   );
   await evaluate(client, approvalPage, "document.querySelector('#approval-dialog').close()");
 
@@ -835,7 +836,8 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   await waitFor(
     client,
     editorPage,
-    `JSON.stringify([...document.querySelectorAll('.slide-row')].map((row) => row.dataset.slideId)) === '["cover","item-2","item-1","outro"]'`,
+    `JSON.stringify([...document.querySelectorAll('.slide-row')].map((row) => row.dataset.slideId)) === '["cover","item-2","item-1","outro"]'
+      && document.querySelector('#send-button').hidden === false`,
     "riordino UI",
   );
   await evaluate(client, editorPage, `document.querySelector('#send-button').click()`);

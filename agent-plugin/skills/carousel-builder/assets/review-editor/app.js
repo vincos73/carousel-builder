@@ -1112,6 +1112,15 @@
     return count;
   }
 
+  function hasAgentCorrections() {
+    return Boolean(
+      selectionComments.length
+      || Object.values(slideNotes).some((value) => typeof value === "string" && value.trim())
+      || brandNote.trim()
+      || overallNote.trim()
+    );
+  }
+
   function hasPendingLock() {
     return Boolean(awaitingFeedbackId || foreignFeedbackId);
   }
@@ -1284,6 +1293,8 @@
     for (const [mobile, desktop] of pairs) {
       if (!mobile || !desktop) continue;
       mobile.disabled = desktop.disabled;
+      mobile.hidden = desktop.hidden;
+      mobile.setAttribute("aria-hidden", String(desktop.hidden));
       mobile.setAttribute("aria-disabled", String(desktop.disabled));
     }
   }
@@ -1292,6 +1303,12 @@
     if (!model) return;
     const count = computeChangeCount();
     const waiting = hasPendingLock();
+    const contentAlreadyApproved = model.workflow_state !== "bozza";
+    const sendVisible = hasAgentCorrections() || (contentAlreadyApproved && count > 0);
+    if (elements.sendButton) {
+      elements.sendButton.hidden = !sendVisible;
+      elements.sendButton.setAttribute("aria-hidden", String(!sendVisible));
+    }
     if (hasStaleBase()) {
       if (elements.resetButton) elements.resetButton.disabled = false;
       if (elements.undoButton) elements.undoButton.disabled = true;
@@ -1310,12 +1327,12 @@
         || approvalComplete
         || !previewReadyForApproval(document.documentElement.dataset);
     }
-    const visualProofHasChanges = model.workflow_state === "testi_approvati" && count > 0;
+    const approvedContentHasChanges = contentAlreadyApproved && count > 0;
     const sendLabel = waiting
-      ? "Bozza inviata"
-      : visualProofHasChanges
-        ? "Invia bozza · poi riapprova"
-        : "Invia bozza";
+      ? "Correzioni inviate"
+      : approvedContentHasChanges
+        ? "Invia correzioni · poi riapprova"
+        : "Invia correzioni";
     if (elements.sendButton) elements.sendButton.textContent = sendLabel;
     if (elements.mobileSendButton) elements.mobileSendButton.textContent = sendLabel;
     if (elements.workflowBadge) {
