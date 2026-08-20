@@ -2155,12 +2155,15 @@
     const selectionToolbar = create("div", "selection-toolbar");
     selectionToolbar.setAttribute("aria-label", "Strumenti di enfasi della selezione");
     const makeFormatButton = (kind, text, label) => {
-      const button = create("button", `format-button format-${kind}`, text);
+      const button = create("button", `format-button format-${kind}`);
       button.type = "button";
       button.title = label;
       button.setAttribute("aria-label", label);
       button.setAttribute("aria-pressed", "false");
+      button.dataset.baseLabel = label;
+      button.dataset.count = "0";
       button.disabled = true;
+      button.append(create("span", "format-button-label", text));
       return button;
     };
     const boldButton = makeFormatButton("bold", "B", "Applica o rimuovi il grassetto dalla selezione");
@@ -2263,19 +2266,32 @@
         const state = hasSelection ? selectionState(kind, start, end) : { containing: "", overlapping: "" };
         const active = Boolean(state.containing);
         const mixed = Boolean(!active && state.overlapping);
+        const count = emphasisRanges(slide, field, kind, input.value).length;
+        const countLabel = count === 0 ? "Nessun formato già applicato in questo campo" : `${count} ${count === 1 ? "formato già applicato" : "formati già applicati"} in questo campo`;
+        const actionLabel = active
+          ? button.dataset.baseLabel.replace("Applica o rimuovi", "Rimuovi")
+          : mixed
+            ? `${button.dataset.baseLabel}. La selezione intercetta un formato esistente`
+            : button.dataset.baseLabel;
+        const fullLabel = `${actionLabel}. ${countLabel}`;
         button.disabled = !hasSelection || (!available && !active);
         button.setAttribute("aria-pressed", active ? "true" : mixed ? "mixed" : "false");
+        button.setAttribute("aria-label", fullLabel);
+        button.title = fullLabel;
         button.classList.toggle("is-mixed", mixed);
         button.dataset.appliedSegment = state.containing?.text || "";
+        button.dataset.count = String(count);
       };
       setButton(boldButton, "bold");
       setButton(italicButton, "italic", hasRealItalicFont());
       setButton(underlineButton, "underline");
       setButton(accentButton, "accent");
       const italicActive = Boolean(italicButton.dataset.appliedSegment);
-      italicButton.title = !hasRealItalicFont() && italicActive
+      const italicCount = emphasisRanges(slide, field, "italic", input.value).length;
+      const italicCountLabel = italicCount === 0 ? "Nessun formato già applicato in questo campo" : `${italicCount} ${italicCount === 1 ? "formato già applicato" : "formati già applicati"} in questo campo`;
+      italicButton.title = `${!hasRealItalicFont() && italicActive
         ? "Rimuovi il corsivo non disponibile dalla selezione"
-        : `Applica o rimuovi il corsivo ${italicFontLabel()} dalla selezione${hasRealItalicFont() ? "" : " (non disponibile)"}`;
+        : `Applica o rimuovi il corsivo ${italicFontLabel()} dalla selezione${hasRealItalicFont() ? "" : " (non disponibile)"}`}. ${italicCountLabel}`;
       italicButton.setAttribute("aria-label", italicButton.title);
       commentButton.disabled = !hasSelection;
     };
@@ -2498,11 +2514,11 @@
   function previewColors(index, kind) {
     const palette = previewBrand().palette || {};
     const useDark = kind === "cover" || kind === "outro" || index % 2 === 0;
-    const accent = safeColor(palette.accent || palette.primary || palette.accent_primary, "#febd08");
-    const backgroundDark = safeColor(palette.background_dark, "#172033");
-    const backgroundLight = safeColor(palette.background_light, "#f5f1e8");
+    const accent = safeColor(palette.accent || palette.primary || palette.accent_primary, "#6b3f5d");
+    const backgroundDark = safeColor(palette.background_dark, "#2d2e2f");
+    const backgroundLight = safeColor(palette.background_light, "#f8f7f4");
     const textOnDark = safeColor(palette.text_on_dark, "#ffffff");
-    const textOnLight = safeColor(palette.text_on_light, "#172033");
+    const textOnLight = safeColor(palette.text_on_light, "#2d2e2f");
     const accentUsesLightText = contrastRatio(accent, textOnDark) >= contrastRatio(accent, textOnLight);
     const accentText = accentUsesLightText ? textOnDark : textOnLight;
     const accentLogoRole = accentUsesLightText ? "on_dark" : "on_light";
