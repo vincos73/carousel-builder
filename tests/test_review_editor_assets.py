@@ -225,6 +225,7 @@ assert.equal(JSON.parse(storage.get(keyB)).slides[0].id, "b");
 const assert = require("node:assert/strict");
 const { fontAssetDescriptors, fontAssetRequiresVerifiedLoad } = require(process.argv[1]);
 assert.deepEqual(fontAssetDescriptors("body"), { style: "normal", weight: "100 699" });
+assert.deepEqual(fontAssetDescriptors("bold"), { style: "normal", weight: "700 900" });
 assert.deepEqual(fontAssetDescriptors("display"), { style: "normal", weight: "700 900" });
 assert.deepEqual(fontAssetDescriptors("italic", "italic"), { style: "italic", weight: "100 900" });
 assert.equal(fontAssetRequiresVerifiedLoad(), false);
@@ -240,9 +241,12 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("new FontFace(", self.source)
         self.assertIn('asset.source === "system"', self.source)
-        self.assertIn("function systemFontSource(family, style)", self.source)
+        self.assertIn("function systemFontSource(family, style, weight)", self.source)
         self.assertIn('local("${String(name)', self.source)
         self.assertIn("fontAssetDescriptors(kind, style)", self.source)
+        self.assertIn('Arial: ["Arial Bold", "Arial-BoldMT"]', self.source)
+        self.assertIn('font-family: var(--preview-body-bold, var(--preview-body));', self.stylesheet)
+        self.assertIn('font-weight: 700;', self.stylesheet)
         self.assertIn("fontLoadCache.get(key) === pending", self.source)
         self.assertNotIn("@font-face", self.stylesheet)
         self.assertIn('font-family: Arial, "Helvetica Neue", sans-serif;', self.stylesheet)

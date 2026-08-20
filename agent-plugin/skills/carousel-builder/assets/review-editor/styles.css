@@ -763,7 +763,8 @@ input:focus {
 }
 
 .preview-bold {
-  font-weight: 850;
+  font-family: var(--preview-body-bold, var(--preview-body));
+  font-weight: 700;
 }
 
 .preview-title + .preview-summary {

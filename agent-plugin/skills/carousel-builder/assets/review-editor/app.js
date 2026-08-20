@@ -79,6 +79,7 @@
   const FONT_ROLE_WEIGHT_RANGES = Object.freeze({
     display: "700 900",
     body: "100 699",
+    bold: "700 900",
     serif: "100 900",
     italic: "100 900",
   });
@@ -1567,18 +1568,38 @@
     return italicFontAsset()?.family || "corsivo reale disponibile";
   }
 
+  function boldFontAsset() {
+    const assets = previewBrand().font_assets && typeof previewBrand().font_assets === "object" ? previewBrand().font_assets : {};
+    const explicit = [assets.bold, assets.body_bold, assets.display_bold]
+      .find((asset) => asset?.available === true && asset.family && (asset.endpoint || asset.source === "system"));
+    if (explicit) return explicit;
+    const body = assets.body || assets.sans;
+    if (!body?.family) return null;
+    return body.source === "system"
+      ? body
+      : { ...body, available: false };
+  }
+
   function fontAssetKey(asset, descriptors = {}) {
     return `${asset?.family || ""}|${asset?.source || ""}|${asset?.endpoint || ""}|${descriptors.style || "normal"}|${descriptors.weight || "100 900"}`;
   }
 
-  function systemFontSource(family, style) {
+  function systemFontSource(family, style, weight) {
     const italicNames = {
       Arial: ["Arial Italic", "Arial-ItalicMT"],
       "Times New Roman": ["Times New Roman Italic", "TimesNewRomanPS-ItalicMT"],
     };
+    const boldNames = {
+      Arial: ["Arial Bold", "Arial-BoldMT"],
+      "DejaVu Sans": ["DejaVu Sans Bold", "DejaVuSans-Bold"],
+      "Helvetica Neue": ["Helvetica Neue Bold", "HelveticaNeue-Bold"],
+      "Times New Roman": ["Times New Roman Bold", "TimesNewRomanPS-BoldMT"],
+    };
     const names = style === "italic"
       ? [...(italicNames[family] || [`${family} Italic`]), family]
-      : [family];
+      : weight === FONT_ROLE_WEIGHT_RANGES.bold
+        ? (boldNames[family] || [`${family} Bold`, `${family}-Bold`])
+        : [family];
     return [...new Set(names)]
       .map((name) => `local("${String(name).replace(/"/g, "")}")`)
       .join(", ");
@@ -1589,13 +1610,18 @@
     return Boolean(asset && loadedFontKeys.has(fontAssetKey(asset, fontAssetDescriptors("italic", "italic"))));
   }
 
+  function hasRealBoldFont() {
+    const asset = boldFontAsset();
+    return Boolean(asset && loadedFontKeys.has(fontAssetKey(asset, fontAssetDescriptors("bold"))));
+  }
+
   function loadFontAsset(asset, descriptors) {
     const key = fontAssetKey(asset, descriptors);
     if (!fontLoadCache.has(key)) {
       const pending = (async () => {
         const safeFamily = String(asset.family || "").replace(/["\\]/g, "").trim();
         const source = asset.source === "system"
-          ? systemFontSource(safeFamily, descriptors.style)
+          ? systemFontSource(safeFamily, descriptors.style, descriptors.weight)
           : `url("${api(asset.endpoint).replace(/"/g, "%22")}")`;
         const face = new FontFace(
           safeFamily,
@@ -1631,14 +1657,18 @@
     const assets = brand.font_assets && typeof brand.font_assets === "object" ? brand.font_assets : {};
     const sansFallback = "Arial, 'Helvetica Neue', sans-serif";
     const fallbacks = { display: sansFallback, body: sansFallback, serif: "'Times New Roman', Times, serif" };
-    const labels = { display: "Titoli", body: "Testi", serif: "Secondario corsivo", italic: "Corsivo" };
+    const labels = { display: "Titoli", body: "Testi", serif: "Secondario corsivo", italic: "Corsivo", bold: "Grassetto" };
     const loaded = {};
     fontAdvisories = [];
     resolvedItalicAsset = null;
     const resolvedItalic = italicFontAsset();
     const italicAvailableBefore = hasRealItalicFont();
-    for (const kind of ["display", "body", "serif", "italic"]) {
-      const asset = kind === "italic" ? resolvedItalic : assets[kind] || (kind === "body" ? assets.sans : null);
+    for (const kind of ["display", "body", "serif", "italic", "bold"]) {
+      const asset = kind === "italic"
+        ? resolvedItalic
+        : kind === "bold"
+          ? boldFontAsset()
+          : assets[kind] || (kind === "body" ? assets.sans : null);
       if (!fontAssetRequiresVerifiedLoad(asset)) {
         const declaredFamily = String(asset?.family || "").trim();
         if (declaredFamily) {
@@ -1679,6 +1709,7 @@
     if (run !== previewContractRun) return false;
     document.documentElement.style.setProperty("--preview-display", fontStack(loaded.display, fallbacks.display));
     document.documentElement.style.setProperty("--preview-body", fontStack(loaded.body, fallbacks.body));
+    document.documentElement.style.setProperty("--preview-body-bold", fontStack(loaded.bold, fallbacks.body));
     document.documentElement.style.setProperty("--preview-sans", fontStack(loaded.body, fallbacks.body));
     document.documentElement.style.setProperty("--preview-serif", fontStack(loaded.serif, fallbacks.serif));
     document.documentElement.style.setProperty("--preview-italic", fontStack(loaded.italic, loaded.serif || fallbacks.serif));
