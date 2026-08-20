@@ -431,7 +431,11 @@ test("browser reale: i due consensi restano distinti e la prova visiva è read-f
   const feedbackPath = path.join(sessionDirectory, "feedback.json");
   const approval = await readJsonWhen(feedbackPath, (value) => value.action === "approve", "Persistenza primo consenso");
   assert.equal(approval.approval_scope, undefined);
-  const sessionState = JSON.parse(await fs.readFile(path.join(sessionDirectory, "session-state.json"), "utf8"));
+  const sessionState = await readJsonWhen(
+    path.join(sessionDirectory, "session-state.json"),
+    (value) => typeof value.last_feedback_path === "string" && value.last_feedback_path,
+    "Persistenza stato approvazione",
+  );
   const processed = spawnSync(process.env.PYTHON || "python3", [
     path.join(ROOT, "scripts", "process_review.py"),
     manifestPath,
@@ -721,7 +725,11 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   assert.equal(approval.proof_browser.engine, "chromium");
   assert.ok(Number.isInteger(approval.proof_browser.major) && approval.proof_browser.major > 0);
 
-  const sessionState = JSON.parse(await fs.readFile(path.join(sessionDirectory, "session-state.json"), "utf8"));
+  const sessionState = await readJsonWhen(
+    path.join(sessionDirectory, "session-state.json"),
+    (value) => typeof value.last_feedback_path === "string" && value.last_feedback_path,
+    "Persistenza stato approvazione combinata",
+  );
   const processed = spawnSync(process.env.PYTHON || "python3", [
     path.join(ROOT, "scripts", "process_review.py"),
     manifestPath,
