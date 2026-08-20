@@ -247,6 +247,8 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         self.assertIn('Arial: ["Arial Bold", "Arial-BoldMT"]', self.source)
         self.assertIn('font-family: var(--preview-body-bold, var(--preview-body));', self.stylesheet)
         self.assertIn('font-weight: 700;', self.stylesheet)
+        self.assertIn('const titleWeight = slide.kind === "cover"', self.source)
+        self.assertIn('numberValue(type.cover_weight, 500)', self.source)
         self.assertIn("fontLoadCache.get(key) === pending", self.source)
         self.assertNotIn("@font-face", self.stylesheet)
         self.assertIn('font-family: Arial, "Helvetica Neue", sans-serif;', self.stylesheet)

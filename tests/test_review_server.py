@@ -862,6 +862,10 @@ class ManifestModelTest(unittest.TestCase):
         self.assertEqual(typography["min_auto_scale"], 0.92)
         self.assertEqual(typography["overflow_policy"], "error_and_copy_revision")
 
+    def test_default_cover_title_is_not_bolded_by_base_typography(self) -> None:
+        typography = self.model(base_manifest())["typography"]
+        self.assertEqual(typography["cover_weight"], 500)
+
     def test_exposes_only_exact_emphasis_for_each_slide_field(self) -> None:
         manifest = base_manifest()
         manifest["sequence_mode"] = "sectional"

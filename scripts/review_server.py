@@ -75,7 +75,7 @@ TYPOGRAPHY_DEFAULTS = {
     "cover_subtitle_px": 56,
     "section_title_px": 72,
     "body_px": 64,
-    "cover_weight": 800,
+    "cover_weight": 500,
     "cover_subtitle_weight": 500,
     "section_title_weight": 800,
     "body_weight": 620,

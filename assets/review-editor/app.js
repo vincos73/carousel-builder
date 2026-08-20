@@ -1760,7 +1760,10 @@
     preview.style.setProperty("--preview-scale", String(scale));
     if (title) {
       title.style.fontSize = `${previewFontBase(slide, "title", preview) * scale}px`;
-      title.style.fontWeight = String(numberValue(slide.kind === "cover" ? type.cover_weight : type.section_title_weight, 800));
+      const titleWeight = slide.kind === "cover"
+        ? numberValue(type.cover_weight, 500)
+        : numberValue(type.section_title_weight, 800);
+      title.style.fontWeight = String(titleWeight);
       title.style.fontFamily = "var(--preview-display)";
     }
     if (summary) {
