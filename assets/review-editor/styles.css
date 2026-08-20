@@ -4,8 +4,8 @@
   --line: #dfe3ea;
   --soft: #f4f5f7;
   --paper: #ffffff;
-  --accent: #febd08;
-  --accent-ink: #322600;
+  --accent: #6b3f5d;
+  --accent-ink: #ffffff;
   --danger: #b42318;
   --success: #067647;
   --preview-sans: Arial, "Helvetica Neue", sans-serif;
@@ -596,12 +596,12 @@ input:focus {
   padding: clamp(26px, 10cqw, 56px);
   border-radius: 14px;
   color: var(--preview-text, #fff);
-  background: var(--preview-bg, #172033);
+  background: var(--preview-bg, #2d2e2f);
   font-family: var(--preview-body);
 }
 
 .slide-preview.has-cover-image {
-  background: var(--preview-bg, #172033);
+  background: var(--preview-bg, #2d2e2f);
 }
 
 .slide-preview::before {
@@ -1802,6 +1802,29 @@ input:focus {
   background: var(--editor-navy, #072743);
 }
 
+.format-button[data-count]:not([data-count="0"]) {
+  position: relative;
+  padding-right: 22px;
+}
+
+.format-button[data-count]:not([data-count="0"])::after {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border: 1px solid var(--editor-cream, #f7f5f0);
+  border-radius: 999px;
+  color: #ffffff;
+  background: var(--editor-gold, #6b3f5d);
+  content: attr(data-count);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 14px;
+  text-align: center;
+}
+
 .format-button[aria-pressed="mixed"] {
   border-style: dashed;
   border-color: var(--editor-gold, #6b3f5d);
@@ -2597,7 +2620,7 @@ input:focus {
   top: 104px;
   width: min(100%, 480px);
   margin: 0 auto;
-  border: 10px solid var(--preview-bg, #172033);
+  border: 10px solid var(--preview-bg, #2d2e2f);
   border-radius: 0;
   box-shadow: 0 14px 30px rgba(45, 46, 47, 0.13);
 }
@@ -3207,7 +3230,7 @@ html.production-render .slide-preview {
   width: 480px;
   min-height: 0;
   margin: 0;
-  border: 10px solid var(--preview-bg, #172033);
+  border: 10px solid var(--preview-bg, #2d2e2f);
   border-radius: 0;
   box-shadow: none;
 }
@@ -3220,7 +3243,7 @@ html[data-capture-target="true"] .slide-preview {
   width: 480px;
   min-height: 0;
   margin: 0;
-  border: 10px solid var(--preview-bg, #172033);
+  border: 10px solid var(--preview-bg, #2d2e2f);
   border-radius: 0;
   box-shadow: none;
 }

@@ -4,7 +4,7 @@ interface:
   default_prompt: "Usa $carousel-builder per trasformare questo contenuto in un carosello personale, consigliarmi un sistema visivo, chiedermi se desidero una cover con visuale e revisionare i testi nell'editor locale quando disponibile."
   icon_small: "./assets/icon.svg"
   icon_large: "./assets/icon.svg"
-  brand_color: '#FEBD08'
+  brand_color: '#6B3F5D'
 policy:
   products:
   - chatgpt

@@ -650,6 +650,10 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
     def test_applied_formats_are_compact_visible_and_directly_removable(self) -> None:
         stylesheet = (EDITOR_DIR / "styles.css").read_text(encoding="utf-8")
         self.assertIn('active ? "true" : mixed ? "mixed" : "false"', self.source)
+        self.assertIn('button.dataset.count = "0"', self.source)
+        self.assertIn('content: attr(data-count)', stylesheet)
+        self.assertIn('.format-button[data-count]:not([data-count="0"])', stylesheet)
+        self.assertIn('Nessun formato già applicato in questo campo', self.source)
         self.assertIn('"Formato nel testo"', self.source)
         self.assertNotIn('"Stili applicati"', self.source)
         self.assertIn('class="workflow-status"', (EDITOR_DIR / "index.html").read_text(encoding="utf-8"))

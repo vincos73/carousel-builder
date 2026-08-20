@@ -67,7 +67,7 @@ from manifest_contract import (  # noqa: E402
 
 MAX_BODY_BYTES = 1_000_000
 MAX_COMMENTS = 200
-EDITOR_VERSION = "2.12.5"
+EDITOR_VERSION = "2.12.6"
 RENDER_CONTRACT = "approved-preview-dom-v2"
 EMPHASIS_RANGE_SUFFIX = "_ranges"
 TYPOGRAPHY_DEFAULTS = {
@@ -911,17 +911,17 @@ def brand_summary(manifest: dict, manifest_path: Path | None = None) -> dict:
         "palette_declared": palette_declared,
         "palette": {
             "background_light": text(
-                palette.get("background_light") or "#F5F1E8",
+                palette.get("background_light") or "#F8F7F4",
                 field="brand.palette.background_light",
                 limit=32,
             ),
             "background_dark": text(
-                palette.get("background_dark") or "#172033",
+                palette.get("background_dark") or "#2D2E2F",
                 field="brand.palette.background_dark",
                 limit=32,
             ),
             "text_on_light": text(
-                palette.get("text_on_light") or "#172033",
+                palette.get("text_on_light") or "#2D2E2F",
                 field="brand.palette.text_on_light",
                 limit=32,
             ),
@@ -931,7 +931,7 @@ def brand_summary(manifest: dict, manifest_path: Path | None = None) -> dict:
                 limit=32,
             ),
             "accent": text(
-                palette.get("accent") or "#FEBD08",
+                palette.get("accent") or "#6B3F5D",
                 field="brand.palette.accent",
                 limit=32,
             ),

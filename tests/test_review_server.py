@@ -668,7 +668,10 @@ class ManifestModelTest(unittest.TestCase):
             missing["brand"]["palette_declared"],
             {field: False for field in fields},
         )
-        self.assertEqual(missing["brand"]["palette"]["accent"], "#FEBD08")
+        self.assertEqual(missing["brand"]["palette"]["background_light"], "#F8F7F4")
+        self.assertEqual(missing["brand"]["palette"]["background_dark"], "#2D2E2F")
+        self.assertEqual(missing["brand"]["palette"]["text_on_light"], "#2D2E2F")
+        self.assertEqual(missing["brand"]["palette"]["accent"], "#6B3F5D")
         self.assertEqual(
             missing["visual_proofs"]["identity"]["brand"]["palette_declared"],
             missing["brand"]["palette_declared"],
@@ -706,7 +709,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.12.5")
+        self.assertEqual(model["editor_version"], "2.12.6")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
