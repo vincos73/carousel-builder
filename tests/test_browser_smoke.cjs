@@ -638,7 +638,10 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
       const button = input.closest('.field-group').querySelector('.format-italic');
       return { disabled: button.disabled, label: button.getAttribute('aria-label') };
     })()`),
-    { disabled: false, label: "Applica o rimuovi il corsivo DejaVu Serif dalla selezione" },
+    {
+      disabled: false,
+      label: "Applica o rimuovi il corsivo DejaVu Serif dalla selezione. Nessun formato già applicato in questo campo",
+    },
   );
   await evaluate(client, approvalPage, `document.querySelector('#field-item-1-summary').closest('.field-group').querySelector('.format-italic').click()`);
   await waitFor(
