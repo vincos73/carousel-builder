@@ -129,7 +129,7 @@ Confrontare ogni card con l'ultima anteprima approvata e verificare:
 - chiusura specifica della fonte corrente;
 - corrispondenza esatta di titolo e dell'eventuale sottotitolo approvato in copertina;
 - font display effettivo su copertina e titoli e font body effettivo su testi, CTA e metadati;
-- gerarchia subordinata del sottotitolo e ruolo `emphasis_italic` effettivamente risolto; se è Playfair Display, verificarne sempre la variante corsiva;
+- gerarchia subordinata del sottotitolo e ruolo `emphasis_italic` effettivamente risolto; per i font di sistema verificare sempre che il browser abbia caricato la variante corsiva reale;
 - ritorno a capo dopo ogni punto di frase, senza spezzare decimali, versioni o abbreviazioni;
 - presenza di un blocco distinto per ogni frase e di uno spazio `sentence_gap_em` dopo ogni frase tranne l'ultima, aggiuntivo rispetto a `body_line_height`;
 - `summary_bold` proposta di default nelle card interne con corpo, ma facoltativa e liberamente rimovibile; più trattamenti ammessi su parole o locuzioni distinte, senza stili multipli sulla stessa unità né selezioni sovrapposte;
@@ -137,7 +137,7 @@ Confrontare ogni card con l'ultima anteprima approvata e verificare:
 
 ## Controllo visivo
 
-Generare una contact sheet dell'intera sequenza. Eseguire i controlli deterministici del renderer su tutte le slide. Contenuto, ordine, dimensioni, apertura degli asset, geometria, pixel, digest e parità anteprima-produzione sono gate tecnici. Fit e caricamento dei font sono controlli consultivi: registrarne gli esiti e gli eventuali fallback senza bloccare artefatti altrimenti validi. `automated_all_slides: true` attesta la copertura tecnica dell'intero set, non l'assenza di avvisi visivi.
+Generare una contact sheet dell'intera sequenza. Eseguire i controlli deterministici del renderer su tutte le slide. Contenuto, ordine, dimensioni, apertura degli asset, geometria, pixel, digest e parità anteprima-produzione sono gate tecnici. Fit, caricamento dei font e possibili differenze metriche tra sistemi operativi sono controlli consultivi: dopo l'approvazione visuale registrarne gli esiti e gli eventuali fallback senza bloccare artefatti altrimenti validi. `automated_all_slides: true` attesta la copertura tecnica dell'intero set, non l'assenza di avvisi visivi.
 
 Il controllo umano normale è mirato:
 

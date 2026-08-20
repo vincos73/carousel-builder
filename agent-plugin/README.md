@@ -10,9 +10,8 @@ browser locale e ricezione degli eventi sono disponibili; negli altri casi manti
 lo stesso flusso di revisione direttamente nella conversazione.
 
 Il codice e la documentazione del pacchetto sono distribuiti gratuitamente con
-licenza [MIT](LICENSE). I font inclusi nella skill restano soggetti alle
-rispettive licenze SIL Open Font License disponibili in
-[`skills/carousel-builder/assets/fonts/`](skills/carousel-builder/assets/fonts/).
+licenza [MIT](LICENSE). Il profilo neutro usa Arial e Times New Roman già
+installati nel sistema; il plugin non ridistribuisce file di font.
 
 La versione sorgente della skill resta nella radice del repository. Questo pacchetto è
 un livello di distribuzione aggiuntivo e non modifica il flusso di installazione esistente.

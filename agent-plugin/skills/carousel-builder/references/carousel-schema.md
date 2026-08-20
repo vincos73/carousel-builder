@@ -135,7 +135,7 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
 - `cover_subtitle`: opzionale; inserirlo soltanto se fornito o approvato esplicitamente dall'utente. Il renderer lo presenta nel ruolo `emphasis_italic` risolto.
 - `cover_title_italic`: massimo una locuzione esatta contenuta nel titolo e resa nel ruolo corsivo risolto.
 - `cover_title_bold`: massimo due unità esatte contenute nel titolo, rese con un peso più forte del carattere `display`.
-- Tutti i segmenti `*_italic` usano il ruolo `emphasis_italic` risolto. Accettare `*_serif` come alias legacy; Playfair Display va usato esclusivamente in corsivo.
+- Tutti i segmenti `*_italic` usano il ruolo `emphasis_italic` risolto. Accettare `*_serif` come alias legacy; nel profilo neutro usare la variante reale Times New Roman Italic di sistema.
 - `summary` e `outro.body`: ogni frase completa inizia su una nuova riga senza righe vuote. Nel rendering ogni frase diventa un blocco distinto; `body_line_height` governa le righe avvolte all'interno del blocco e `sentence_gap_em` aggiunge spazio dopo ogni blocco tranne l'ultimo. I punti interni a numeri e versioni, per esempio `1.2`, non producono un ritorno a capo; lo stesso vale per le abbreviazioni comuni.
 - `source_url`: facoltativo.
 - `cover_image`: percorso assoluto o relativo al manifest; vuoto per `typographic` e durante l'intenzione `generated` non ancora prodotta. Nel percorso locale aggiungerlo dopo l'approvazione dei testi soltanto tramite `attach_cover_asset.py`.

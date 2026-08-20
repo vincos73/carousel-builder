@@ -1551,7 +1551,7 @@
   function italicFontAsset() {
     const assets = previewBrand().font_assets && typeof previewBrand().font_assets === "object" ? previewBrand().font_assets : {};
     const candidates = [assets.italic, assets.emphasis_italic, assets.body_italic, assets.display_italic, assets.serif_italic];
-    return candidates.find((asset) => asset?.available === true && asset.family && asset.endpoint) || null;
+    return candidates.find((asset) => asset?.available === true && asset.family && (asset.endpoint || asset.source === "system")) || null;
   }
 
   function italicFontLabel() {
@@ -1559,7 +1559,7 @@
   }
 
   function fontAssetKey(asset, descriptors = {}) {
-    return `${asset?.family || ""}|${asset?.endpoint || ""}|${descriptors.style || "normal"}|${descriptors.weight || "100 900"}`;
+    return `${asset?.family || ""}|${asset?.source || ""}|${asset?.endpoint || ""}|${descriptors.style || "normal"}|${descriptors.weight || "100 900"}`;
   }
 
   function hasRealItalicFont() {
@@ -1571,9 +1571,13 @@
     const key = fontAssetKey(asset, descriptors);
     if (!fontLoadCache.has(key)) {
       const pending = (async () => {
+        const safeFamily = String(asset.family || "").replace(/["\\]/g, "").trim();
+        const source = asset.source === "system"
+          ? `local("${safeFamily}")`
+          : `url("${api(asset.endpoint).replace(/"/g, "%22")}")`;
         const face = new FontFace(
-          asset.family,
-          `url("${api(asset.endpoint).replace(/"/g, "%22")}")`,
+          safeFamily,
+          source,
           descriptors,
         );
         await face.load();
@@ -1603,8 +1607,8 @@
   async function configurePreviewTypography(run) {
     const brand = previewBrand();
     const assets = brand.font_assets && typeof brand.font_assets === "object" ? brand.font_assets : {};
-    const sansFallback = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    const fallbacks = { display: sansFallback, body: sansFallback, serif: "Georgia, 'Times New Roman', serif" };
+    const sansFallback = "Arial, 'Helvetica Neue', sans-serif";
+    const fallbacks = { display: sansFallback, body: sansFallback, serif: "'Times New Roman', Times, serif" };
     const labels = { display: "Titoli", body: "Testi", serif: "Secondario corsivo", italic: "Corsivo" };
     const loaded = {};
     fontAdvisories = [];
@@ -1621,7 +1625,7 @@
         continue;
       }
       try {
-        if (!asset.family || !asset.endpoint || typeof FontFace === "undefined") {
+        if (!asset.family || (!asset.endpoint && asset.source !== "system") || typeof FontFace === "undefined") {
           throw new Error("metadati o API FontFace non disponibili");
         }
         const style = kind === "serif" || kind === "italic" ? "italic" : "normal";

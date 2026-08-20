@@ -239,8 +239,13 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("new FontFace(", self.source)
+        self.assertIn('asset.source === "system"', self.source)
+        self.assertIn('local("${safeFamily}")', self.source)
         self.assertIn("fontAssetDescriptors(kind, style)", self.source)
         self.assertIn("fontLoadCache.get(key) === pending", self.source)
+        self.assertNotIn("@font-face", self.stylesheet)
+        self.assertIn('font-family: Arial, "Helvetica Neue", sans-serif;', self.stylesheet)
+        self.assertIn('font-family: "Times New Roman", Times, serif;', self.stylesheet)
 
     def test_foreign_pending_locks_without_claiming_or_discarding_local_draft(self) -> None:
         poll = self.source.split("async function pollStatus()", 1)[1].split("function clearPendingSelection", 1)[0]

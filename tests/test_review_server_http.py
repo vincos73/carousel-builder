@@ -251,15 +251,6 @@ class ReviewServerHTTPTest(unittest.TestCase):
             "/assets/vincos-lockup-white.svg",
             "/styles.css",
             "/app.js",
-            "/assets/fonts/Inter-Variable.ttf",
-            "/assets/fonts/PlayfairDisplay-Variable.ttf",
-            "/assets/fonts/PlayfairDisplay-Italic-Variable.ttf",
-            "/assets/fonts/InstrumentSerif-Regular.ttf",
-            "/assets/fonts/Onest-Regular.ttf",
-            "/assets/fonts/Onest-Medium.ttf",
-            "/assets/fonts/Onest-Semibold.ttf",
-            "/assets/fonts/Onest-Bold.ttf",
-            "/assets/fonts/Orbitron-Variable.ttf",
         ):
             status, payload = request(f"{self.origin}{path}")
             self.assertEqual(status, 200, path)
@@ -290,22 +281,18 @@ class ReviewServerHTTPTest(unittest.TestCase):
         }
         self.assertEqual(
             font_paths,
-            {
-                "/assets/fonts/InstrumentSerif-Regular.ttf",
-                "/assets/fonts/Inter-Variable.ttf",
-            },
+            set(),
         )
         for path in font_paths:
             font_status, payload = request(f"{self.origin}{path}")
             self.assertEqual(font_status, 200, path)
             self.assertTrue(payload)
 
-    def test_serves_bundled_fonts_with_a_safe_mime_type(self) -> None:
-        with urllib.request.urlopen(
-            f"{self.origin}/assets/fonts/Inter-Variable.ttf", timeout=10
-        ) as response:
-            self.assertEqual(response.headers["Content-Type"], "font/ttf")
-            self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+    def test_does_not_serve_removed_bundled_fonts(self) -> None:
+        self.assertEqual(
+            request(f"{self.origin}/assets/fonts/Inter-Variable.ttf")[0],
+            404,
+        )
 
     def test_sets_the_expected_security_headers(self) -> None:
         req = urllib.request.Request(self.url)

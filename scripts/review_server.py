@@ -66,7 +66,7 @@ from manifest_contract import (  # noqa: E402
 
 MAX_BODY_BYTES = 1_000_000
 MAX_COMMENTS = 200
-EDITOR_VERSION = "2.12.3"
+EDITOR_VERSION = "2.12.4"
 RENDER_CONTRACT = "approved-preview-dom-v2"
 TYPOGRAPHY_DEFAULTS = {
     "cover_px": 112,
@@ -97,19 +97,27 @@ IMAGE_MIME_TYPES = {
     ".webp": "image/webp",
 }
 FONT_SOURCES = {"uploaded", "bundled", "system", "fallback"}
-BUNDLED_FONT_ASSETS = {
-    "display": ("Inter", Path(__file__).resolve().parent.parent / "assets" / "fonts" / "Inter-Variable.ttf"),
-    "body": ("Inter", Path(__file__).resolve().parent.parent / "assets" / "fonts" / "Inter-Variable.ttf"),
-    "serif": (
-        "Playfair Display",
-        Path(__file__).resolve().parent.parent / "assets" / "fonts" / "PlayfairDisplay-Italic-Variable.ttf",
-    ),
+LEGACY_SYSTEM_FONT_ALIASES = {
+    "inter": "Arial",
+    "playfair display": "Times New Roman",
 }
 FONT_ROLE_FALLBACKS = {
     "display": ("display", "sans"),
     "body": ("body", "sans"),
     "serif": ("serif_italic", "serif"),
 }
+
+
+def _system_font_family(family: str, source: str) -> tuple[str, str]:
+    if not family:
+        return family, source
+    if source == "system":
+        return family, source
+    if source in {"bundled", "fallback"}:
+        replacement = LEGACY_SYSTEM_FONT_ALIASES.get(family.casefold())
+        if replacement:
+            return replacement, "system"
+    return family, source
 EMPHASIS_ROLES = ("bold", "italic", "serif", "accent", "underline")
 PALETTE_COLOR_FIELDS = (
     "background_light",
@@ -654,17 +662,15 @@ def _font_asset(manifest: dict, manifest_path: Path, key: str) -> tuple[dict, Pa
                 if source == "fallback":
                     source = "uploaded"
 
-    bundled_family, bundled_path = BUNDLED_FONT_ASSETS[key]
-    if resolved is None and family.casefold() == bundled_family.casefold() and bundled_path.is_file():
-        resolved = bundled_path
-        source = "bundled"
+    if resolved is None:
+        family, source = _system_font_family(family, source)
 
-    available = resolved is not None
+    available = resolved is not None or (source == "system" and bool(family))
     public = {
         "family": family,
         "source": source,
         "available": available,
-        "endpoint": f"/api/font/{key}" if available else "",
+        "endpoint": f"/api/font/{key}" if resolved is not None else "",
     }
     return public, resolved
 
@@ -672,9 +678,8 @@ def _font_asset(manifest: dict, manifest_path: Path, key: str) -> tuple[dict, Pa
 def _italic_font_asset(manifest: dict, manifest_path: Path) -> tuple[dict, Path | None]:
     """Resolve the italic role without pretending an upright font is italic.
 
-    The explicit brand role wins.  A body/display italic is accepted only when
-    it has its own local file; a legacy serif italic may use the bundled
-    Playfair italic asset.
+    The explicit brand role wins. Uploaded italics require their own local
+    file; system italics are verified by the browser through ``local()``.
     """
     brand = manifest.get("brand") if isinstance(manifest.get("brand"), dict) else {}
     fonts = brand.get("fonts") if isinstance(brand.get("fonts"), dict) else {}
@@ -705,20 +710,14 @@ def _italic_font_asset(manifest: dict, manifest_path: Path) -> tuple[dict, Path 
                     resolved = candidate
                     if source == "fallback":
                         source = "uploaded"
-        if (
-            resolved is None
-            and role == "serif_italic"
-            and family.casefold() == BUNDLED_FONT_ASSETS["serif"][0].casefold()
-            and BUNDLED_FONT_ASSETS["serif"][1].is_file()
-        ):
-            resolved = BUNDLED_FONT_ASSETS["serif"][1]
-            source = "bundled"
-        if resolved is not None:
+        if resolved is None:
+            family, source = _system_font_family(family, source)
+        if resolved is not None or (source == "system" and bool(family)):
             return {
                 "family": family,
                 "source": source,
                 "available": True,
-                "endpoint": "/api/font/italic",
+                "endpoint": "/api/font/italic" if resolved is not None else "",
                 "role": role,
             }, resolved
 
@@ -745,7 +744,7 @@ def font_assets(manifest: dict, manifest_path: Path) -> tuple[dict, dict[str, Pa
     if resolved_italic is not None:
         allowed["italic"] = resolved_italic
     # ``sans`` remains a read-only compatibility alias for older editor clients.
-    public["sans"] = {**public["body"], "endpoint": "/api/font/sans" if public["body"]["available"] else ""}
+    public["sans"] = {**public["body"], "endpoint": "/api/font/sans" if "body" in allowed else ""}
     if "body" in allowed:
         allowed["sans"] = allowed["body"]
     return public, allowed
@@ -873,10 +872,10 @@ def brand_summary(manifest: dict, manifest_path: Path | None = None) -> dict:
         "name": text(brand.get("name"), field="brand.name", limit=300),
         "website": text(brand.get("website"), field="brand.website", limit=500),
         "signature": text(brand.get("signature"), field="brand.signature", limit=300),
-        "display": font_name("display", "sans"),
-        "body": font_name("body", "sans"),
-        "sans": font_name("body", "sans"),
-        "serif": font_name("serif_italic", "serif"),
+        "display": asset_metadata["display"]["family"] or font_name("display", "sans"),
+        "body": asset_metadata["body"]["family"] or font_name("body", "sans"),
+        "sans": asset_metadata["body"]["family"] or font_name("body", "sans"),
+        "serif": asset_metadata["serif"]["family"] or font_name("serif_italic", "serif"),
         "emphasis_italic": asset_metadata["italic"],
         "font_assets": asset_metadata,
         "logos": logo_metadata,
@@ -934,6 +933,7 @@ def reusable_brand_profile(manifest: dict) -> dict:
             family = _short_string(value)
             source = "fallback"
         if family:
+            family, source = _system_font_family(family, source)
             profile_fonts[role] = {
                 "family": family,
                 "source": source if source in FONT_SOURCES else "fallback",
@@ -1879,42 +1879,6 @@ def main() -> int:
                 "/assets/vincos-lockup-white.svg": (
                     assets_dir / "vincos-lockup-white.svg",
                     "image/svg+xml; charset=utf-8",
-                ),
-                "/assets/fonts/Inter-Variable.ttf": (
-                    BUNDLED_FONT_ASSETS["display"][1],
-                    "font/ttf",
-                ),
-                "/assets/fonts/PlayfairDisplay-Variable.ttf": (
-                    assets_dir.parent / "fonts" / "PlayfairDisplay-Variable.ttf",
-                    "font/ttf",
-                ),
-                "/assets/fonts/PlayfairDisplay-Italic-Variable.ttf": (
-                    BUNDLED_FONT_ASSETS["serif"][1],
-                    "font/ttf",
-                ),
-                "/assets/fonts/InstrumentSerif-Regular.ttf": (
-                    assets_dir.parent / "fonts" / "InstrumentSerif-Regular.ttf",
-                    "font/ttf",
-                ),
-                "/assets/fonts/Onest-Regular.ttf": (
-                    assets_dir.parent / "fonts" / "Onest-Regular.ttf",
-                    "font/ttf",
-                ),
-                "/assets/fonts/Onest-Medium.ttf": (
-                    assets_dir.parent / "fonts" / "Onest-Medium.ttf",
-                    "font/ttf",
-                ),
-                "/assets/fonts/Onest-Semibold.ttf": (
-                    assets_dir.parent / "fonts" / "Onest-Semibold.ttf",
-                    "font/ttf",
-                ),
-                "/assets/fonts/Onest-Bold.ttf": (
-                    assets_dir.parent / "fonts" / "Onest-Bold.ttf",
-                    "font/ttf",
-                ),
-                "/assets/fonts/Orbitron-Variable.ttf": (
-                    assets_dir.parent / "fonts" / "Orbitron-Variable.ttf",
-                    "font/ttf",
                 ),
             }
             static_asset = static_assets.get(parsed.path)

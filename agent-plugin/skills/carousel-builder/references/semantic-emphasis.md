@@ -21,7 +21,7 @@ Risolvere una sola modalità corsiva coerente per l'intero carosello, nell'ordin
 3. `brand.fonts.serif_italic`, come ruolo legacy o secondo carattere corsivo approvato;
 4. il corsivo del profilo neutro, soltanto dopo scelta esplicita del tema neutro.
 
-Se nessun file o font corsivo reale è disponibile, non sintetizzarlo: disabilitare il comando per nuove selezioni. Se un manifest esistente contiene già `*_italic`, mostrare il fallback diritto e un avviso consultivo senza bloccare `Genera`. Mostrare sempre nell'interfaccia la famiglia effettiva, per esempio `Corsivo · Barlow Italic`, `Corsivo · Playfair Display Italic` oppure `fallback diritto`.
+Se nessun file o font corsivo reale è disponibile, non sintetizzarlo: disabilitare il comando per nuove selezioni. Se un manifest esistente contiene già `*_italic`, mostrare il fallback diritto e un avviso consultivo senza bloccare `Genera`. Mostrare sempre nell'interfaccia la famiglia effettiva, per esempio `Corsivo · Barlow Italic`, `Corsivo · Times New Roman Italic` oppure `fallback diritto`.
 
 ## Editor locale
 
