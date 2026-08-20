@@ -162,7 +162,6 @@
     logoWarning: document.querySelector("#logo-warning"),
     styleExportButton: document.querySelector("#export-style-button"),
     brandNote: document.querySelector("#brand-note"),
-    slideCount: document.querySelector("#slide-count"),
     slides: document.querySelector("#slides"),
     overallNote: document.querySelector("#overall-note"),
     commentsList: document.querySelector("#comments-list"),
@@ -213,6 +212,7 @@
     returnChatButton: document.querySelector("#return-chat-button"),
     toggleProofEditing: document.querySelector("#toggle-proof-editing"),
     proofEditingNote: document.querySelector("#proof-editing-note"),
+    guidancePanel: document.querySelector("#guidance-panel"),
     guidanceTitle: document.querySelector("#guidance-title"),
     guidanceList: document.querySelector("#guidance-list"),
   };
@@ -1142,38 +1142,9 @@
   }
 
   function renderGuidance(phase) {
-    if (!elements.guidanceList || !elements.guidanceTitle) return;
-    const productionGuidance = model?.workflow_state === "consegnato"
-      ? {
-          title: "Consegna completata",
-          items: [
-            "Rendering e controlli sono completati.",
-            "Usa Torna alla chat per aprire i file finali.",
-          ],
-        }
-      : model?.workflow_state === "qa"
-        ? {
-            title: "Controlli in corso",
-            items: [
-              "Gli artefatti sono stati prodotti e sono sottoposti ai controlli finali.",
-              "La consegna comparirà nella chat quando il QA sarà completato.",
-            ],
-          }
-        : model?.workflow_state === "rendering"
-          ? {
-              title: "Produzione in corso",
-              items: [
-                "Il rendering degli artefatti è stato avviato.",
-                "Controlli e consegna proseguono nella chat.",
-              ],
-            }
-          : {
-              title: "Produzione da avviare",
-              items: [
-                "I consensi sono registrati, ma il rendering non è ancora iniziato.",
-                "Usa Torna alla chat: l’agente avvierà produzione e controlli.",
-              ],
-            };
+    if (!elements.guidancePanel || !elements.guidanceList || !elements.guidanceTitle) return;
+    elements.guidancePanel.hidden = phase === "production";
+    if (phase === "production") return;
     const guidance = phase === "visual"
       ? {
           title: "Come controllare la prova",
@@ -1184,17 +1155,15 @@
             "Approva la prova visiva: è il secondo consenso, distinto da quello sui testi.",
           ],
         }
-      : phase === "production"
-        ? productionGuidance
-        : {
-            title: "Come revisionare",
-            items: [
-              "Correggi i testi nell’editor accanto all’anteprima.",
-              "Seleziona una parola o una frase per applicare uno stile o aggiungere un commento.",
-              "Sposta o elimina le slide interne con i comandi della slide.",
-              "Approva i testi per dare il primo consenso e chiedere la prova visiva.",
-            ],
-          };
+      : {
+          title: "Come revisionare",
+          items: [
+            "Correggi i testi nell’editor accanto all’anteprima.",
+            "Seleziona una parola o una frase per applicare uno stile o aggiungere un commento.",
+            "Sposta o elimina le slide interne con i comandi della slide.",
+            "Approva i testi per dare il primo consenso e chiedere la prova visiva.",
+          ],
+        };
     elements.guidanceTitle.textContent = guidance.title;
     elements.guidanceList.replaceChildren(...guidance.items.map((item) => create("li", "", item)));
   }
@@ -1443,7 +1412,7 @@
     link.download = `carousel-feedback-recovery-rev-${revision}.json`;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    showToast("Feedback recuperabile salvato. Conservalo finché la revisione non è stata riconciliata.");
+    showToast("Copia delle modifiche scaricata.");
   }
 
   function removeDraftPreservingRecovery() {
@@ -1531,12 +1500,11 @@
             ? "base-workflow-mismatch"
             : "render-fingerprint-mismatch";
         addRecoverySubmission(recoveryFromPending(savedPending, reason, saved));
-        submissionError = `Un invio basato sulla revisione ${saved.base_revision} non corrisponde più alla base corrente. Non verrà ritentato: salvalo come feedback recuperabile.`;
+        submissionError = `La pagina è stata aggiornata dopo la revisione ${saved.base_revision}. Le modifiche sono al sicuro: scaricane una copia prima di ricaricare.`;
       } else if (sameBase && isFeedbackId(saved?.awaiting_feedback_id)) {
         awaitingFeedbackId = saved.awaiting_feedback_id;
       }
       if (sameBase && typeof saved?.foreign_feedback_id === "string" && saved.foreign_feedback_id) foreignFeedbackId = saved.foreign_feedback_id;
-      if ((recoverySubmissions.length || recoveryDrafts.length) && !submissionError) submissionError = "È disponibile una copia recuperabile di feedback o modifiche locali. Salvala prima di rimuovere la bozza.";
       if (!saved || !sameBase || !Array.isArray(saved.slides)) return;
       const knownIds = new Set(model.slides.map((slide) => slide.id));
       const validSlides = saved.slides.every((slide) => slide && knownIds.has(slide.id) && typeof slide.title === "string" && typeof slide.summary === "string");
@@ -2536,7 +2504,6 @@
     fitWarnings.clear();
     elements.slides.replaceChildren();
     elements.slides.dataset.visualSystem = selectedVisualSystem;
-    if (elements.slideCount) elements.slideCount.textContent = `${draftSlides.length} slide totali`;
     const items = itemPositions();
     draftSlides.forEach((slide, index) => {
       const visibleLabel = displayLabel(slide, index);
@@ -3246,7 +3213,7 @@
     clearInlineValidation();
     const issues = activeValidationIssues;
     const recoveryCount = recoverySubmissions.length + recoveryDrafts.length;
-    const visible = Boolean(issues.length || submissionError || recoveryCount);
+    const visible = Boolean(issues.length || submissionError);
     elements.validationSummary.hidden = !visible;
     if (visible) elements.validationSummary.setAttribute("role", "alert");
     else elements.validationSummary.removeAttribute("role");
@@ -3254,8 +3221,6 @@
     if (elements.validationSummaryCopy) {
       elements.validationSummaryCopy.textContent = submissionError
         ? submissionError
-        : recoveryCount
-          ? "È disponibile una copia recuperabile di feedback o modifiche locali. Salvala prima di rimuovere la bozza."
         : "Risolvi i problemi indicati per approvare la revisione.";
     }
     elements.validationList.replaceChildren();
@@ -3292,7 +3257,7 @@
       elements.retrySubmitButton.dataset.pendingControl = "true";
     }
     if (elements.exportRecoveryButton) {
-      elements.exportRecoveryButton.hidden = recoveryCount === 0;
+      elements.exportRecoveryButton.hidden = !(submissionError && recoveryCount > 0);
       elements.exportRecoveryButton.disabled = false;
       elements.exportRecoveryButton.dataset.pendingControl = "true";
     }
@@ -3391,7 +3356,7 @@
           ? "base-workflow-mismatch-before-retry"
           : "render-fingerprint-mismatch-before-retry";
       preservePendingSubmission(reason);
-      submissionError = `Il feedback basato sulla revisione ${pendingSubmission.payload.base_revision} non corrisponde più alla base corrente. Salvalo come feedback recuperabile.`;
+      submissionError = `La pagina è stata aggiornata dopo la revisione ${pendingSubmission.payload.base_revision}. Le modifiche sono al sicuro: scaricane una copia prima di ricaricare.`;
       clearPendingSubmission();
       renderValidationState({ focus: true });
       return;
@@ -3413,7 +3378,7 @@
         if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
           const rejectedAction = pendingSubmission.action;
           preservePendingSubmission(`http-${response.status}`, message);
-          submissionError = `${message}. Il batch originale è stato conservato come feedback recuperabile e non verrà ritentato automaticamente.`;
+          submissionError = `${message}. Le modifiche non sono state perse: scaricane una copia prima di ricaricare.`;
           clearPendingSubmission();
           if (response.status === 422 && rejectedAction === "approve") await loadSession();
           showToast(message, true);
@@ -3550,7 +3515,7 @@
       if (foreignFeedbackId && status.applied_feedback_id === foreignFeedbackId) {
         if (computeChangeCount() > 0) {
           preserveCurrentDraft("foreign-feedback-applied", foreignFeedbackId);
-          submissionError = "Il feedback di un altro tab è stato applicato. La bozza locale non è stata ricaricata: salvala come copia recuperabile prima di passare alla nuova revisione.";
+          submissionError = "Un’altra scheda ha applicato nuove modifiche. Le modifiche di questa scheda sono al sicuro: scaricane una copia prima di ricaricare.";
           if (Number.isInteger(status.manifest_revision) && status.manifest_revision !== model?.revision) {
             staleRevision = status.manifest_revision;
           }
@@ -3600,7 +3565,7 @@
         if (Number.isInteger(status.manifest_revision) && status.manifest_revision !== model?.revision) staleRevision = status.manifest_revision;
         if (baseChange.workflowChanged) staleWorkflowState = status.workflow_state;
         if (baseChange.checkpointChanged) staleApprovalCheckpoint = status.approval_checkpoint;
-        submissionError = "Il checkpoint di approvazione è cambiato sul server. La bozza e l’eventuale invio sono stati conservati come copia recuperabile; ricarica prima di proseguire.";
+        submissionError = "La revisione è avanzata mentre questa scheda conteneva modifiche. Scaricane una copia prima di ricaricare.";
         persistDraft({ immediate: true });
         lockEditing();
         renderValidationState({ focus: true });
@@ -3623,7 +3588,7 @@
           pendingSubmission = null;
           awaitingFeedbackId = null;
           foreignFeedbackId = serverFeedbackId || "feedback-esterno";
-          submissionError = "Un feedback di un altro tab è in elaborazione. La bozza locale è bloccata ma resta salvata come copia recuperabile.";
+          submissionError = "Un’altra scheda sta inviando modifiche. Questa bozza resta salvata e tornerà modificabile al termine dell’invio.";
         }
         persistDraft({ immediate: true });
         lockEditing();
@@ -3632,7 +3597,7 @@
         if (foreignFeedbackId) {
           foreignFeedbackId = null;
           submissionError = recoveryDrafts.length || recoverySubmissions.length
-            ? "Il feedback esterno non risulta più in coda. La copia recuperabile della bozza locale resta disponibile."
+            ? "L’invio dell’altra scheda non è più in coda. Le modifiche di questa scheda restano salvate."
             : "";
           persistDraft({ immediate: true });
           if (status.manifest_revision === model?.revision) releaseEditingLock();
@@ -3697,7 +3662,7 @@
       const target = staleRevision !== null && staleRevision !== model?.revision
         ? `la revisione ${staleRevision}`
         : "il checkpoint corrente";
-      if (!window.confirm(`Caricare ${target}? Le modifiche locali restano disponibili nella copia recuperabile.`)) return;
+      if (!window.confirm(`Caricare ${target}? Le modifiche locali restano salvate.`)) return;
       removeDraftPreservingRecovery();
       try {
         await loadSession();
@@ -3953,7 +3918,7 @@
     const after = recoverySubmissions.length + recoveryDrafts.length;
     if (after === before) return;
     if (model && !productionRender) persistDraft({ immediate: true });
-    if (after > before && !submissionError) submissionError = "È disponibile una nuova copia recuperabile creata da un altro tab.";
+    if (after > before && !submissionError) submissionError = "Sono state salvate modifiche da un’altra scheda. Scaricane una copia prima di ricaricare.";
     renderValidationState();
   });
   document.addEventListener("visibilitychange", () => {

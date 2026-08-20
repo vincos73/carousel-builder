@@ -45,16 +45,11 @@
 
       <section id="editor" class="editor hidden">
         <div class="content">
-          <div class="content-header">
-            <div class="content-heading">
-              <h2 id="slide-count">Slide</h2>
-            </div>
-            <p id="font-status" class="font-status" hidden aria-live="polite"></p>
-          </div>
           <section id="workflow-journey" class="workflow-journey" aria-labelledby="workflow-journey-title">
             <div class="workflow-journey-copy">
               <h2 id="workflow-journey-title">Revisione di profilo e testi</h2>
               <p id="workflow-journey-copy">Controlla i contenuti prima di chiedere la prova visiva.</p>
+              <p id="font-status" class="font-status" hidden aria-live="polite"></p>
               <button id="toggle-proof-editing" class="button button-secondary proof-editing-toggle" type="button" aria-expanded="false" hidden>Modifica contenuti o grafica</button>
               <p id="proof-editing-note" class="proof-editing-note" hidden>Le modifiche grafiche richiederanno una nuova prova; quelle ai testi riapriranno anche l’approvazione editoriale.</p>
             </div>
@@ -94,7 +89,7 @@
             <ul id="validation-list" class="validation-list"></ul>
             <div class="validation-actions">
               <button id="retry-submit-button" class="button button-secondary" type="button" hidden>Riprova invio</button>
-              <button id="export-recovery-button" class="button button-secondary" type="button" hidden>Salva feedback recuperabile</button>
+              <button id="export-recovery-button" class="button button-secondary" type="button" hidden>Scarica una copia delle modifiche</button>
             </div>
           </section>
           <nav id="sequence-nav" class="sequence-nav" aria-label="Navigazione della sequenza"></nav>
@@ -134,7 +129,7 @@
             <textarea id="brand-note" rows="3" placeholder="Per esempio: usa un fondo più chiaro o uno stile più essenziale"></textarea>
           </section>
 
-          <section class="panel guidance-panel">
+          <section id="guidance-panel" class="panel guidance-panel">
             <h2 id="guidance-title">Come revisionare</h2>
             <ol id="guidance-list">
               <li>Correggi i testi nell’editor accanto all’anteprima.</li>

@@ -412,27 +412,6 @@ input:focus {
   background: #fee4e2;
 }
 
-.content-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px;
-  margin: 0 0 14px;
-}
-
-.content-heading {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 10px 14px;
-}
-
-.content-header h2 {
-  margin: 0;
-  font-size: 30px;
-  letter-spacing: -0.04em;
-}
-
 .font-status {
   margin: 0;
   color: var(--muted);
@@ -441,8 +420,8 @@ input:focus {
 }
 
 .font-status {
-  max-width: 460px;
-  text-align: right;
+  max-width: 52ch;
+  text-align: left;
 }
 
 .visual-systems {
@@ -1405,8 +1384,7 @@ input:focus {
     --actionbar-space: 76px;
   }
 
-  .topbar,
-  .content-header {
+  .topbar {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -1423,10 +1401,6 @@ input:focus {
   .shell {
     width: min(100% - 24px, 1520px);
     margin-top: 18px;
-  }
-
-  .content-header {
-    gap: 8px;
   }
 
   .font-status {
@@ -2130,7 +2104,6 @@ input:focus {
 
 .file-launcher-panel h2,
 .panel h2,
-.content-header h2,
 .comment-dialog h2 {
   font-family: "Instrument Serif", Georgia, serif;
   font-weight: 400;
@@ -2155,28 +2128,11 @@ input:focus {
   box-shadow: 0 18px 38px rgba(45, 46, 47, 0.09);
 }
 
-.content-header,
 .workflow-journey,
 .visual-systems,
 .cover-choice,
 .overall-panel {
   grid-column: 1 / -1;
-}
-
-.content-header {
-  align-items: flex-start;
-  margin: 0;
-  padding: 24px 26px 20px;
-  border-bottom: 1px solid var(--editor-line-light);
-  background: var(--editor-panel);
-}
-
-.content-header h2 {
-  color: var(--editor-ink);
-  font-size: clamp(31px, 3vw, 44px);
-  font-style: normal;
-  letter-spacing: -0.025em;
-  line-height: 1;
 }
 
 .font-status {
@@ -2468,7 +2424,6 @@ input:focus {
   gap: 10px;
   padding: 16px 22px;
   border-bottom: 1px solid rgba(180, 35, 24, 0.42);
-  border-left: 4px solid var(--editor-red);
   color: var(--editor-ink);
   background: #fff1f0;
   scroll-margin-top: 96px;
@@ -2819,6 +2774,10 @@ input:focus {
   background: #e5e2dc;
 }
 
+.guidance-panel[hidden] {
+  display: none;
+}
+
 .guidance-panel ol {
   color: var(--editor-ink);
 }
@@ -2976,7 +2935,6 @@ input:focus {
     padding: 0;
   }
 
-  .content-header,
   .workflow-journey,
   .visual-systems,
   .cover-choice,
@@ -3078,10 +3036,6 @@ input:focus {
 
   .product-byline img {
     width: 92px;
-  }
-
-  .content-header {
-    padding: 20px 18px 16px;
   }
 
   .font-status {
@@ -3215,7 +3169,6 @@ html[data-capture-target="true"] body {
 
 html.production-render .topbar,
 html.production-render .sidebar,
-html.production-render .content-header,
 html.production-render .workflow-journey,
 html.production-render .visual-systems,
 html.production-render .cover-choice,
@@ -3226,7 +3179,6 @@ html.production-render .slide-form,
 html.production-render .loading,
 html[data-capture-target="true"] .topbar,
 html[data-capture-target="true"] .sidebar,
-html[data-capture-target="true"] .content-header,
 html[data-capture-target="true"] .workflow-journey,
 html[data-capture-target="true"] .visual-systems,
 html[data-capture-target="true"] .cover-choice,

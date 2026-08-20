@@ -92,7 +92,7 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertIn("Controlli in corso", journey)
         self.assertIn('waiting || phase === "production"', journey)
         self.assertNotIn("Puoi chiudere questa scheda", self.source)
-        self.assertIn("I consensi sono registrati, ma il rendering non è ancora iniziato", self.source)
+        self.assertIn("I due consensi sono registrati. Il rendering non è ancora iniziato", self.source)
         brand = self.source.split("function approvalBrandSummary", 1)[1].split(
             "function validationTarget", 1
         )[0]
@@ -137,6 +137,27 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertLess(retry.index("if (!baseMatches || !fingerprintMatches || !workflowMatches)"), retry.index('fetchJson("/api/submit"'))
         self.assertIn("recovery_submissions: recoverySubmissions", self.source)
         self.assertIn('id="export-recovery-button"', self.html)
+
+    def test_saved_recovery_is_quiet_until_a_real_conflict_needs_action(self) -> None:
+        validation = self.source.split("function renderValidationState", 1)[1].split(
+            "function refreshApprovalValidation", 1
+        )[0]
+        self.assertIn("const visible = Boolean(issues.length || submissionError)", validation)
+        self.assertIn("!(submissionError && recoveryCount > 0)", validation)
+        self.assertNotIn("feedback recuperabile", self.source)
+        self.assertNotIn("copia recuperabile", self.source)
+        self.assertIn("Scarica una copia delle modifiche", self.html)
+
+    def test_editor_removes_duplicate_count_and_delivery_guidance(self) -> None:
+        self.assertNotIn('id="slide-count"', self.html)
+        self.assertNotIn("slideCount", self.source)
+        self.assertIn('id="guidance-panel"', self.html)
+        guidance = self.source.split("function renderGuidance", 1)[1].split(
+            "function returnToChat", 1
+        )[0]
+        self.assertIn('elements.guidancePanel.hidden = phase === "production"', guidance)
+        self.assertNotIn("Consegna completata", guidance)
+        self.assertIn("Torna alla chat", self.source)
 
     def test_stale_plain_draft_and_recoveries_have_dedicated_storage(self) -> None:
         hydrate = self.source.split("function hydrateDraft()", 1)[1].split("function fontStack", 1)[0]
@@ -209,7 +230,7 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         foreign_branch = poll.split("if (ownPending)", 1)[1].split("persistDraft({ immediate: true });", 1)[0]
         self.assertNotIn("awaitingFeedbackId = serverFeedbackId", foreign_branch.split("} else {", 1)[1])
         self.assertIn('preserveCurrentDraft("foreign-feedback-applied"', poll)
-        self.assertIn("La bozza locale non è stata ricaricata", poll)
+        self.assertIn("Le modifiche di questa scheda sono al sicuro", poll)
 
     def test_approve_payload_echoes_server_fingerprint_without_client_stage(self) -> None:
         submit = self.source.split("async function submit(action)", 1)[1].split("function schedulePoll", 1)[0]
