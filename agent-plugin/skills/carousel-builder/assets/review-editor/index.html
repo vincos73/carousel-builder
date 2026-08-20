@@ -135,7 +135,7 @@
               <li>Correggi i testi nell’editor accanto all’anteprima.</li>
               <li>Seleziona una parola o una frase per applicare uno stile o aggiungere un commento.</li>
               <li>Sposta o elimina le slide interne con i comandi della slide.</li>
-              <li>Invia bozza per applicare le modifiche, oppure seleziona Approva per passare alla prova visiva.</li>
+              <li>Quando tutto è pronto, seleziona Genera. Se aggiungi commenti, comparirà Invia correzioni.</li>
             </ol>
           </section>
 
@@ -158,7 +158,7 @@
       <div class="actions">
         <button id="undo-button" class="button button-ghost" type="button" disabled>Annulla ultima</button>
         <button id="reset-button" class="button button-ghost" type="button">Ripristina</button>
-        <button id="send-button" class="button button-secondary" type="button">Invia bozza</button>
+        <button id="send-button" class="button button-secondary" type="button" hidden aria-hidden="true">Invia correzioni</button>
         <button id="approve-button" class="button button-primary" type="button">Genera</button>
       </div>
       <button id="mobile-actions-button" class="button button-secondary" type="button" aria-haspopup="dialog">Azioni di revisione</button>
@@ -195,7 +195,7 @@
         <p class="dialog-copy">Scegli come proseguire con la revisione corrente.</p>
         <div class="mobile-actions-list">
           <button id="mobile-undo-button" class="button button-ghost" type="button" disabled>Annulla ultima modifica</button>
-          <button id="mobile-send-button" class="button button-secondary" type="button">Invia bozza</button>
+          <button id="mobile-send-button" class="button button-secondary" type="button" hidden aria-hidden="true">Invia correzioni</button>
           <button id="mobile-approve-button" class="button button-primary" type="button">Genera</button>
           <button id="mobile-reset-button" class="button button-ghost" type="button">Ripristina modifiche</button>
         </div>

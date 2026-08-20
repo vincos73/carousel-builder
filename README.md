@@ -138,9 +138,8 @@ Il codice e la documentazione sono distribuiti gratuitamente con licenza
 [MIT](LICENSE). Puoi usarli, modificarli e ridistribuirli mantenendo l'avviso
 di copyright e il testo della licenza.
 
-I font inclusi in [`assets/fonts/`](assets/fonts/) restano soggetti alle
-rispettive licenze SIL Open Font License riportate nei file `*-OFL.txt` e non
-sono coperti dalla licenza MIT del progetto.
+Il profilo neutro usa Arial e Times New Roman già installati nel sistema; la
+skill non ridistribuisce file di font.
 
 ## Autore
 

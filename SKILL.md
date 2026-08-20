@@ -5,7 +5,7 @@ description: Trasforma URL, articoli e testi in caroselli editoriali 4:5, guidan
 
 # Carousel Builder
 
-Versione: **2.12.3**
+Versione: **2.12.5**
 
 Separare fonte, identità, testi, prova, produzione e QA. L'utente decide le scelte editoriali e visuali: il sistema le segnala, ma blocca solo errori tecnici, strutturali, di sicurezza o del workflow. Nel caso normale l'editor espone una sola azione primaria, `Genera`, conservando le ricevute durevoli. La richiesta iniziale autorizza solo la proposta editoriale.
 
@@ -79,7 +79,7 @@ Usare `conversation` quando almeno una capacità è realmente assente o fallisce
 - Mantenere normalmente 5-6 slide di contenuto. In `verbatim` non riscrivere senza autorizzazione. In `narrative` lasciare vuoti i titoli interni; in `sectional` usarli solo quando aiutano l'autonomia.
 - Includere sempre la copertina e, per `newsletter` e `article`, la chiusura salvo scelta diversa. Il sottotitolo è opzionale e mai inventato. Generare la CTA dalla fonte corrente, non dal profilo riutilizzabile.
 - Separare le frasi con `\n`, senza righe vuote; non spezzare abbreviazioni, iniziali, decimali, domini o URL. Nel render ogni frase è un blocco con `sentence_gap_em: 0.6` oltre a `body_line_height`.
-- Usare i font approvati nei ruoli `display`, `body` ed eventuale `emphasis_italic`; non sintetizzare il corsivo. Se un font non è disponibile, mostrare il fallback effettivo e consentire comunque `Genera`. `*_bold`, `*_italic`, `*_underline` e `*_accent` contengono locuzioni esatte, distinte e non sovrapposte. Il grassetto suggerito resta rimovibile e non blocca l'approvazione.
+- Usare i font approvati nei ruoli `display`, `body` ed eventuale `emphasis_italic`; non sintetizzare il corsivo. Se un font manca, mostrare il fallback e consentire `Genera`. Dopo l'approvazione visuale, disponibilità e differenze metriche fra sistemi sono avvisi non bloccanti; blocca una differenza reale fra prova e output. `*_bold`, `*_italic`, `*_underline` e `*_accent` contengono locuzioni esatte, distinte e non sovrapposte. Il grassetto suggerito resta rimovibile e non blocca l'approvazione.
 - Usare HTML/CSS/SVG deterministici. Le slide interne restano tipografiche salvo richiesta esplicita; gli SVG strutturali del sistema sono ammessi. Numerare ogni pagina in alto a destra dentro la safe area; nella cover split il numero resta in alto a destra nella colonna testuale e non invade l'immagine.
 - Il master è 1080×1350 in 4:5, l'export 1440×1800 e la prova 480×600, senza reflow. Per rapporti diversi creare una variante separata e una nuova approvazione. L'adattamento automatico non supera l'8%; altrimenti si rivede il copy.
 - Verificare accessibilità, ordine di lettura, trascrizione o alt text, contrasto e leggibilità a dimensione feed. Non affidare significati soltanto a colore, peso, corsivo, famiglia o posizione.

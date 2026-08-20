@@ -79,6 +79,7 @@
   const FONT_ROLE_WEIGHT_RANGES = Object.freeze({
     display: "700 900",
     body: "100 699",
+    bold: "700 900",
     serif: "100 900",
     italic: "100 900",
   });
@@ -259,6 +260,7 @@
   let activeValidationIssues = [];
   let proofEditingExpanded = true;
   let fontAdvisories = [];
+  let resolvedItalicAsset = null;
   const fitWarnings = new Map();
   const pendingPreviewIds = new Set();
   const fontLoadCache = new Map();
@@ -1112,6 +1114,15 @@
     return count;
   }
 
+  function hasAgentCorrections() {
+    return Boolean(
+      selectionComments.length
+      || Object.values(slideNotes).some((value) => typeof value === "string" && value.trim())
+      || brandNote.trim()
+      || overallNote.trim()
+    );
+  }
+
   function hasPendingLock() {
     return Boolean(awaitingFeedbackId || foreignFeedbackId);
   }
@@ -1284,6 +1295,8 @@
     for (const [mobile, desktop] of pairs) {
       if (!mobile || !desktop) continue;
       mobile.disabled = desktop.disabled;
+      mobile.hidden = desktop.hidden;
+      mobile.setAttribute("aria-hidden", String(desktop.hidden));
       mobile.setAttribute("aria-disabled", String(desktop.disabled));
     }
   }
@@ -1292,6 +1305,12 @@
     if (!model) return;
     const count = computeChangeCount();
     const waiting = hasPendingLock();
+    const contentAlreadyApproved = model.workflow_state !== "bozza";
+    const sendVisible = hasAgentCorrections() || (contentAlreadyApproved && count > 0);
+    if (elements.sendButton) {
+      elements.sendButton.hidden = !sendVisible;
+      elements.sendButton.setAttribute("aria-hidden", String(!sendVisible));
+    }
     if (hasStaleBase()) {
       if (elements.resetButton) elements.resetButton.disabled = false;
       if (elements.undoButton) elements.undoButton.disabled = true;
@@ -1310,12 +1329,12 @@
         || approvalComplete
         || !previewReadyForApproval(document.documentElement.dataset);
     }
-    const visualProofHasChanges = model.workflow_state === "testi_approvati" && count > 0;
+    const approvedContentHasChanges = contentAlreadyApproved && count > 0;
     const sendLabel = waiting
-      ? "Bozza inviata"
-      : visualProofHasChanges
-        ? "Invia bozza · poi riapprova"
-        : "Invia bozza";
+      ? "Correzioni inviate"
+      : approvedContentHasChanges
+        ? "Invia correzioni · poi riapprova"
+        : "Invia correzioni";
     if (elements.sendButton) elements.sendButton.textContent = sendLabel;
     if (elements.mobileSendButton) elements.mobileSendButton.textContent = sendLabel;
     if (elements.workflowBadge) {
@@ -1531,18 +1550,59 @@
     return safeFamily ? `"${safeFamily}", ${fallback}` : fallback;
   }
 
-  function italicFontAsset() {
+  function italicFontCandidates() {
     const assets = previewBrand().font_assets && typeof previewBrand().font_assets === "object" ? previewBrand().font_assets : {};
-    const candidates = [assets.italic, assets.emphasis_italic, assets.body_italic, assets.display_italic, assets.serif_italic];
-    return candidates.find((asset) => asset?.available === true && asset.family && asset.endpoint) || null;
+    const primary = [assets.italic, assets.emphasis_italic, assets.body_italic, assets.display_italic, assets.serif_italic]
+      .find((asset) => asset?.available === true && asset.family && (asset.endpoint || asset.source === "system"));
+    if (!primary) return [];
+    const fallbackFamilies = Array.isArray(primary.fallbacks) ? primary.fallbacks : [];
+    const candidates = [primary, ...fallbackFamilies.map((family) => ({ family, source: "system", available: true, endpoint: "" }))];
+    return candidates.filter((asset, index, list) => asset.family && list.findIndex((candidate) => candidate.family === asset.family) === index);
+  }
+
+  function italicFontAsset() {
+    return resolvedItalicAsset || italicFontCandidates()[0] || null;
   }
 
   function italicFontLabel() {
     return italicFontAsset()?.family || "corsivo reale disponibile";
   }
 
+  function boldFontAsset() {
+    const assets = previewBrand().font_assets && typeof previewBrand().font_assets === "object" ? previewBrand().font_assets : {};
+    const explicit = [assets.bold, assets.body_bold, assets.display_bold]
+      .find((asset) => asset?.available === true && asset.family && (asset.endpoint || asset.source === "system"));
+    if (explicit) return explicit;
+    const body = assets.body || assets.sans;
+    if (!body?.family) return null;
+    return body.source === "system"
+      ? body
+      : { ...body, available: false };
+  }
+
   function fontAssetKey(asset, descriptors = {}) {
-    return `${asset?.family || ""}|${asset?.endpoint || ""}|${descriptors.style || "normal"}|${descriptors.weight || "100 900"}`;
+    return `${asset?.family || ""}|${asset?.source || ""}|${asset?.endpoint || ""}|${descriptors.style || "normal"}|${descriptors.weight || "100 900"}`;
+  }
+
+  function systemFontSource(family, style, weight) {
+    const italicNames = {
+      Arial: ["Arial Italic", "Arial-ItalicMT"],
+      "Times New Roman": ["Times New Roman Italic", "TimesNewRomanPS-ItalicMT"],
+    };
+    const boldNames = {
+      Arial: ["Arial Bold", "Arial-BoldMT"],
+      "DejaVu Sans": ["DejaVu Sans Bold", "DejaVuSans-Bold"],
+      "Helvetica Neue": ["Helvetica Neue Bold", "HelveticaNeue-Bold"],
+      "Times New Roman": ["Times New Roman Bold", "TimesNewRomanPS-BoldMT"],
+    };
+    const names = style === "italic"
+      ? [...(italicNames[family] || [`${family} Italic`]), family]
+      : weight === FONT_ROLE_WEIGHT_RANGES.bold
+        ? (boldNames[family] || [`${family} Bold`, `${family}-Bold`])
+        : [family];
+    return [...new Set(names)]
+      .map((name) => `local("${String(name).replace(/"/g, "")}")`)
+      .join(", ");
   }
 
   function hasRealItalicFont() {
@@ -1550,13 +1610,22 @@
     return Boolean(asset && loadedFontKeys.has(fontAssetKey(asset, fontAssetDescriptors("italic", "italic"))));
   }
 
+  function hasRealBoldFont() {
+    const asset = boldFontAsset();
+    return Boolean(asset && loadedFontKeys.has(fontAssetKey(asset, fontAssetDescriptors("bold"))));
+  }
+
   function loadFontAsset(asset, descriptors) {
     const key = fontAssetKey(asset, descriptors);
     if (!fontLoadCache.has(key)) {
       const pending = (async () => {
+        const safeFamily = String(asset.family || "").replace(/["\\]/g, "").trim();
+        const source = asset.source === "system"
+          ? systemFontSource(safeFamily, descriptors.style, descriptors.weight)
+          : `url("${api(asset.endpoint).replace(/"/g, "%22")}")`;
         const face = new FontFace(
-          asset.family,
-          `url("${api(asset.endpoint).replace(/"/g, "%22")}")`,
+          safeFamily,
+          source,
           descriptors,
         );
         await face.load();
@@ -1586,15 +1655,20 @@
   async function configurePreviewTypography(run) {
     const brand = previewBrand();
     const assets = brand.font_assets && typeof brand.font_assets === "object" ? brand.font_assets : {};
-    const sansFallback = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    const fallbacks = { display: sansFallback, body: sansFallback, serif: "Georgia, 'Times New Roman', serif" };
-    const labels = { display: "Titoli", body: "Testi", serif: "Secondario corsivo", italic: "Corsivo" };
+    const sansFallback = "Arial, 'Helvetica Neue', sans-serif";
+    const fallbacks = { display: sansFallback, body: sansFallback, serif: "'Times New Roman', Times, serif" };
+    const labels = { display: "Titoli", body: "Testi", serif: "Secondario corsivo", italic: "Corsivo", bold: "Grassetto" };
     const loaded = {};
     fontAdvisories = [];
+    resolvedItalicAsset = null;
     const resolvedItalic = italicFontAsset();
     const italicAvailableBefore = hasRealItalicFont();
-    for (const kind of ["display", "body", "serif", "italic"]) {
-      const asset = kind === "italic" ? resolvedItalic : assets[kind] || (kind === "body" ? assets.sans : null);
+    for (const kind of ["display", "body", "serif", "italic", "bold"]) {
+      const asset = kind === "italic"
+        ? resolvedItalic
+        : kind === "bold"
+          ? boldFontAsset()
+          : assets[kind] || (kind === "body" ? assets.sans : null);
       if (!fontAssetRequiresVerifiedLoad(asset)) {
         const declaredFamily = String(asset?.family || "").trim();
         if (declaredFamily) {
@@ -1604,11 +1678,26 @@
         continue;
       }
       try {
-        if (!asset.family || !asset.endpoint || typeof FontFace === "undefined") {
+        if (!asset.family || (!asset.endpoint && asset.source !== "system") || typeof FontFace === "undefined") {
           throw new Error("metadati o API FontFace non disponibili");
         }
         const style = kind === "serif" || kind === "italic" ? "italic" : "normal";
-        loaded[kind] = await loadFontAsset(asset, fontAssetDescriptors(kind, style));
+        if (kind === "italic") {
+          let loadedCandidate = null;
+          for (const candidate of italicFontCandidates()) {
+            try {
+              loadedCandidate = await loadFontAsset(candidate, fontAssetDescriptors(kind, style));
+              resolvedItalicAsset = candidate;
+              break;
+            } catch (_candidateError) {
+              // Try the next explicitly allowed system italic.
+            }
+          }
+          if (!loadedCandidate) throw new Error("nessuna variante italic disponibile");
+          loaded[kind] = loadedCandidate;
+        } else {
+          loaded[kind] = await loadFontAsset(asset, fontAssetDescriptors(kind, style));
+        }
       } catch (_error) {
         if (run !== previewContractRun) return false;
         const message = `${labels[kind]}: ${asset.family || "font dichiarato"} non si è caricato; l’anteprima usa un fallback.`;
@@ -1620,6 +1709,7 @@
     if (run !== previewContractRun) return false;
     document.documentElement.style.setProperty("--preview-display", fontStack(loaded.display, fallbacks.display));
     document.documentElement.style.setProperty("--preview-body", fontStack(loaded.body, fallbacks.body));
+    document.documentElement.style.setProperty("--preview-body-bold", fontStack(loaded.bold, fallbacks.body));
     document.documentElement.style.setProperty("--preview-sans", fontStack(loaded.body, fallbacks.body));
     document.documentElement.style.setProperty("--preview-serif", fontStack(loaded.serif, fallbacks.serif));
     document.documentElement.style.setProperty("--preview-italic", fontStack(loaded.italic, loaded.serif || fallbacks.serif));
@@ -1670,7 +1760,10 @@
     preview.style.setProperty("--preview-scale", String(scale));
     if (title) {
       title.style.fontSize = `${previewFontBase(slide, "title", preview) * scale}px`;
-      title.style.fontWeight = String(numberValue(slide.kind === "cover" ? type.cover_weight : type.section_title_weight, 800));
+      const titleWeight = slide.kind === "cover"
+        ? numberValue(type.cover_weight, 500)
+        : numberValue(type.section_title_weight, 800);
+      title.style.fontWeight = String(titleWeight);
       title.style.fontFamily = "var(--preview-display)";
     }
     if (summary) {
@@ -1696,16 +1789,25 @@
     const italic = Array.isArray(canonicalItalic) && canonicalItalic.length ? canonicalItalic : legacyItalic;
     const accent = slide[`${field}_accent`] ?? slide[`${legacyPrefix}_accent`];
     const underline = slide[`${field}_underline`] ?? slide[`${legacyPrefix}_underline`];
-    return {
+    const result = {
       bold: Array.isArray(bold) ? bold : [],
       italic: Array.isArray(italic) ? italic : [],
       accent: Array.isArray(accent) ? accent : [],
       underline: Array.isArray(underline) ? underline : [],
     };
+    result.ranges = {};
+    for (const kind of ["bold", "italic", "accent", "underline"]) {
+      result.ranges[kind] = emphasisRanges(slide, field, kind, typeof slide[field] === "string" ? slide[field] : "");
+    }
+    return result;
   }
 
   function emphasisKey(slide, field, kind) {
     return `${field}_${kind}`;
+  }
+
+  function emphasisRangeKey(slide, field, kind) {
+    return `${field}_${kind}_ranges`;
   }
 
   function legacyEmphasisKey(slide, field) {
@@ -1731,6 +1833,45 @@
     }
   }
 
+  function emphasisRanges(slide, field, kind, text) {
+    const key = emphasisRangeKey(slide, field, kind);
+    const stored = slide[key];
+    if (Array.isArray(stored) && stored.length) {
+      return stored.filter((mark) => (
+        mark
+        && typeof mark.text === "string"
+        && mark.text
+        && Number.isInteger(mark.start)
+        && Number.isInteger(mark.end)
+        && mark.end > mark.start
+        && text.slice(mark.start, mark.end) === mark.text
+      )).map((mark) => ({ text: mark.text, start: mark.start, end: mark.end }));
+    }
+    return emphasisSegments(slide, field, kind).flatMap((segment) => (
+      textRanges(text, segment).map((range) => ({ text: segment, ...range }))
+    ));
+  }
+
+  function setEmphasisRanges(slide, field, kind, ranges) {
+    slide[emphasisRangeKey(slide, field, kind)] = ranges.map((mark) => ({
+      text: mark.text,
+      start: mark.start,
+      end: mark.end,
+    }));
+  }
+
+  function syncEmphasisSegmentsFromRanges(slide, field, kind, ranges) {
+    const seen = new Set();
+    const segments = [];
+    for (const mark of ranges) {
+      if (!seen.has(mark.text)) {
+        seen.add(mark.text);
+        segments.push(mark.text);
+      }
+    }
+    setEmphasisSegments(slide, field, kind, segments);
+  }
+
   function pruneStaleEmphasis(slides) {
     let dropped = 0;
     for (const slide of slides) {
@@ -1739,9 +1880,15 @@
         for (const kind of ["bold", "italic", "accent", "underline"]) {
           const segments = emphasisSegments(slide, field, kind);
           const kept = segments.filter((segment) => typeof segment === "string" && segment && text.includes(segment));
-          if (kept.length === segments.length) continue;
+          const rangesKey = emphasisRangeKey(slide, field, kind);
+          const storedRanges = Array.isArray(slide[rangesKey]) ? slide[rangesKey] : null;
+          const keptRanges = storedRanges
+            ? storedRanges.filter((mark) => mark && typeof mark.text === "string" && text.slice(mark.start, mark.end) === mark.text)
+            : null;
+          if (kept.length === segments.length && (!storedRanges || keptRanges.length === storedRanges.length)) continue;
           dropped += segments.length - kept.length;
           setEmphasisSegments(slide, field, kind, kept);
+          if (storedRanges) setEmphasisRanges(slide, field, kind, keptRanges);
         }
       }
     }
@@ -1766,12 +1913,11 @@
     const specialKinds = new Set(["italic", "accent", "underline"]);
     for (const kind of ["bold", "italic", "accent", "underline"]) {
       for (const segment of emphasisSegments(slide, field, kind)) {
-        const occurrences = textRanges(text, segment);
+        const occurrences = emphasisRanges(slide, field, kind, text);
         if (!occurrences.length) {
           warnings.push({ kind: "ambiguous", message: `La selezione “${segment}” non è più presente nel testo.` });
           continue;
         }
-        if (occurrences.length > 1) warnings.push({ kind: "ambiguous", message: `La selezione “${segment}” compare ${occurrences.length} volte: rendila univoca.` });
         for (const range of occurrences) ranges.push({ ...range, kind, segment });
       }
     }
@@ -1780,6 +1926,7 @@
       const previous = ranges[index - 1];
       const current = ranges[index];
       if (current.start < previous.end) {
+        if (current.start === previous.start && current.end === previous.end && current.kind === previous.kind) continue;
         const bothSpecial = specialKinds.has(previous.kind) && specialKinds.has(current.kind);
         if (previous.start === current.start && previous.end === current.end) {
           warnings.push({
@@ -1808,6 +1955,12 @@
     const safeText = typeof text === "string" ? text : "";
     const matches = [];
     for (const [kind, segments] of Object.entries(emphasis)) {
+      if (kind === "ranges") continue;
+      const storedRanges = emphasis.ranges?.[kind];
+      if (Array.isArray(storedRanges) && storedRanges.length) {
+        for (const mark of storedRanges) matches.push({ start: mark.start, end: mark.end, kind });
+        continue;
+      }
       for (const segment of segments) {
         if (typeof segment !== "string" || !segment) continue;
         let start = safeText.indexOf(segment);
@@ -2048,22 +2201,20 @@
     };
     const styleMarks = { bold: "B", italic: "I", underline: "U", accent: "A" };
     const selectionState = (kind, start, end) => {
-      let containing = "";
-      let overlapping = "";
-      for (const segment of emphasisSegments(slide, field, kind)) {
-        for (const range of textRanges(input.value, segment)) {
-          const overlaps = start < range.end && range.start < end;
-          if (!overlaps) continue;
-          if (!overlapping) overlapping = segment;
-          if (start >= range.start && end <= range.end && !containing) containing = segment;
-        }
+      let containing = null;
+      let overlapping = null;
+      for (const range of emphasisRanges(slide, field, kind, input.value)) {
+        const overlaps = start < range.end && range.start < end;
+        if (!overlaps) continue;
+        if (!overlapping) overlapping = range;
+        if (start >= range.start && end <= range.end && !containing) containing = range;
       }
       return { containing, overlapping };
     };
     const firstStyleOverlap = (start, end) => {
       for (const kind of ["bold", "italic", "underline", "accent"]) {
         const state = selectionState(kind, start, end);
-        if (state.overlapping) return { kind, segment: state.overlapping };
+        if (state.overlapping) return { kind, segment: state.overlapping.text };
       }
       return null;
     };
@@ -2071,28 +2222,27 @@
       appliedStylesList.replaceChildren();
       const entries = [];
       for (const kind of ["bold", "italic", "underline", "accent"]) {
-        for (const segment of emphasisSegments(slide, field, kind)) entries.push({ kind, segment });
+        for (const mark of emphasisRanges(slide, field, kind, input.value)) entries.push({ kind, mark });
       }
       appliedStyles.hidden = entries.length === 0;
-      for (const { kind, segment } of entries) {
+      for (const { kind, mark } of entries) {
         const remove = create("button", `applied-style-chip applied-style-${kind}`);
         remove.type = "button";
         remove.disabled = hasPendingLock();
-        remove.setAttribute("aria-label", `Rimuovi ${styleLabels[kind].toLowerCase()} da “${segment}”`);
-        remove.title = `Rimuovi ${styleLabels[kind].toLowerCase()} da “${segment}”`;
+        remove.setAttribute("aria-label", `Rimuovi ${styleLabels[kind].toLowerCase()} da “${mark.text}”`);
+        remove.title = `Rimuovi ${styleLabels[kind].toLowerCase()} da “${mark.text}”`;
         remove.append(
           create("span", "applied-style-kind", styleMarks[kind]),
-          create("span", "applied-style-quote", `“${segment}”`),
+          create("span", "applied-style-quote", `“${mark.text}”`),
           create("span", "applied-style-remove", "×"),
         );
         remove.addEventListener("click", () => {
           recordUndo("rimozione enfasi tipografica");
-          setEmphasisSegments(
-            slide,
-            field,
-            kind,
-            emphasisSegments(slide, field, kind).filter((value) => value !== segment),
+          const remaining = emphasisRanges(slide, field, kind, input.value).filter(
+            (value) => !(value.start === mark.start && value.end === mark.end && value.text === mark.text),
           );
+          setEmphasisRanges(slide, field, kind, remaining);
+          syncEmphasisSegmentsFromRanges(slide, field, kind, remaining);
           onPreview(slide[field]);
           refreshEmphasisUi();
           renderAppliedStyles();
@@ -2116,7 +2266,7 @@
         button.disabled = !hasSelection || (!available && !active);
         button.setAttribute("aria-pressed", active ? "true" : mixed ? "mixed" : "false");
         button.classList.toggle("is-mixed", mixed);
-        button.dataset.appliedSegment = state.containing;
+        button.dataset.appliedSegment = state.containing?.text || "";
       };
       setButton(boldButton, "bold");
       setButton(italicButton, "italic", hasRealItalicFont());
@@ -2159,9 +2309,9 @@
       const quote = input.value.slice(start, end);
       const segments = emphasisSegments(slide, field, kind).slice();
       const state = selectionState(kind, start, end);
-      const removableSegment = state.containing;
-      if (kind === "italic" && !hasRealItalicFont() && !removableSegment) return;
-      if (!removableSegment) {
+      const removableRange = state.containing;
+      if (kind === "italic" && !hasRealItalicFont() && !removableRange) return;
+      if (!removableRange) {
         const conflict = firstStyleOverlap(start, end);
         if (conflict) {
           showToast(`La selezione include “${conflict.segment}”, già ${styleLabels[conflict.kind].toLowerCase()}. Rimuovi prima il formato dalla riga sotto il testo.`, true);
@@ -2171,13 +2321,24 @@
         }
       }
       recordUndo("enfasi tipografica");
-      if (removableSegment) {
-        const existingIndex = segments.indexOf(removableSegment);
-        if (existingIndex >= 0) segments.splice(existingIndex, 1);
+      const currentRanges = emphasisRanges(slide, field, kind, input.value);
+      if (removableRange) {
+        const remaining = currentRanges.filter(
+          (value) => !(value.start === removableRange.start && value.end === removableRange.end && value.text === removableRange.text),
+        );
+        setEmphasisRanges(slide, field, kind, remaining);
+        syncEmphasisSegmentsFromRanges(slide, field, kind, remaining);
       } else {
         segments.push(quote);
+        setEmphasisRanges(slide, field, kind, [
+          ...currentRanges,
+          { text: quote, start, end },
+        ]);
+        syncEmphasisSegmentsFromRanges(slide, field, kind, [
+          ...currentRanges,
+          { text: quote, start, end },
+        ]);
       }
-      setEmphasisSegments(slide, field, kind, segments);
       onPreview(slide[field]);
       refreshEmphasisUi();
       renderAppliedStyles();

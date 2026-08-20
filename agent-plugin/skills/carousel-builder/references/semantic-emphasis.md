@@ -21,7 +21,7 @@ Risolvere una sola modalità corsiva coerente per l'intero carosello, nell'ordin
 3. `brand.fonts.serif_italic`, come ruolo legacy o secondo carattere corsivo approvato;
 4. il corsivo del profilo neutro, soltanto dopo scelta esplicita del tema neutro.
 
-Se nessun file o font corsivo reale è disponibile, non sintetizzarlo: disabilitare il comando per nuove selezioni. Se un manifest esistente contiene già `*_italic`, mostrare il fallback diritto e un avviso consultivo senza bloccare `Genera`. Mostrare sempre nell'interfaccia la famiglia effettiva, per esempio `Corsivo · Barlow Italic`, `Corsivo · Playfair Display Italic` oppure `fallback diritto`.
+Se nessun file o font corsivo reale è disponibile, non sintetizzarlo: disabilitare il comando per nuove selezioni. Se un manifest esistente contiene già `*_italic`, mostrare il fallback diritto e un avviso consultivo senza bloccare `Genera`. Mostrare sempre nell'interfaccia la famiglia effettiva, per esempio `Corsivo · Barlow Italic`, `Corsivo · Times New Roman Italic` oppure `fallback diritto`.
 
 ## Editor locale
 
@@ -30,9 +30,10 @@ Quando l'utente seleziona una locuzione, offrire i comandi `Grassetto`, `Corsivo
 - Consentire il toggle e la rimozione delle enfasi.
 - Dopo l'approvazione dei testi, trattare una modifica alle sole enfasi come variazione visuale: conservare la ricevuta editoriale, invalidare la prova corrente e richiedere soltanto una nuova prova visuale. Non marcare alt text o trascrizione come stale quando copy e ordine restano identici.
 - Mostrare le enfasi direttamente nell'anteprima in tempo reale. Non duplicarle con chip, pill o altri elementi esterni al testo.
+- Rendere gli stessi comandi disponibili anche per titolo e sottotitolo della copertina quando esiste una selezione testuale; la copertina non è un'area esclusa dalla formattazione.
 - Supportare `Cmd/Ctrl+B`, `Cmd/Ctrl+I`, `Cmd/Ctrl+U` e `Cmd/Ctrl+Maiusc+H` quando una selezione testuale è attiva.
 - Usare `aria-pressed`, nomi accessibili completi e focus visibile.
-- Non accettare una selezione vuota, ambigua perché ripetuta nel testo o sovrapposta a un'altra enfasi.
+- Non accettare una selezione vuota o sovrapposta a un'altra enfasi. Se la stessa parola o locuzione compare più volte, conservare la posizione `start`/`end` della selezione e applicare lo stile soltanto a quell'occorrenza, senza mostrare un errore di ambiguità.
 - Non mostrare avvisi quando l'utente rimuove tutti i grassetti. Consentire stati transitori durante `Invia correzioni`, mostrando un avviso inline soltanto per enfasi ambigue, sovrapposte, non supportate o eccessive; bloccare `Approva profilo e testi` finché questi problemi non sono risolti.
 
 ## Criteri
@@ -46,7 +47,7 @@ Quando l'utente seleziona una locuzione, offrire i comandi `Grassetto`, `Corsivo
 - Non affidare informazioni essenziali al solo cambio di peso, stile, font o colore.
 - Non scegliere parole in base a lunghezza, maiuscole o frequenza.
 - Non spezzare nomi propri, denominazioni, modelli o locuzioni.
-- Verificare che ogni locuzione compaia una sola volta e in modo esatto nel testo associato. Se ricorre più volte, richiedere una selezione più lunga e univoca.
+- Verificare che ogni enfasi conservi testo e intervallo esatti nel testo associato. La stessa locuzione può avere più intervalli distinti, anche con ruoli diversi se non si sovrappongono.
 
 Esempio:
 

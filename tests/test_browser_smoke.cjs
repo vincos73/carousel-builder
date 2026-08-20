@@ -286,7 +286,9 @@ function manifestFixture() {
       website: "https://example.test",
       signature: "Test",
       fonts: {
-        display: { family: "Browser Smoke Display", source: "uploaded", file: "display.ttf" },
+        display: { family: "DejaVu Sans", source: "system" },
+        body: { family: "DejaVu Sans", source: "system" },
+        emphasis_italic: { family: "DejaVu Serif", source: "system" },
       },
       palette: {
         background_light: "#F5F1E8",
@@ -401,7 +403,6 @@ test("browser reale: i due consensi restano distinti e la prova visiva è read-f
   const twoCheckpointManifest = manifestFixture();
   twoCheckpointManifest.cover_mode = "generated";
   await fs.writeFile(manifestPath, `${JSON.stringify(twoCheckpointManifest, null, 2)}\n`, "utf8");
-  await fs.copyFile(path.join(ROOT, "assets", "fonts", "Inter-Variable.ttf"), path.join(directory, "display.ttf"));
   await fs.mkdir(chromeDirectory);
 
   server = await startServer(manifestPath, sessionDirectory);
@@ -430,7 +431,11 @@ test("browser reale: i due consensi restano distinti e la prova visiva è read-f
   const feedbackPath = path.join(sessionDirectory, "feedback.json");
   const approval = await readJsonWhen(feedbackPath, (value) => value.action === "approve", "Persistenza primo consenso");
   assert.equal(approval.approval_scope, undefined);
-  const sessionState = JSON.parse(await fs.readFile(path.join(sessionDirectory, "session-state.json"), "utf8"));
+  const sessionState = await readJsonWhen(
+    path.join(sessionDirectory, "session-state.json"),
+    (value) => typeof value.last_feedback_path === "string" && value.last_feedback_path,
+    "Persistenza stato approvazione",
+  );
   const processed = spawnSync(process.env.PYTHON || "python3", [
     path.join(ROOT, "scripts", "process_review.py"),
     manifestPath,
@@ -533,8 +538,6 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
     await fs.rm(directory, { recursive: true, force: true });
   });
   await fs.writeFile(manifestPath, `${JSON.stringify(manifestFixture(), null, 2)}\n`, "utf8");
-  const displayFontPath = path.join(directory, "display.ttf");
-  await fs.copyFile(path.join(ROOT, "assets", "fonts", "Inter-Variable.ttf"), displayFontPath);
   await fs.mkdir(chromeDirectory);
 
   const returnThreadId = "01a01e64-3e6e-7b71-950d-c425e032e34e";
@@ -554,7 +557,6 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   assert.deepEqual(session.proof.required_slide_ids, ["cover", "item-2", "outro"]);
 
   const approvalPage = await newIncognitoPage(client);
-  await client.send("Network.setBlockedURLs", { urls: ["*/api/font/display*"] }, approvalPage.sessionId);
   await navigate(client, approvalPage, server.ready.url);
   await waitFor(
     client,
@@ -621,34 +623,40 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   assert.equal(approvalPreviewState.ready, "true");
   assert.equal(approvalPreviewState.error, "");
   assert.equal(approvalPreviewState.approveDisabled, false);
-  assert.equal(approvalPreviewState.fontAlertHidden, false);
-  assert.match(approvalPreviewState.fontAlert, /fallback/);
+  assert.equal(approvalPreviewState.fontAlertHidden, true);
+  assert.equal(approvalPreviewState.fontAlert, "");
 
-  // The rejected promise must leave the cache. Restoring reachability and
-  // asking for a fresh render must retry the same URL and certify it without
-  // changing the manifest fingerprint.
-  await client.send("Network.setBlockedURLs", { urls: [] }, approvalPage.sessionId);
-  await evaluate(client, approvalPage, `document.querySelector('[data-slide-id="item-1"] [data-action="move-down"]').click()`);
+  await evaluate(client, approvalPage, `(() => {
+    const input = document.querySelector('#field-item-1-summary');
+    input.focus();
+    input.setSelectionRange(0, 5);
+    input.dispatchEvent(new Event('select', { bubbles: true }));
+  })()`);
+  assert.deepEqual(
+    await evaluate(client, approvalPage, `(() => {
+      const input = document.querySelector('#field-item-1-summary');
+      const button = input.closest('.field-group').querySelector('.format-italic');
+      return { disabled: button.disabled, label: button.getAttribute('aria-label') };
+    })()`),
+    { disabled: false, label: "Applica o rimuovi il corsivo DejaVu Serif dalla selezione" },
+  );
+  await evaluate(client, approvalPage, `document.querySelector('#field-item-1-summary').closest('.field-group').querySelector('.format-italic').click()`);
   await waitFor(
     client,
     approvalPage,
-    "document.documentElement.dataset.previewReady === 'true'",
-    "retry del font corretto e contratto anteprima",
+    `document.documentElement.dataset.previewReady === 'true'
+      && Boolean(document.querySelector('[data-slide-id="item-1"] .preview-italic'))
+      && getComputedStyle(document.querySelector('[data-slide-id="item-1"] .preview-italic')).fontFamily.includes('DejaVu Serif')`,
+    "corsivo di sistema applicato nella prova",
   );
   await evaluate(client, approvalPage, `document.querySelector('#undo-button').click()`);
   await waitFor(
     client,
     approvalPage,
     `document.documentElement.dataset.previewReady === 'true'
-      && JSON.stringify([...document.querySelectorAll('.slide-row')].map((row) => row.dataset.slideId)) === '["cover","item-1","item-2","outro"]'`,
-    "ripristino della bozza dopo il retry",
+      && !document.querySelector('[data-slide-id="item-1"] .preview-italic')`,
+    "rimozione del corsivo con annulla",
   );
-  const retryPreviewState = await evaluate(client, approvalPage, `({
-    ready: document.documentElement.dataset.previewReady || "",
-    error: document.documentElement.dataset.productionError || "",
-    fontAlertHidden: document.querySelector('#font-status').hidden,
-  })`);
-  assert.deepEqual(retryPreviewState, { ready: "true", error: "", fontAlertHidden: true });
 
   // Navigation intent alone does not mark the sample as viewed. This remains
   // an advisory and never prevents the explicit combined consent.
@@ -666,11 +674,12 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   assert.deepEqual(
     await evaluate(client, approvalPage, `({
       label: document.querySelector('#approve-button').textContent,
+      correctionHidden: document.querySelector('#send-button').hidden,
       scope: document.querySelector('#approval-dialog').dataset.approvalScope || "",
       title: document.querySelector('#approval-dialog-title').textContent,
       currentStep: document.querySelector('#workflow-steps [aria-current="step"] strong').textContent,
     })`),
-    { label: "Genera", scope: "profile_text_and_visual", title: "Generare il carosello?", currentStep: "Profilo e testi" },
+    { label: "Genera", correctionHidden: true, scope: "profile_text_and_visual", title: "Generare il carosello?", currentStep: "Profilo e testi" },
   );
   await evaluate(client, approvalPage, "document.querySelector('#approval-dialog').close()");
 
@@ -716,7 +725,11 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   assert.equal(approval.proof_browser.engine, "chromium");
   assert.ok(Number.isInteger(approval.proof_browser.major) && approval.proof_browser.major > 0);
 
-  const sessionState = JSON.parse(await fs.readFile(path.join(sessionDirectory, "session-state.json"), "utf8"));
+  const sessionState = await readJsonWhen(
+    path.join(sessionDirectory, "session-state.json"),
+    (value) => typeof value.last_feedback_path === "string" && value.last_feedback_path,
+    "Persistenza stato approvazione combinata",
+  );
   const processed = spawnSync(process.env.PYTHON || "python3", [
     path.join(ROOT, "scripts", "process_review.py"),
     manifestPath,
@@ -835,7 +848,8 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   await waitFor(
     client,
     editorPage,
-    `JSON.stringify([...document.querySelectorAll('.slide-row')].map((row) => row.dataset.slideId)) === '["cover","item-2","item-1","outro"]'`,
+    `JSON.stringify([...document.querySelectorAll('.slide-row')].map((row) => row.dataset.slideId)) === '["cover","item-2","item-1","outro"]'
+      && document.querySelector('#send-button').hidden === false`,
     "riordino UI",
   );
   await evaluate(client, editorPage, `document.querySelector('#send-button').click()`);

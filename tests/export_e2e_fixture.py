@@ -81,11 +81,11 @@ def build_fixture(destination: Path, browser_major: int) -> dict:
             "website": "example.test",
             "signature": "E2E",
             "fonts": {
-                "display": {"family": "Inter", "source": "bundled"},
-                "body": {"family": "Inter", "source": "bundled"},
-                "serif_italic": {
-                    "family": "Playfair Display",
-                    "source": "bundled",
+                "display": {"family": "Arial", "source": "system"},
+                "body": {"family": "Arial", "source": "system"},
+                "emphasis_italic": {
+                    "family": "Times New Roman",
+                    "source": "system",
                 },
             },
             "palette": {

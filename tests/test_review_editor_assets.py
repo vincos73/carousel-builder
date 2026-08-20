@@ -54,10 +54,30 @@ class ReviewEditorAssetTest(unittest.TestCase):
             "function lockEditing()", 1
         )[0]
         self.assertIn(
-            'model.workflow_state === "testi_approvati" && count > 0', pending
+            'const contentAlreadyApproved = model.workflow_state !== "bozza"', pending
         )
-        self.assertIn("Invia bozza · poi riapprova", pending)
+        self.assertIn("hasAgentCorrections() || (contentAlreadyApproved && count > 0)", pending)
+        self.assertIn("Invia correzioni · poi riapprova", pending)
         self.assertIn("elements.mobileSendButton", pending)
+
+    def test_normal_flow_discloses_feedback_action_only_when_needed(self) -> None:
+        self.assertIn(
+            'id="send-button" class="button button-secondary" type="button" hidden aria-hidden="true"',
+            self.html,
+        )
+        self.assertIn(
+            'id="mobile-send-button" class="button button-secondary" type="button" hidden aria-hidden="true"',
+            self.html,
+        )
+        pending = self.source.split("function updateChangeSummary()", 1)[1].split(
+            "function lockEditing()", 1
+        )[0]
+        self.assertIn("elements.sendButton.hidden = !sendVisible", pending)
+        mobile = self.source.split("function syncMobileActions()", 1)[1].split(
+            "function updateChangeSummary()", 1
+        )[0]
+        self.assertIn("mobile.hidden = desktop.hidden", mobile)
+        self.assertNotIn("Invia bozza", self.html)
 
     def test_workflow_journey_distinguishes_both_consents_and_proof_mode(self) -> None:
         self.assertIn('id="workflow-journey"', self.html)
@@ -110,7 +130,7 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertIn('Revisione ${model.revision}', poll)
         self.assertIn("Testi approvati. Ora controlla la prova visiva.", poll)
         self.assertIn("Prova visiva approvata. La produzione può iniziare.", poll)
-        self.assertIn("Invia bozza per applicare le modifiche", self.html)
+        self.assertIn("Se aggiungi commenti, comparirà Invia correzioni", self.html)
 
     def test_fast_approval_is_strict_and_sends_one_combined_scope(self) -> None:
         fast = self.source.split("function fastApprovalEligible()", 1)[1].split(
@@ -205,6 +225,7 @@ assert.equal(JSON.parse(storage.get(keyB)).slides[0].id, "b");
 const assert = require("node:assert/strict");
 const { fontAssetDescriptors, fontAssetRequiresVerifiedLoad } = require(process.argv[1]);
 assert.deepEqual(fontAssetDescriptors("body"), { style: "normal", weight: "100 699" });
+assert.deepEqual(fontAssetDescriptors("bold"), { style: "normal", weight: "700 900" });
 assert.deepEqual(fontAssetDescriptors("display"), { style: "normal", weight: "700 900" });
 assert.deepEqual(fontAssetDescriptors("italic", "italic"), { style: "italic", weight: "100 900" });
 assert.equal(fontAssetRequiresVerifiedLoad(), false);
@@ -219,8 +240,19 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("new FontFace(", self.source)
+        self.assertIn('asset.source === "system"', self.source)
+        self.assertIn("function systemFontSource(family, style, weight)", self.source)
+        self.assertIn('local("${String(name)', self.source)
         self.assertIn("fontAssetDescriptors(kind, style)", self.source)
+        self.assertIn('Arial: ["Arial Bold", "Arial-BoldMT"]', self.source)
+        self.assertIn('font-family: var(--preview-body-bold, var(--preview-body));', self.stylesheet)
+        self.assertIn('font-weight: 700;', self.stylesheet)
+        self.assertIn('const titleWeight = slide.kind === "cover"', self.source)
+        self.assertIn('numberValue(type.cover_weight, 500)', self.source)
         self.assertIn("fontLoadCache.get(key) === pending", self.source)
+        self.assertNotIn("@font-face", self.stylesheet)
+        self.assertIn('font-family: Arial, "Helvetica Neue", sans-serif;', self.stylesheet)
+        self.assertIn('font-family: "Times New Roman", Times, serif;', self.stylesheet)
 
     def test_foreign_pending_locks_without_claiming_or_discarding_local_draft(self) -> None:
         poll = self.source.split("async function pollStatus()", 1)[1].split("function clearPendingSelection", 1)[0]
@@ -624,7 +656,7 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         self.assertIn(".applied-style-chip", stylesheet)
         self.assertIn("border-radius: 999px", stylesheet)
         self.assertIn("renderAppliedStyles();", self.source)
-        self.assertIn("value !== segment", self.source)
+        self.assertIn("emphasisRanges(slide, field, kind", self.source)
 
     def test_existing_format_is_recognized_and_overlap_is_prevented(self) -> None:
         self.assertIn("const selectionState = (kind, start, end) =>", self.source)
@@ -687,10 +719,6 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
     def test_unavailable_italic_can_still_be_removed(self) -> None:
         self.assertIn(
             'button.disabled = !hasSelection || (!available && !active);',
-            self.source,
-        )
-        self.assertIn(
-            'if (kind === "italic" && !hasRealItalicFont() && !removableSegment) return;',
             self.source,
         )
         self.assertIn(

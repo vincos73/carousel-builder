@@ -47,6 +47,7 @@ from review_core import (  # noqa: E402
     strict_json_loads,
     strict_json_text,
     valid_sha256,
+    validate_emphasis_ranges,
     validate_emphasis_values,
 )
 from manifest_contract import (  # noqa: E402
@@ -66,14 +67,15 @@ from manifest_contract import (  # noqa: E402
 
 MAX_BODY_BYTES = 1_000_000
 MAX_COMMENTS = 200
-EDITOR_VERSION = "2.12.3"
+EDITOR_VERSION = "2.12.5"
 RENDER_CONTRACT = "approved-preview-dom-v2"
+EMPHASIS_RANGE_SUFFIX = "_ranges"
 TYPOGRAPHY_DEFAULTS = {
     "cover_px": 112,
     "cover_subtitle_px": 56,
     "section_title_px": 72,
     "body_px": 64,
-    "cover_weight": 800,
+    "cover_weight": 500,
     "cover_subtitle_weight": 500,
     "section_title_weight": 800,
     "body_weight": 620,
@@ -97,19 +99,27 @@ IMAGE_MIME_TYPES = {
     ".webp": "image/webp",
 }
 FONT_SOURCES = {"uploaded", "bundled", "system", "fallback"}
-BUNDLED_FONT_ASSETS = {
-    "display": ("Inter", Path(__file__).resolve().parent.parent / "assets" / "fonts" / "Inter-Variable.ttf"),
-    "body": ("Inter", Path(__file__).resolve().parent.parent / "assets" / "fonts" / "Inter-Variable.ttf"),
-    "serif": (
-        "Playfair Display",
-        Path(__file__).resolve().parent.parent / "assets" / "fonts" / "PlayfairDisplay-Italic-Variable.ttf",
-    ),
+LEGACY_SYSTEM_FONT_ALIASES = {
+    "inter": "Arial",
+    "playfair display": "Times New Roman",
 }
 FONT_ROLE_FALLBACKS = {
     "display": ("display", "sans"),
     "body": ("body", "sans"),
     "serif": ("serif_italic", "serif"),
 }
+
+
+def _system_font_family(family: str, source: str) -> tuple[str, str]:
+    if not family:
+        return family, source
+    if source == "system":
+        return family, source
+    if source in {"bundled", "fallback"}:
+        replacement = LEGACY_SYSTEM_FONT_ALIASES.get(family.casefold())
+        if replacement:
+            return replacement, "system"
+    return family, source
 EMPHASIS_ROLES = ("bold", "italic", "serif", "accent", "underline")
 PALETTE_COLOR_FIELDS = (
     "background_light",
@@ -547,6 +557,25 @@ def validated_emphasis(value: object, content: str) -> list[str]:
     return result
 
 
+def validated_emphasis_ranges(value: object, content: str, *, field: str) -> list[dict]:
+    return validate_emphasis_ranges(value, content, field=field)
+
+
+def validate_emphasis_range_overlap(values: dict[str, list[dict]], *, field: str) -> None:
+    ranges: list[tuple[int, int, str, str]] = []
+    for role, marks in values.items():
+        for mark in marks:
+            start, end, phrase = mark["start"], mark["end"], mark["text"]
+            for other_start, other_end, other_role, other_phrase in ranges:
+                if role == other_role:
+                    continue
+                if start < other_end and other_start < end:
+                    raise ValueError(
+                        f"{field}: i trattamenti su “{other_phrase}” e “{phrase}” si sovrappongono. Correggi le selezioni oppure mantienine uno solo"
+                    )
+            ranges.append((start, end, role, phrase))
+
+
 def validate_emphasis_overlap(values: dict[str, list[str]], content: str, *, field: str) -> None:
     """Selections for separate visual roles must never share characters."""
     special_roles = {"italic", "serif", "accent", "underline"}
@@ -654,17 +683,15 @@ def _font_asset(manifest: dict, manifest_path: Path, key: str) -> tuple[dict, Pa
                 if source == "fallback":
                     source = "uploaded"
 
-    bundled_family, bundled_path = BUNDLED_FONT_ASSETS[key]
-    if resolved is None and family.casefold() == bundled_family.casefold() and bundled_path.is_file():
-        resolved = bundled_path
-        source = "bundled"
+    if resolved is None:
+        family, source = _system_font_family(family, source)
 
-    available = resolved is not None
+    available = resolved is not None or (source == "system" and bool(family))
     public = {
         "family": family,
         "source": source,
         "available": available,
-        "endpoint": f"/api/font/{key}" if available else "",
+        "endpoint": f"/api/font/{key}" if resolved is not None else "",
     }
     return public, resolved
 
@@ -672,9 +699,8 @@ def _font_asset(manifest: dict, manifest_path: Path, key: str) -> tuple[dict, Pa
 def _italic_font_asset(manifest: dict, manifest_path: Path) -> tuple[dict, Path | None]:
     """Resolve the italic role without pretending an upright font is italic.
 
-    The explicit brand role wins.  A body/display italic is accepted only when
-    it has its own local file; a legacy serif italic may use the bundled
-    Playfair italic asset.
+    The explicit brand role wins. Uploaded italics require their own local
+    file; system italics are verified by the browser through ``local()``.
     """
     brand = manifest.get("brand") if isinstance(manifest.get("brand"), dict) else {}
     fonts = brand.get("fonts") if isinstance(brand.get("fonts"), dict) else {}
@@ -685,6 +711,12 @@ def _italic_font_asset(manifest: dict, manifest_path: Path) -> tuple[dict, Path 
         if configured is None:
             continue
         family = _short_string(configured.get("family")) if isinstance(configured, dict) else _short_string(configured)
+        fallbacks = []
+        if isinstance(configured, dict) and isinstance(configured.get("fallbacks"), list):
+            fallbacks = [
+                value.strip() for value in configured["fallbacks"]
+                if isinstance(value, str) and value.strip() and len(value.strip()) <= 200
+            ]
         source = "fallback"
         file_name: object = None
         if isinstance(configured, dict):
@@ -705,21 +737,16 @@ def _italic_font_asset(manifest: dict, manifest_path: Path) -> tuple[dict, Path 
                     resolved = candidate
                     if source == "fallback":
                         source = "uploaded"
-        if (
-            resolved is None
-            and role == "serif_italic"
-            and family.casefold() == BUNDLED_FONT_ASSETS["serif"][0].casefold()
-            and BUNDLED_FONT_ASSETS["serif"][1].is_file()
-        ):
-            resolved = BUNDLED_FONT_ASSETS["serif"][1]
-            source = "bundled"
-        if resolved is not None:
+        if resolved is None:
+            family, source = _system_font_family(family, source)
+        if resolved is not None or (source == "system" and bool(family)):
             return {
                 "family": family,
                 "source": source,
                 "available": True,
-                "endpoint": "/api/font/italic",
+                "endpoint": "/api/font/italic" if resolved is not None else "",
                 "role": role,
+                "fallbacks": fallbacks,
             }, resolved
 
     return {
@@ -728,6 +755,7 @@ def _italic_font_asset(manifest: dict, manifest_path: Path) -> tuple[dict, Path 
         "available": False,
         "endpoint": "",
         "role": "",
+        "fallbacks": [],
     }, None
 
 
@@ -745,7 +773,7 @@ def font_assets(manifest: dict, manifest_path: Path) -> tuple[dict, dict[str, Pa
     if resolved_italic is not None:
         allowed["italic"] = resolved_italic
     # ``sans`` remains a read-only compatibility alias for older editor clients.
-    public["sans"] = {**public["body"], "endpoint": "/api/font/sans" if public["body"]["available"] else ""}
+    public["sans"] = {**public["body"], "endpoint": "/api/font/sans" if "body" in allowed else ""}
     if "body" in allowed:
         allowed["sans"] = allowed["body"]
     return public, allowed
@@ -873,10 +901,10 @@ def brand_summary(manifest: dict, manifest_path: Path | None = None) -> dict:
         "name": text(brand.get("name"), field="brand.name", limit=300),
         "website": text(brand.get("website"), field="brand.website", limit=500),
         "signature": text(brand.get("signature"), field="brand.signature", limit=300),
-        "display": font_name("display", "sans"),
-        "body": font_name("body", "sans"),
-        "sans": font_name("body", "sans"),
-        "serif": font_name("serif_italic", "serif"),
+        "display": asset_metadata["display"]["family"] or font_name("display", "sans"),
+        "body": asset_metadata["body"]["family"] or font_name("body", "sans"),
+        "sans": asset_metadata["body"]["family"] or font_name("body", "sans"),
+        "serif": asset_metadata["serif"]["family"] or font_name("serif_italic", "serif"),
         "emphasis_italic": asset_metadata["italic"],
         "font_assets": asset_metadata,
         "logos": logo_metadata,
@@ -934,6 +962,7 @@ def reusable_brand_profile(manifest: dict) -> dict:
             family = _short_string(value)
             source = "fallback"
         if family:
+            family, source = _system_font_family(family, source)
             profile_fonts[role] = {
                 "family": family,
                 "source": source if source in FONT_SOURCES else "fallback",
@@ -999,11 +1028,21 @@ RENDER_SLIDE_FIELDS = (
     "title_serif",
     "title_accent",
     "title_underline",
+    "title_bold_ranges",
+    "title_italic_ranges",
+    "title_serif_ranges",
+    "title_accent_ranges",
+    "title_underline_ranges",
     "summary_bold",
     "summary_italic",
     "summary_serif",
     "summary_accent",
     "summary_underline",
+    "summary_bold_ranges",
+    "summary_italic_ranges",
+    "summary_serif_ranges",
+    "summary_accent_ranges",
+    "summary_underline_ranges",
 )
 
 
@@ -1206,6 +1245,28 @@ def manifest_model(
             }
         )
 
+    for slide in slides:
+        source_field = {
+            "cover": {"title": "cover_title", "summary": "cover_subtitle"},
+            "item": {"title": "title", "summary": "summary"},
+            "outro": {"title": "outro.title", "summary": "outro.body"},
+        }[slide["kind"]]
+        source = manifest if slide["kind"] == "cover" else (
+            contract["outro"] if slide["kind"] == "outro" else next(
+                item for item in contract["items"] if item["id"] == slide["id"]
+            )
+        )
+        for field in ("title", "summary"):
+            content = slide[field]
+            manifest_field = source_field[field]
+            for role in EMPHASIS_ROLES:
+                raw = source.get(f"{manifest_field}_{role}_ranges")
+                slide[f"{field}_{role}_ranges"] = validated_emphasis_ranges(
+                    raw,
+                    content,
+                    field=f"{manifest_field}_{role}_ranges",
+                )
+
     sequence_mode = contract["sequence_mode"]
     format_data = manifest.get("format") if isinstance(manifest.get("format"), dict) else {}
     cover_visual, _ = cover_image_asset(manifest, manifest_path)
@@ -1344,6 +1405,7 @@ def validate_feedback(
             text(slide.get("summary"), field=f"slides[{position}].summary")
         )
         emphasis: dict[str, list[str]] = {}
+        emphasis_ranges: dict[str, list[dict]] = {}
         for field, content in (("title", title), ("summary", summary)):
             values = {
                 role: validate_emphasis_values(
@@ -1353,11 +1415,23 @@ def validate_feedback(
                 )
                 for role in EMPHASIS_ROLES
             }
-            validate_emphasis_overlap(values, content, field=f"slides[{position}].{field}")
+            ranges = {
+                role: validated_emphasis_ranges(
+                    slide.get(f"{field}_{role}_ranges"),
+                    content,
+                    field=f"slides[{position}].{field}_{role}_ranges",
+                )
+                for role in EMPHASIS_ROLES
+            }
+            if any(ranges.values()):
+                validate_emphasis_range_overlap(ranges, field=f"slides[{position}].{field}")
+            else:
+                validate_emphasis_overlap(values, content, field=f"slides[{position}].{field}")
             if (values["italic"] or values["serif"]) and not italic_font_available:
                 message = f"{slide_id}.{field} usa il corsivo senza un font corsivo reale disponibile"
                 warnings.append(message)
             emphasis.update({f"{field}_{role}": phrases for role, phrases in values.items()})
+            emphasis_ranges.update({f"{field}_{role}_ranges": marks for role, marks in ranges.items()})
 
         normalized_slides.append(
             {
@@ -1366,6 +1440,7 @@ def validate_feedback(
                 "title": title,
                 "summary": summary,
                 **emphasis,
+                **emphasis_ranges,
             }
         )
 
@@ -1531,6 +1606,9 @@ def validate_feedback(
                     for role in EMPHASIS_ROLES:
                         normalized[f"{field}_{role}"] = slide.get(
                             f"{field}_{role}", []
+                        )
+                        normalized[f"{field}_{role}_ranges"] = slide.get(
+                            f"{field}_{role}_ranges", []
                         )
                 current_slides.append(normalized)
             if approval_stage == "visual_proof" and normalized_slides != current_slides:
@@ -1879,42 +1957,6 @@ def main() -> int:
                 "/assets/vincos-lockup-white.svg": (
                     assets_dir / "vincos-lockup-white.svg",
                     "image/svg+xml; charset=utf-8",
-                ),
-                "/assets/fonts/Inter-Variable.ttf": (
-                    BUNDLED_FONT_ASSETS["display"][1],
-                    "font/ttf",
-                ),
-                "/assets/fonts/PlayfairDisplay-Variable.ttf": (
-                    assets_dir.parent / "fonts" / "PlayfairDisplay-Variable.ttf",
-                    "font/ttf",
-                ),
-                "/assets/fonts/PlayfairDisplay-Italic-Variable.ttf": (
-                    BUNDLED_FONT_ASSETS["serif"][1],
-                    "font/ttf",
-                ),
-                "/assets/fonts/InstrumentSerif-Regular.ttf": (
-                    assets_dir.parent / "fonts" / "InstrumentSerif-Regular.ttf",
-                    "font/ttf",
-                ),
-                "/assets/fonts/Onest-Regular.ttf": (
-                    assets_dir.parent / "fonts" / "Onest-Regular.ttf",
-                    "font/ttf",
-                ),
-                "/assets/fonts/Onest-Medium.ttf": (
-                    assets_dir.parent / "fonts" / "Onest-Medium.ttf",
-                    "font/ttf",
-                ),
-                "/assets/fonts/Onest-Semibold.ttf": (
-                    assets_dir.parent / "fonts" / "Onest-Semibold.ttf",
-                    "font/ttf",
-                ),
-                "/assets/fonts/Onest-Bold.ttf": (
-                    assets_dir.parent / "fonts" / "Onest-Bold.ttf",
-                    "font/ttf",
-                ),
-                "/assets/fonts/Orbitron-Variable.ttf": (
-                    assets_dir.parent / "fonts" / "Orbitron-Variable.ttf",
-                    "font/ttf",
                 ),
             }
             static_asset = static_assets.get(parsed.path)

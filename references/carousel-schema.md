@@ -49,7 +49,7 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
     "section_title_px": 72,
     "body_px": 64,
     "metadata_px": 26,
-    "cover_weight": 800,
+    "cover_weight": 500,
     "cover_subtitle_weight": 500,
     "section_title_weight": 800,
     "body_weight": 620,
@@ -135,7 +135,7 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
 - `cover_subtitle`: opzionale; inserirlo soltanto se fornito o approvato esplicitamente dall'utente. Il renderer lo presenta nel ruolo `emphasis_italic` risolto.
 - `cover_title_italic`: massimo una locuzione esatta contenuta nel titolo e resa nel ruolo corsivo risolto.
 - `cover_title_bold`: massimo due unità esatte contenute nel titolo, rese con un peso più forte del carattere `display`.
-- Tutti i segmenti `*_italic` usano il ruolo `emphasis_italic` risolto. Accettare `*_serif` come alias legacy; Playfair Display va usato esclusivamente in corsivo.
+- Tutti i segmenti `*_italic` usano il ruolo `emphasis_italic` risolto. Accettare `*_serif` come alias legacy; nel profilo neutro usare la variante reale Times New Roman Italic di sistema.
 - `summary` e `outro.body`: ogni frase completa inizia su una nuova riga senza righe vuote. Nel rendering ogni frase diventa un blocco distinto; `body_line_height` governa le righe avvolte all'interno del blocco e `sentence_gap_em` aggiunge spazio dopo ogni blocco tranne l'ultimo. I punti interni a numeri e versioni, per esempio `1.2`, non producono un ritorno a capo; lo stesso vale per le abbreviazioni comuni.
 - `source_url`: facoltativo.
 - `cover_image`: percorso assoluto o relativo al manifest; vuoto per `typographic` e durante l'intenzione `generated` non ancora prodotta. Nel percorso locale aggiungerlo dopo l'approvazione dei testi soltanto tramite `attach_cover_asset.py`.
@@ -150,7 +150,8 @@ Salvare il manifest del singolo carosello come JSON UTF-8:
 - `items[].layout`: può essere `editorial`, `statement` o `split`; controlla la composizione, non genera etichette visibili.
 - `items[].title`: deve essere vuoto in modalità `narrative`; in modalità `sectional` può contenere un titolo breve.
 - `items[].summary`: può essere vuoto solo se esiste il titolo.
-- `title_bold`, `title_italic`, `title_underline`, `title_accent`, `summary_bold`, `summary_italic`, `summary_underline`, `summary_accent`: unità esatte e univoche presenti nel testo associato. Nelle card interne con corpo `summary_bold` è proposta di default ma resta facoltativa; la sua assenza non invalida l'approvazione. Una card può usare più trattamenti su parole o locuzioni distinte. `*_italic` richiede un ruolo corsivo reale risolto dal profilo; `*_underline` usa il colore del testo; `*_accent` è un evidenziatore di brand adattato al contrasto della singola slide. Non applicare più stili alla stessa unità e non sovrapporre le selezioni. Accettare i campi `*_serif` dei manifest legacy come alias di `*_italic`.
+- `title_bold`, `title_italic`, `title_underline`, `title_accent`, `summary_bold`, `summary_italic`, `summary_underline`, `summary_accent`: unità esatte presenti nel testo associato. Nelle card interne con corpo `summary_bold` è proposta di default ma resta facoltativa; la sua assenza non invalida l'approvazione. Una card può usare più trattamenti su parole o locuzioni distinte. `*_italic` richiede un ruolo corsivo reale risolto dal profilo; `*_underline` usa il colore del testo; `*_accent` è un evidenziatore di brand adattato al contrasto della singola slide. Non applicare più stili allo stesso intervallo e non sovrapporre le selezioni. Quando una locuzione ricorre, usare i campi `*_ranges` per identificare l'occorrenza esatta. Accettare i campi `*_serif` dei manifest legacy come alias di `*_italic`.
+- I campi opzionali `*_bold_ranges`, `*_italic_ranges`, `*_underline_ranges` e `*_accent_ranges` conservano, per ogni enfasi, `{ "text": "...", "start": N, "end": N }`. Servono quando la stessa locuzione compare più volte: l'enfasi deve applicarsi solo all'intervallo selezionato, senza chiedere di rendere unica la parola.
 - `items[].alt_text` e `outro.alt_text`: descrizioni pronte per i canali che supportano testo alternativo; non introdurre informazioni assenti dalla slide.
 - `outro`: contiene la copia esatta approvata per il singolo carosello; non copiarne titolo e corpo nel profilo riutilizzabile quando sono generati dalla fonte.
 - `outro.eyebrow`: lasciare vuoto salvo richiesta esplicita nel profilo.

@@ -706,7 +706,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.12.3")
+        self.assertEqual(model["editor_version"], "2.12.5")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
@@ -824,10 +824,12 @@ class ManifestModelTest(unittest.TestCase):
         manifest = base_manifest()
         manifest["brand"] = {"fonts": {"sans": "Inter"}}
         brand = self.model(manifest)["brand"]
-        self.assertEqual(brand["display"], "Inter")
-        self.assertEqual(brand["body"], "Inter")
+        self.assertEqual(brand["display"], "Arial")
+        self.assertEqual(brand["body"], "Arial")
         self.assertTrue(brand["font_assets"]["display"]["available"])
         self.assertTrue(brand["font_assets"]["body"]["available"])
+        self.assertEqual(brand["font_assets"]["display"]["source"], "system")
+        self.assertEqual(brand["font_assets"]["display"]["endpoint"], "")
 
     def test_normalizes_typography_and_never_scales_below_documented_floor(self) -> None:
         manifest = base_manifest()
@@ -859,6 +861,10 @@ class ManifestModelTest(unittest.TestCase):
         self.assertEqual(typography["body_tracking_em"], -0.025)
         self.assertEqual(typography["min_auto_scale"], 0.92)
         self.assertEqual(typography["overflow_policy"], "error_and_copy_revision")
+
+    def test_default_cover_title_is_not_bolded_by_base_typography(self) -> None:
+        typography = self.model(base_manifest())["typography"]
+        self.assertEqual(typography["cover_weight"], 500)
 
     def test_exposes_only_exact_emphasis_for_each_slide_field(self) -> None:
         manifest = base_manifest()
@@ -927,18 +933,48 @@ class ManifestModelTest(unittest.TestCase):
         self.assertEqual(fonts["serif"]["endpoint"], "")
         self.assertNotIn(str(font_path), json.dumps(model))
 
-    def test_uses_bundled_assets_for_legacy_neutral_families(self) -> None:
+    def test_migrates_legacy_neutral_families_to_system_fonts(self) -> None:
         manifest = base_manifest()
-        manifest["brand"] = {"fonts": {"sans": "Inter", "serif": "Playfair Display"}}
-        fonts = self.model(manifest)["brand"]["font_assets"]
-        self.assertEqual(fonts["sans"]["source"], "bundled")
-        self.assertTrue(fonts["sans"]["available"])
-        self.assertEqual(fonts["serif"]["source"], "bundled")
-        self.assertTrue(fonts["serif"]["available"])
-        self.assertEqual(
-            review_server.BUNDLED_FONT_ASSETS["serif"][1].name,
-            "PlayfairDisplay-Italic-Variable.ttf",
-        )
+        manifest["brand"] = {
+            "fonts": {
+                "display": {"family": "Inter", "source": "bundled"},
+                "body": {"family": "Inter", "source": "bundled"},
+                "emphasis_italic": {"family": "Playfair Display", "source": "bundled"},
+            }
+        }
+        brand = self.model(manifest)["brand"]
+        fonts = brand["font_assets"]
+        self.assertEqual(brand["display"], "Arial")
+        self.assertEqual(brand["body"], "Arial")
+        self.assertEqual(fonts["display"], {
+            "family": "Arial", "source": "system", "available": True, "endpoint": ""
+        })
+        self.assertEqual(fonts["body"], {
+            "family": "Arial", "source": "system", "available": True, "endpoint": ""
+        })
+        self.assertEqual(fonts["italic"], {
+            "family": "Times New Roman",
+            "source": "system",
+            "available": True,
+            "endpoint": "",
+            "role": "emphasis_italic",
+            "fallbacks": [],
+        })
+
+    def test_exposes_default_system_italic_for_browser_verification(self) -> None:
+        manifest = base_manifest()
+        manifest["brand"] = {
+            "fonts": {
+                "display": {"family": "Arial", "source": "system"},
+                "body": {"family": "Arial", "source": "system"},
+                "emphasis_italic": {"family": "Times New Roman", "source": "system"},
+            }
+        }
+        italic = self.model(manifest)["brand"]["font_assets"]["italic"]
+        self.assertEqual(italic["family"], "Times New Roman")
+        self.assertEqual(italic["source"], "system")
+        self.assertTrue(italic["available"])
+        self.assertEqual(italic["endpoint"], "")
 
     def test_rejects_a_font_path_outside_the_manifest_directory(self) -> None:
         outside = self.workdir.parent / f"{self.workdir.name}-outside-font.woff2"
@@ -1089,6 +1125,11 @@ class ValidateFeedbackTest(unittest.TestCase):
                 "summary": value.get("summary", ""),
                 **{
                     f"{field}_{role}": value.get(f"{field}_{role}", [])
+                    for field in ("title", "summary")
+                    for role in review_server.EMPHASIS_ROLES
+                },
+                **{
+                    f"{field}_{role}_ranges": value.get(f"{field}_{role}_ranges", [])
                     for field in ("title", "summary")
                     for role in review_server.EMPHASIS_ROLES
                 },
