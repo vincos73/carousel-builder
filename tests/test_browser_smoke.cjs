@@ -286,9 +286,9 @@ function manifestFixture() {
       website: "https://example.test",
       signature: "Test",
       fonts: {
-        display: { family: "Arial", source: "system" },
-        body: { family: "Arial", source: "system" },
-        emphasis_italic: { family: "Times New Roman", source: "system" },
+        display: { family: "DejaVu Sans", source: "system" },
+        body: { family: "DejaVu Sans", source: "system" },
+        emphasis_italic: { family: "DejaVu Serif", source: "system" },
       },
       palette: {
         background_light: "#F5F1E8",
@@ -634,7 +634,7 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
       const button = input.closest('.field-group').querySelector('.format-italic');
       return { disabled: button.disabled, label: button.getAttribute('aria-label') };
     })()`),
-    { disabled: false, label: "Applica o rimuovi il corsivo Times New Roman dalla selezione" },
+    { disabled: false, label: "Applica o rimuovi il corsivo DejaVu Serif dalla selezione" },
   );
   await evaluate(client, approvalPage, `document.querySelector('#field-item-1-summary').closest('.field-group').querySelector('.format-italic').click()`);
   await waitFor(
@@ -642,7 +642,7 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
     approvalPage,
     `document.documentElement.dataset.previewReady === 'true'
       && Boolean(document.querySelector('[data-slide-id="item-1"] .preview-italic'))
-      && getComputedStyle(document.querySelector('[data-slide-id="item-1"] .preview-italic')).fontFamily.includes('Times New Roman')`,
+      && getComputedStyle(document.querySelector('[data-slide-id="item-1"] .preview-italic')).fontFamily.includes('DejaVu Serif')`,
     "corsivo di sistema applicato nella prova",
   );
   await evaluate(client, approvalPage, `document.querySelector('#undo-button').click()`);
