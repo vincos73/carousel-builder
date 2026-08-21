@@ -137,11 +137,11 @@ Confrontare ogni card con l'ultima anteprima approvata e verificare:
 
 ## Controllo visivo
 
-Generare una contact sheet dell'intera sequenza. Eseguire i controlli deterministici del renderer su tutte le slide. Contenuto, ordine, dimensioni, apertura degli asset, geometria, pixel, digest e parità anteprima-produzione sono gate tecnici. Fit, caricamento dei font e possibili differenze metriche tra sistemi operativi sono controlli consultivi: dopo l'approvazione visuale registrarne gli esiti e gli eventuali fallback senza bloccare artefatti altrimenti validi. `automated_all_slides: true` attesta la copertura tecnica dell'intero set, non l'assenza di avvisi visivi.
+Eseguire i controlli deterministici del renderer su tutte le slide. Generare una contact sheet soltanto quando è dichiarata in `production.expected_outputs` o serve davvero alla revisione umana. Contenuto, ordine, dimensioni, apertura degli asset, geometria, pixel, digest e parità anteprima-produzione sono gate tecnici. Fit, caricamento dei font e possibili differenze metriche tra sistemi operativi sono controlli consultivi: dopo l'approvazione visuale registrarne gli esiti e gli eventuali fallback senza bloccare artefatti altrimenti validi. `automated_all_slides: true` attesta la copertura tecnica dell'intero set, non l'assenza di avvisi visivi.
 
 Il controllo umano normale è mirato:
 
-1. ispezionare l'intera sequenza nella contact sheet;
+1. ispezionare l'intera sequenza nella contact sheet, quando disponibile;
 2. aprire a dimensione leggibile copertina, card più densa e chiusura quando presente;
 3. aprire inoltre ogni slide segnalata dai controlli automatici o sospetta nella contact sheet;
 4. ampliare il campione a tutte le card soltanto se emerge un difetto sistemico, manca la contact sheet o una slide non è valutabile nel riepilogo.
@@ -201,7 +201,7 @@ Prima della consegna verificare:
 
 Se fallisce un controllo tecnico, strutturale, di sicurezza, integrità o workflow, conservare gli output validi, mantenere lo stato precedente e offrire ripetizione o fallback. Non avanzare a `consegnato`. Un avviso visuale, editoriale, tipografico o di revisione umana non impedisce invece la consegna.
 
-Nel percorso `local-editor`, ispezionare quando possibile gli artefatti mentre lo stato è `rendering` e compilare il report `carousel-builder-qa-v1` descritto in [workflow-state.md](workflow-state.md). Con `finalize_delivery.py` è possibile impostare `render_evidence_sha256` a `auto`: il wrapper avanza `rendering -> qa`, crea nella sessione una copia del report legata al digest durevole appena prodotto e la usa per `qa -> consegnato`. Entrambe le transizioni ricalcolano i digest degli artefatti reali; un report già dotato di digest viene invece verificato senza riscrittura. `fonts` e `human_sample_review` sono booleani consultivi: registrarli onestamente, senza usarli per bloccare artefatti tecnicamente validi.
+Nel percorso `local-editor`, ispezionare quando possibile gli artefatti mentre lo stato è `rendering`, poi usare `finalize_delivery.py` senza compilare manualmente il report. Il wrapper avanza `rendering -> qa`, genera nella sessione un `carousel-builder-qa-v1` copiando direttamente i digest dall'evidenza di render e lo usa per `qa -> consegnato`. Entrambe le transizioni ricalcolano i digest degli artefatti reali. Un report esplicito resta disponibile come override e viene verificato senza correggerne silenziosamente gli artefatti. `fonts` e `human_sample_review` sono booleani consultivi: registrarli onestamente, senza usarli per bloccare artefatti tecnicamente validi.
 
 ## Consegna
 

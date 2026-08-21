@@ -12,14 +12,81 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from advance_workflow import advance_workflow, read_json_object  # noqa: E402
+from advance_workflow import (  # noqa: E402
+    QA_ADVISORY_CHECKS,
+    QA_REPORT_SCHEMA,
+    QA_REQUIRED_CHECKS,
+    advance_workflow,
+    read_json_object,
+    validate_render_result,
+)
 from carousel_status import build_status  # noqa: E402
 from review_core import (  # noqa: E402
     LockUnavailableError,
     atomic_write_json,
     sha256_json,
 )
-from review_server import absolute_input_path, reject_symlink_path  # noqa: E402
+from review_server import (  # noqa: E402
+    absolute_input_path,
+    manifest_model,
+    reject_symlink_path,
+)
+
+
+def _generated_qa_report(
+    render_result_path: Path,
+    *,
+    manifest_path: Path,
+    session_dir_path: Path,
+) -> Path:
+    """Create technical QA evidence from already verified production facts."""
+    manifest = read_json_object(manifest_path, label="Manifest")
+    receipts = manifest.get("workflow_receipts")
+    if (
+        manifest.get("workflow_state") != "qa"
+        or not isinstance(receipts, list)
+        or not receipts
+        or receipts[-1].get("from") != "rendering"
+        or receipts[-1].get("to") != "qa"
+    ):
+        raise ValueError(
+            "La generazione automatica del qa-report richiede la ricevuta rendering -> qa"
+        )
+    render_result = read_json_object(render_result_path, label="render-result")
+    if sha256_json(render_result) != receipts[-1].get("evidence_sha256"):
+        raise ValueError(
+            "Il render-result non coincide con l'evidenza durevole rendering -> qa"
+        )
+    model = manifest_model(manifest_path, manifest=manifest)
+    revision = manifest.get("revision")
+    if not isinstance(revision, int) or isinstance(revision, bool):
+        raise ValueError("La revisione del manifest non è valida")
+    validate_render_result(
+        render_result,
+        manifest=manifest,
+        model=model,
+        revision=revision,
+    )
+    checks = {key: True for key in sorted(QA_REQUIRED_CHECKS)}
+    checks.update({key: False for key in sorted(QA_ADVISORY_CHECKS)})
+    report = {
+        "report_schema": QA_REPORT_SCHEMA,
+        "status": "pass",
+        "revision": revision,
+        "workflow_state": "qa",
+        "render_fingerprint": model.get("render_fingerprint"),
+        "proof_browser": model.get("proof", {}).get("browser"),
+        "render_evidence_sha256": receipts[-1]["evidence_sha256"],
+        "checks": checks,
+        "human_sample_slide_ids": [],
+        "flagged_slide_ids": [],
+        "artifacts": render_result.get("artifact_sha256"),
+    }
+    generated_name = f"qa-report-auto-{sha256_json(report)}.json"
+    generated_path = session_dir_path / generated_name
+    reject_symlink_path(generated_path, field="Il qa-report automatico")
+    atomic_write_json(generated_path, report, mode=0o600, private_parent=True)
+    return generated_path
 
 
 def _bound_qa_report(
@@ -62,12 +129,14 @@ def finalize_delivery(
     *,
     session_dir_path: Path,
     render_result_path: Path,
-    qa_report_path: Path,
+    qa_report_path: Path | None = None,
 ) -> dict:
     manifest_path = absolute_input_path(manifest_path)
     session_dir_path = absolute_input_path(session_dir_path)
     render_result_path = absolute_input_path(render_result_path)
-    qa_report_path = absolute_input_path(qa_report_path)
+    qa_report_path = (
+        absolute_input_path(qa_report_path) if qa_report_path is not None else None
+    )
     status = build_status(manifest_path, session_dir_input=session_dir_path)
     transitions: list[dict] = []
     if status["workflow_state"] == "consegnato":
@@ -92,11 +161,20 @@ def finalize_delivery(
         raise ValueError(
             "La finalizzazione richiede lo stato rendering oppure qa con proof corrente"
         )
-    bound_report_path, report_was_bound = _bound_qa_report(
-        qa_report_path,
-        manifest_path=manifest_path,
-        session_dir_path=session_dir_path,
-    )
+    report_was_generated = qa_report_path is None
+    if report_was_generated:
+        bound_report_path = _generated_qa_report(
+            render_result_path,
+            manifest_path=manifest_path,
+            session_dir_path=session_dir_path,
+        )
+        report_was_bound = False
+    else:
+        bound_report_path, report_was_bound = _bound_qa_report(
+            qa_report_path,
+            manifest_path=manifest_path,
+            session_dir_path=session_dir_path,
+        )
     transitions.append(
         advance_workflow(
             manifest_path,
@@ -116,6 +194,7 @@ def finalize_delivery(
         "transitions": transitions,
         "qa_report": str(bound_report_path),
         "qa_report_bound": report_was_bound,
+        "qa_report_generated": report_was_generated,
     }
 
 
@@ -124,7 +203,7 @@ def main() -> int:
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--session-dir", type=Path, required=True)
     parser.add_argument("--render-result", type=Path, required=True)
-    parser.add_argument("--qa-report", type=Path, required=True)
+    parser.add_argument("--qa-report", type=Path)
     args = parser.parse_args()
     try:
         result = finalize_delivery(

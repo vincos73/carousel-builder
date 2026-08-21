@@ -47,6 +47,14 @@ class TrackingString(str):
 
 
 class SentenceLineBreaksTest(unittest.TestCase):
+    def test_decodes_literal_json_line_breaks_before_display(self) -> None:
+        value = r"Prima frase.\nI social accelerano.\r\nFine."
+
+        rendered = review_core.sentence_line_breaks(value)
+
+        self.assertEqual(rendered, "Prima frase.\nI social accelerano.\nFine.")
+        self.assertNotIn("\\n", rendered)
+
     def test_preserves_output_without_copying_every_preceding_prefix(self) -> None:
         value = TrackingString("Dott. Rossi usa la versione 1.2. Funziona? Sì! Fine. " * 250)
 

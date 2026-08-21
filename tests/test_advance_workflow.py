@@ -487,6 +487,56 @@ class AdvanceWorkflowTest(unittest.TestCase):
         )
         self.assertEqual(self.read_manifest()["workflow_state"], "consegnato")
 
+    def test_finalize_delivery_generates_the_technical_qa_report(self) -> None:
+        manifest = self.approved_manifest("rendering")
+        self.write_manifest(manifest)
+        _pdf, _png_dir, result = self.make_render_outputs(manifest)
+        result_path = self.workdir / "render-result.json"
+        write_json(result_path, result)
+
+        finalized = finalize_delivery.finalize_delivery(
+            self.manifest_path,
+            session_dir_path=self.session_dir,
+            render_result_path=result_path,
+        )
+
+        self.assertEqual(finalized["status"], "finalized")
+        self.assertTrue(finalized["qa_report_generated"])
+        self.assertFalse(finalized["qa_report_bound"])
+        generated_report = json.loads(
+            Path(finalized["qa_report"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            generated_report["artifacts"], result["artifact_sha256"]
+        )
+        self.assertTrue(
+            all(
+                generated_report["checks"][key]
+                for key in advance_workflow.QA_REQUIRED_CHECKS
+            )
+        )
+        self.assertFalse(generated_report["checks"]["fonts"])
+        self.assertFalse(generated_report["checks"]["human_sample_review"])
+        self.assertEqual(generated_report["human_sample_slide_ids"], [])
+        self.assertEqual(self.read_manifest()["workflow_state"], "consegnato")
+
+    def test_generated_qa_report_never_masks_a_tampered_artifact(self) -> None:
+        manifest = self.approved_manifest("rendering")
+        self.write_manifest(manifest)
+        pdf, _png_dir, result = self.make_render_outputs(manifest)
+        result_path = self.workdir / "render-result.json"
+        write_json(result_path, result)
+        pdf.write_bytes(b"tampered")
+
+        with self.assertRaisesRegex(ValueError, "Digest artefatto"):
+            finalize_delivery.finalize_delivery(
+                self.manifest_path,
+                session_dir_path=self.session_dir,
+                render_result_path=result_path,
+            )
+
+        self.assertEqual(self.read_manifest()["workflow_state"], "rendering")
+
     def test_render_result_rejects_a_tampered_artifact_before_qa(self) -> None:
         manifest = self.approved_manifest("rendering")
         self.write_manifest(manifest)

@@ -37,7 +37,7 @@ Se preferisci installarla dalla riga di comando, trovi il comando nella sezione 
 - usa la revisione conversazionale come fallback negli altri ambienti;
 - produce PNG, PDF o un layout dettagliato, secondo gli strumenti messi a disposizione dall'ambiente di lavoro;
 - segnala leggibilità, contrasto, font, ritagli e densità come avvisi consultivi, lasciando all'utente la decisione finale;
-- nel percorso locale lega approvazioni, export e QA a revisione, fingerprint e digest degli artefatti, con recovery coordinato dopo un'interruzione.
+- nel percorso locale lega approvazioni, export e QA a revisione, fingerprint e digest degli artefatti, genera automaticamente il report tecnico e riprende dalle ricevute durevoli dopo un'interruzione.
 
 ## Un'unica skill, due modalità
 
@@ -109,7 +109,7 @@ python3 scripts/carousel_status.py /percorso/manifest.json \
   --session-dir /percorso/sessione
 ```
 
-Il campo `next_action` restituisce la fase di revisione, il comando sicuro o gli output attesi dall'export. Il percorso normale usa `process_review.py` per applicare e avanzare il solo checkpoint approvato, `attach_cover_asset.py` per collegare una cover dopo i testi e `finalize_delivery.py` per i due gate finali. Senza `--session-dir` lo status esegue una validazione statica e dichiara esplicitamente che lo stato del feedback non è verificabile.
+Il campo `next_action` restituisce la fase di revisione, il comando sicuro o gli output attesi dall'export. Il percorso normale usa `process_review.py` per applicare e avanzare il solo checkpoint approvato, `attach_cover_asset.py` per collegare una cover dopo i testi e `finalize_delivery.py` per i due gate finali e il report QA automatico. Senza `--session-dir` lo status esegue una validazione statica e dichiara esplicitamente che lo stato del feedback non è verificabile.
 
 ## Sviluppo
 

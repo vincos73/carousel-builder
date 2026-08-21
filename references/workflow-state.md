@@ -67,11 +67,10 @@ Dopo l'export e l'ispezione, preferire il wrapper unico per le ultime due transi
 ```bash
 <python> <skill>/scripts/finalize_delivery.py "<manifest.json>" \
   --session-dir "<session-dir>" \
-  --render-result "<render-result.json>" \
-  --qa-report "<qa-report.json>"
+  --render-result "<render-result.json>"
 ```
 
-Se parte da `rendering`, il wrapper valida il risultato e avanza a `qa`, poi valida il report e avanza a `consegnato`. Se il secondo gate fallisce, conserva correttamente `qa` e la ricevuta già valida.
+Se parte da `rendering`, il wrapper valida il risultato e avanza a `qa`, genera nella sessione un report tecnico legato alla ricevuta e agli stessi digest, poi lo rivalida e avanza a `consegnato`. Se il secondo gate fallisce, conserva correttamente `qa` e la ricevuta già valida. Passare `--qa-report "<qa-report.json>"` soltanto come override avanzato quando esiste un'ispezione umana o diagnostica da registrare; un report esplicito non viene corretto silenziosamente.
 
 I gate sono cumulativi:
 
@@ -98,7 +97,7 @@ I percorsi degli artefatti sono assoluti. `artifact_sha256` deve coprire esattam
 
 ## Report QA
 
-Creare `qa-report.json` dopo aver verificato struttura, leggibilità dei file, digest e corrispondenza degli artefatti secondo [production-qa.md](production-qa.md). La revisione umana è consigliata ma consultiva; non impostare comunque un controllo tecnico a `true` sulla sola base dell'esito dell'esportatore. La forma richiesta è:
+Nel percorso normale non creare `qa-report.json` a mano: `finalize_delivery.py` genera il report tecnico dai fatti già verificati, copia `artifact_sha256` senza trascriverlo e registra `fonts: false`, `human_sample_review: false` finché non esiste evidenza diversa. Le transizioni rivalidano comunque file e digest reali. Per un override avanzato preparato dopo un'ispezione aggiuntiva, la forma richiesta è:
 
 ```json
 {
@@ -128,7 +127,7 @@ Creare `qa-report.json` dopo aver verificato struttura, leggibilità dei file, d
 }
 ```
 
-Usare la revisione, il fingerprint e il browser correnti. `automated_all_slides` attesta che i controlli tecnici deterministici hanno coperto l'intera sequenza ed è bloccante. `fonts` e `human_sample_review` sono advisory: registrarli come `true` o `false` in base a ciò che è stato realmente verificato. Quando l'ispezione umana avviene, `human_sample_slide_ids` elenca gli ID osservati senza duplicati; può restare vuoto. Con `finalize_delivery.py`, lasciare `render_evidence_sha256: "auto"`: dopo `rendering -> qa` il wrapper crea una copia privata e immutata negli altri campi, sostituendo soltanto questo valore con il digest durevole dell'oggetto `render-result`. Se si usa direttamente `advance_workflow.py`, copiare invece quel digest dall'ultima ricevuta. In `artifacts` ripetere l'insieme completo e i digest correnti del risultato di export; l'esempio mostra il solo caso `expected_outputs: ["pdf"]`.
+Usare la revisione, il fingerprint e il browser correnti. `automated_all_slides` attesta che i controlli tecnici deterministici hanno coperto l'intera sequenza ed è bloccante. `fonts` e `human_sample_review` sono advisory: registrarli come `true` o `false` in base a ciò che è stato realmente verificato. Quando l'ispezione umana avviene, `human_sample_slide_ids` elenca gli ID osservati senza duplicati; può restare vuoto. Con un report esplicito passato a `finalize_delivery.py`, lasciare `render_evidence_sha256: "auto"`: dopo `rendering -> qa` il wrapper crea una copia privata e sostituisce soltanto questo valore con il digest durevole dell'oggetto `render-result`. Se si usa direttamente `advance_workflow.py`, copiare invece quel digest dall'ultima ricevuta. In `artifacts` ripetere l'insieme completo e i digest correnti del risultato di export; l'esempio mostra il solo caso `expected_outputs: ["pdf"]`.
 
 ## Ricevute durevoli
 
