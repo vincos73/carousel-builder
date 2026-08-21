@@ -595,6 +595,24 @@ def main() -> int:
         action = feedback.get("action")
         if not isinstance(action, str) or action not in {"feedback", "approve"}:
             raise ValueError("Azione del batch non valida")
+        if action == "approve":
+            comments = feedback.get("comments", [])
+            raw_note = feedback.get("overall_note", "")
+            extra_notes = any(
+                bool(feedback.get(key))
+                for key in ("notes", "pending_notes", "review_notes", "note")
+            )
+            if (
+                not isinstance(comments, list)
+                or comments
+                or not isinstance(raw_note, str)
+                or raw_note.strip()
+                or extra_notes
+            ):
+                raise ValueError(
+                    "Un'approvazione non può contenere commenti o note pendenti; "
+                    "invia prima una correzione"
+                )
         bind_approved_proof = False
         approval_stage = None
         approval_scope = None
@@ -651,6 +669,9 @@ def main() -> int:
                     {
                         "status": "already_applied",
                         "feedback_id": feedback_id,
+                        "action": action,
+                        "approval_stage": existing_review.get("approval_stage"),
+                        "approval_scope": existing_review.get("approval_scope"),
                         "manifest_revision": revision,
                     },
                     ensure_ascii=False,
@@ -683,6 +704,9 @@ def main() -> int:
                     {
                         "status": "recovered",
                         "feedback_id": feedback_id,
+                        "action": action,
+                        "approval_stage": existing_review.get("approval_stage"),
+                        "approval_scope": existing_review.get("approval_scope"),
                         "manifest_revision": revision,
                         "state_repaired": True,
                     },
@@ -735,12 +759,19 @@ def main() -> int:
                 )
                 current_render_fingerprint = current_model["render_fingerprint"]
                 if (
-                    expected_approval_stage == "visual_proof"
-                    and current_model.get("production", {}).get("producer")
-                    != current_model.get("render_contract")
+                    (
+                        expected_approval_stage == "visual_proof"
+                        or feedback.get("approval_scope") == COMBINED_APPROVAL_SCOPE
+                    )
+                    and (
+                        current_model.get("production", {}).get("mode") != "renderer"
+                        or current_model.get("production", {}).get("producer")
+                        != current_model.get("render_contract")
+                    )
                 ):
                     raise ValueError(
-                        "Il produttore non implementa il contratto renderer locale corrente"
+                        "La CLI local-editor richiede production.mode=renderer e il "
+                        "contratto renderer locale corrente"
                     )
                 if base_render_fingerprint != current_render_fingerprint:
                     raise ValueError(
@@ -1449,8 +1480,17 @@ def main() -> int:
                 "applied_feedback_sha256": feedback_sha256,
                 "applied_manifest_revision": applied_revision,
                 "applied_manifest_sha256": manifest_sha256,
+                "approval_processing_status": {
+                    "feedback_id": feedback_id,
+                    "status": "applied",
+                    "action": action,
+                    "recorded_at": now_iso(),
+                },
             }
         )
+        state.pop("processed_feedback_id", None)
+        state.pop("processed_feedback_action", None)
+        state.pop("processed_at", None)
         atomic_write_json(state_path, state, private=True)
         final_model = server_manifest_model(manifest_path, manifest=manifest)
         result = {

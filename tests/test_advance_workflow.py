@@ -6,11 +6,14 @@ import copy
 import hashlib
 import json
 import os
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
 import uuid
+import zlib
+from functools import lru_cache
 from pathlib import Path
 from unittest import mock
 
@@ -53,6 +56,72 @@ def workflow_receipts(state: str, revision: int = 1) -> list[dict]:
         }
         for index, current in enumerate(states[: states.index(state)])
     ]
+
+
+@lru_cache(maxsize=None)
+def valid_png(width: int = 1440, height: int = 1800) -> bytes:
+    """A small, fully decodable RGBA PNG fixture at the production geometry."""
+    row = bytes((18, 52, 86, 255)) * width
+    raw = b"".join(b"\x00" + row for _ in range(height))
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + kind
+            + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+
+    return b"\x89PNG\r\n\x1a\n" + chunk(
+        b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+
+
+def valid_pdf(
+    page_count: int,
+    width: float = 810,
+    height: float = 1012.5,
+    stream_payload: bytes = b"",
+) -> bytes:
+    """A minimal xref-backed PDF at export_review_pdf.cjs page geometry."""
+    objects: list[bytes] = []
+    page_refs = [3 + index * 2 for index in range(page_count)]
+    objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+    kids = b" ".join(f"{ref} 0 R".encode() for ref in page_refs)
+    objects.append(
+        b"<< /Type /Pages /Kids [ "
+        + kids
+        + f" ] /Count {page_count} >>".encode()
+    )
+    for page_ref in page_refs:
+        content_ref = page_ref + 1
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] "
+            f"/Resources <<>> /Contents {content_ref} 0 R >>".encode()
+        )
+        objects.append(
+            f"<< /Length {len(stream_payload)} >>\nstream\n".encode()
+            + stream_payload
+            + b"\nendstream"
+        )
+
+    output = bytearray(b"%PDF-1.7\n%\x80\x80\x80\x80\n")
+    offsets = [0]
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(output))
+        output.extend(f"{number} 0 obj\n".encode())
+        output.extend(body)
+        output.extend(b"\nendobj\n")
+    xref_offset = len(output)
+    output.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    output.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        output.extend(f"{offset:010d} 00000 n \n".encode())
+    output.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{xref_offset}\n%%EOF\n".encode()
+    )
+    return bytes(output)
 
 
 class AdvanceWorkflowTest(unittest.TestCase):
@@ -308,14 +377,12 @@ class AdvanceWorkflowTest(unittest.TestCase):
 
     def make_render_outputs(self, manifest: dict) -> tuple[Path, Path, dict]:
         pdf = self.workdir / "carousel.pdf"
-        pdf.write_bytes(b"%PDF-1.7\nverified\n")
+        model = review_server.manifest_model(self.manifest_path, manifest=manifest)
+        pdf.write_bytes(valid_pdf(len(model["slides"])))
         png_dir = self.workdir / "png"
         png_dir.mkdir()
-        model = review_server.manifest_model(self.manifest_path, manifest=manifest)
         for index, slide in enumerate(model["slides"], start=1):
-            (png_dir / f"{index:02d}-{slide['id']}.png").write_bytes(
-                f"png-{slide['id']}".encode()
-            )
+            (png_dir / f"{index:02d}-{slide['id']}.png").write_bytes(valid_png())
         result = {
             "result_schema": advance_workflow.EXPORT_RESULT_SCHEMA,
             "status": "ok",
@@ -552,6 +619,151 @@ class AdvanceWorkflowTest(unittest.TestCase):
             )
         self.assertEqual(self.read_manifest()["workflow_state"], "rendering")
 
+    def _assert_render_artifact_decoder_rejects(
+        self, *, kind: str, replacement: bytes, message: str
+    ) -> None:
+        manifest = self.approved_manifest("rendering")
+        self.write_manifest(manifest)
+        pdf, png_dir, result = self.make_render_outputs(manifest)
+        if kind == "pdf":
+            artifact = pdf
+        else:
+            artifact = sorted(png_dir.glob("*.png"))[0]
+        artifact.write_bytes(replacement)
+        for entry in result["artifact_sha256"]:
+            if Path(entry["path"]) == artifact:
+                entry["sha256"] = hashlib.sha256(replacement).hexdigest()
+        result_path = self.workdir / "render-result.json"
+        write_json(result_path, result)
+        with self.assertRaisesRegex(ValueError, message):
+            self.advance(
+                expected_state="rendering", target="qa", render_result_path=result_path
+            )
+        self.assertEqual(self.read_manifest()["workflow_state"], "rendering")
+
+    def test_render_result_rejects_corrupt_png_after_digest_matches(self) -> None:
+        self._assert_render_artifact_decoder_rejects(
+            kind="png", replacement=b"not a png", message="PNG non decodificabile"
+        )
+
+    def test_render_result_rejects_truncated_png_after_digest_matches(self) -> None:
+        self._assert_render_artifact_decoder_rejects(
+            kind="png", replacement=valid_png()[:-1], message="PNG troncato|PNG IEND non valido|PNG incompleto"
+        )
+
+    def test_render_result_rejects_wrong_png_dimensions_after_digest_matches(self) -> None:
+        self._assert_render_artifact_decoder_rejects(
+            kind="png", replacement=valid_png(1, 1), message="PNG dimensioni"
+        )
+
+    def test_render_result_rejects_corrupt_pdf_after_digest_matches(self) -> None:
+        self._assert_render_artifact_decoder_rejects(
+            kind="pdf", replacement=b"%PDF-1.7\n%%EOF\n", message="PDF senza oggetti|PDF non parsabile"
+        )
+
+    def test_render_result_rejects_truncated_pdf_after_digest_matches(self) -> None:
+        manifest = self.approved_manifest("rendering")
+        self.write_manifest(manifest)
+        pdf, _png_dir, result = self.make_render_outputs(manifest)
+        replacement = valid_pdf(len(review_server.manifest_model(
+            self.manifest_path, manifest=manifest
+        )["slides"]))[:-20]
+        pdf.write_bytes(replacement)
+        result["artifact_sha256"][0]["sha256"] = hashlib.sha256(replacement).hexdigest()
+        result_path = self.workdir / "render-result.json"
+        write_json(result_path, result)
+        with self.assertRaisesRegex(ValueError, "PDF non parsabile o troncato"):
+            self.advance(
+                expected_state="rendering", target="qa", render_result_path=result_path
+            )
+
+    def test_pdf_ignores_obj_like_bytes_inside_a_valid_stream(self) -> None:
+        path = self.workdir / "stream-obj-like.pdf"
+        path.write_bytes(
+            valid_pdf(
+                1,
+                stream_payload=b"99 0 obj\n<< /Type /Catalog >>\nendobj\n",
+            )
+        )
+        advance_workflow.validate_pdf_artifact(
+            path, expected_width=1440, expected_height=1800, expected_pages=1
+        )
+
+    def test_pdf_uses_trailer_root_and_rejects_a_fake_non_root_catalog(self) -> None:
+        path = self.workdir / "fake-root.pdf"
+        path.write_bytes(valid_pdf(1).replace(b"/Root 1 0 R", b"/Root 3 0 R"))
+        with self.assertRaisesRegex(ValueError, "trailer.Root non punta"):
+            advance_workflow.validate_pdf_artifact(
+                path, expected_width=1440, expected_height=1800, expected_pages=1
+            )
+
+    def test_pdf_rejects_missing_or_truncated_xref(self) -> None:
+        original = valid_pdf(1)
+        for replacement in (
+            original.replace(b"startxref", b"startxreF"),
+            original[: original.find(b"xref\n") + len(b"xref\n")],
+        ):
+            path = self.workdir / f"bad-xref-{uuid.uuid4().hex}.pdf"
+            path.write_bytes(replacement)
+            with self.subTest(size=len(replacement)), self.assertRaisesRegex(
+                ValueError, "startxref|xref|troncato"
+            ):
+                advance_workflow.validate_pdf_artifact(
+                    path, expected_width=1440, expected_height=1800, expected_pages=1
+                )
+
+    def test_pdf_size_limit_is_a_value_error_before_reading_the_body(self) -> None:
+        path = self.workdir / "pdf-bomb.pdf"
+        with path.open("wb") as stream:
+            stream.truncate(advance_workflow._pdf_byte_limit(1) + 1)
+        with self.assertRaisesRegex(ValueError, "oltre il limite"):
+            advance_workflow.validate_pdf_artifact(
+                path, expected_width=1440, expected_height=1800, expected_pages=1
+            )
+
+    def test_png_idat_and_decompressed_raw_limits_are_explicit(self) -> None:
+        def chunk(kind: bytes, payload: bytes) -> bytes:
+            return (
+                struct.pack(">I", len(payload))
+                + kind
+                + payload
+                + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+            )
+
+        idat_path = self.workdir / "png-idat-bomb.png"
+        oversized_idat = b"\x00" * 33
+        idat_path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", oversized_idat)
+            + chunk(b"IEND", b"")
+        )
+        with mock.patch.object(
+            advance_workflow, "MAX_PNG_IDAT_BYTES", 32
+        ), self.assertRaisesRegex(ValueError, "IDAT oltre il limite"):
+            advance_workflow.validate_png_artifact(
+                idat_path, expected_width=1, expected_height=1
+            )
+
+        raw_path = self.workdir / "png-raw-bomb.png"
+        raw_path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", 10_000, 10_000, 16, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b""))
+            + chunk(b"IEND", b"")
+        )
+        with self.assertRaisesRegex(ValueError, "decompressione oltre il limite"):
+            advance_workflow.validate_png_artifact(
+                raw_path, expected_width=10_000, expected_height=10_000
+            )
+
+    def test_render_result_rejects_wrong_pdf_dimensions_after_digest_matches(self) -> None:
+        self._assert_render_artifact_decoder_rejects(
+            kind="pdf",
+            replacement=valid_pdf(4, 1440, 1800),
+            message="Page.MediaBox",
+        )
+
     def test_artifact_hash_rejects_a_preexisting_hard_link(self) -> None:
         victim = self.workdir / "victim.pdf"
         victim.write_bytes(b"external-content")
@@ -741,7 +953,9 @@ class AdvanceWorkflowTest(unittest.TestCase):
         manifest, pdf, png_dir, result_path = self.prepare_qa()
         report = self.qa_report(manifest, pdf, png_dir)
         replacement = self.workdir / "replacement.pdf"
-        replacement.write_bytes(b"%PDF-1.7\nreplacement\n")
+        replacement.write_bytes(valid_pdf(len(review_server.manifest_model(
+            self.manifest_path, manifest=manifest
+        )["slides"])))
         report["artifacts"][0] = {
             "kind": "pdf",
             "path": str(replacement),

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from unittest import mock
 
 from support import SCRIPTS, base_manifest, write_json
 
@@ -116,6 +117,66 @@ class FastWorkflowTests(unittest.TestCase):
         self.assertEqual(result["advanced"]["to"], "testi_approvati")
         self.assertEqual(manifest["workflow_state"], "testi_approvati")
         self.assertEqual(len(manifest["workflow_receipts"]), 1)
+
+    def test_error_after_apply_is_not_reported_as_processed(self) -> None:
+        archive = self._submit_profile_approval()
+        with mock.patch.object(
+            process_review,
+            "advance_workflow",
+            side_effect=ValueError("gate non valido"),
+        ):
+            with self.assertRaisesRegex(ValueError, "gate non valido"):
+                process_review.process_review(
+                    self.manifest_path,
+                    archive,
+                    session_dir_input=self.session_dir,
+                )
+        state = json.loads(
+            (self.session_dir / "session-state.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(state["applied_feedback_id"], json.loads(archive.read_text())["feedback_id"])
+        self.assertIsNone(state.get("processed_feedback_id"))
+        self.assertEqual(state["approval_processing_status"]["status"], "error")
+
+    def test_visual_approval_rejects_adapter_before_apply(self) -> None:
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        manifest["workflow_state"] = "testi_approvati"
+        manifest["workflow_receipts"] = [
+            {
+                "from": "bozza",
+                "to": "testi_approvati",
+                "revision": 1,
+                "render_fingerprint": "1" * 64,
+                "evidence_sha256": "2" * 64,
+                "advanced_at": "2026-08-12T12:00:00+00:00",
+            }
+        ]
+        manifest["production"]["mode"] = "adapter"
+        write_json(self.manifest_path, manifest)
+        model = review_server.manifest_model(self.manifest_path, include_internal=True)
+        payload = {
+            "feedback_id": str(uuid.uuid4()),
+            "action": "approve",
+            "base_revision": model["revision"],
+            "base_workflow_state": model["workflow_state"],
+            "render_fingerprint": model["render_fingerprint"],
+            "slides": [
+                {
+                    field: slide.get(field, [] if "_" in field else "")
+                    for field in review_server.RENDER_SLIDE_FIELDS
+                }
+                for slide in model["slides"]
+            ],
+            "comments": [],
+            "overall_note": "",
+            "visual_style_system": model["visual_proofs"]["selected_style_system"],
+            "logo_mode": model["logo_mode"],
+            "cover_mode": model["cover_mode"],
+            "proof_slide_ids": model["proof"]["required_slide_ids"],
+            "proof_browser": {"engine": "chromium", "major": 140},
+        }
+        with self.assertRaisesRegex(ValueError, "production.mode=renderer"):
+            review_server.validate_feedback(payload, model)
 
     def test_combined_approval_advances_both_durable_checkpoints(self) -> None:
         archive = self._submit_profile_approval(combined=True)

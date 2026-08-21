@@ -245,6 +245,13 @@ def build_status(manifest_input: Path, *, session_dir_input: Path | None = None)
             "feedback_pending": feedback_pending,
             "last_feedback_id": state.get("last_feedback_id") if state else None,
             "applied_feedback_id": state.get("applied_feedback_id") if state else None,
+            "processed_feedback_id": state.get("processed_feedback_id") if state else None,
+            "approval_processing_status": (
+                state.get("approval_processing_status") if state else None
+            ),
+            "approval_processing_error": (
+                state.get("approval_processing_error") if state else None
+            ),
             "session_binding_ok": (
                 None if state is None or not isinstance(manifest.get("review"), dict)
                 else session_binding_error is None

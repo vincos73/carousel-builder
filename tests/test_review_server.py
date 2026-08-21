@@ -366,6 +366,167 @@ class ManifestModelTest(unittest.TestCase):
                 },
             )
 
+    def test_auto_apply_blocked_is_not_reported_as_processed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest_path = root / "manifest.json"
+            session_dir = root / "session"
+            session_dir.mkdir()
+            feedback_id = str(uuid.uuid4())
+            write_json(manifest_path, {"schema_version": "1.4"})
+            review_server.atomic_write_json(
+                session_dir / "session-state.json",
+                {
+                    "manifest": str(manifest_path),
+                    "last_feedback_id": feedback_id,
+                    "applied_feedback_id": feedback_id,
+                },
+            )
+            blocked = mock.Mock(
+                returncode=3,
+                stdout=json.dumps(
+                    {
+                        "status": "approval_blocked",
+                        "workflow": {"workflow_state": "bozza", "revision": 1},
+                    }
+                ),
+                stderr="",
+            )
+            with mock.patch.object(review_server.subprocess, "run", return_value=blocked):
+                result = review_server.auto_process_approval(
+                    manifest_path=manifest_path,
+                    session_dir=session_dir,
+                    event={"feedback_id": feedback_id},
+                )
+            self.assertEqual(result["event"], "approval_blocked")
+            self.assertIsNone(result["processed_feedback_id"])
+            state = review_server.read_private_json(session_dir / "session-state.json")
+            self.assertEqual(
+                state["approval_processing_status"]["status"], "approval_blocked"
+            )
+            self.assertNotIn("processed_feedback_id", state)
+
+    def test_auto_apply_does_not_claim_processed_when_processing_commit_is_locked(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest_path = root / "manifest.json"
+            session_dir = root / "session"
+            session_dir.mkdir()
+            feedback_id = str(uuid.uuid4())
+            write_json(manifest_path, {"schema_version": "1.4"})
+            review_server.atomic_write_json(
+                session_dir / "session-state.json",
+                {
+                    "manifest": str(manifest_path),
+                    "last_feedback_id": feedback_id,
+                    "applied_feedback_id": feedback_id,
+                },
+            )
+            completed = mock.Mock(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "status": "advanced",
+                        "workflow": {"workflow_state": "testi_approvati", "revision": 1},
+                    }
+                ),
+                stderr="",
+            )
+            with mock.patch.object(review_server.subprocess, "run", return_value=completed), \
+                mock.patch.object(
+                    review_server,
+                    "set_approval_processing_status",
+                    side_effect=review_server.LockUnavailableError("busy"),
+                ):
+                result = review_server.auto_process_approval(
+                    manifest_path=manifest_path,
+                    session_dir=session_dir,
+                    event={"feedback_id": feedback_id},
+                )
+            self.assertEqual(result["event"], "approval_processing_error")
+            self.assertNotIn("processed_feedback_id", result)
+
+    def test_auto_processing_holds_the_same_lock_as_live_session_reads(self) -> None:
+        class RecordingLock:
+            active = False
+
+            def __enter__(self):
+                self.active = True
+                return self
+
+            def __exit__(self, *_args):
+                self.active = False
+
+        lock = RecordingLock()
+
+        def assert_locked(**_kwargs):
+            self.assertTrue(lock.active)
+            return {"event": "approval_processed"}
+
+        with mock.patch.object(
+            review_server,
+            "auto_process_approval",
+            side_effect=assert_locked,
+        ) as process:
+            result = review_server.auto_process_approval_serialized(
+                submit_lock=lock,
+                manifest_path=Path("manifest.json"),
+                session_dir=Path("session"),
+                event={"feedback_id": str(uuid.uuid4())},
+            )
+        self.assertEqual(result["event"], "approval_processed")
+        process.assert_called_once()
+        self.assertFalse(lock.active)
+
+    def test_processing_status_rejects_a_changed_feedback_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest_path = root / "manifest.json"
+            session_dir = root / "session"
+            session_dir.mkdir()
+            write_json(manifest_path, {"schema_version": "1.4"})
+            write_json(
+                session_dir / "session-state.json",
+                {
+                    "manifest": str(manifest_path),
+                    "last_feedback_id": "new-feedback",
+                },
+            )
+            with self.assertRaisesRegex(ValueError, "stato della sessione è cambiato"):
+                review_server.set_approval_processing_status(
+                    session_dir=session_dir,
+                    manifest_path=manifest_path,
+                    feedback_id="old-feedback",
+                    status="processed",
+                    action="approve",
+                )
+
+    def test_processing_status_propagates_lock_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest_path = root / "manifest.json"
+            session_dir = root / "session"
+            session_dir.mkdir()
+            feedback_id = str(uuid.uuid4())
+            write_json(manifest_path, {"schema_version": "1.4"})
+            write_json(
+                session_dir / "session-state.json",
+                {"manifest": str(manifest_path), "last_feedback_id": feedback_id},
+            )
+            lock = review_server.InterprocessLock(
+                session_dir / ".review-transaction.lock"
+            )
+            lock.acquire()
+            self.addCleanup(lock.release)
+            with self.assertRaises(review_server.LockUnavailableError):
+                review_server.set_approval_processing_status(
+                    session_dir=session_dir,
+                    manifest_path=manifest_path,
+                    feedback_id=feedback_id,
+                    status="processed",
+                    action="approve",
+                )
+
     def test_renderer_bundle_byte_changes_invalidate_fingerprint(self) -> None:
         manifest = base_manifest()
         baseline = self.model(manifest)["render_fingerprint"]
@@ -780,7 +941,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.14.1")
+        self.assertEqual(model["editor_version"], "2.14.2")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
@@ -1299,6 +1460,24 @@ class ValidateFeedbackTest(unittest.TestCase):
             approved["base_render_fingerprint"], self.model["render_fingerprint"]
         )
         self.assertEqual(len(approved["render_fingerprint"]), 64)
+
+    def test_any_approval_with_pending_comment_or_note_is_rejected(self) -> None:
+        comment = {
+            "id": "comment-approval",
+            "kind": "brand",
+            "slide_id": "",
+            "feedback": "Da rivedere",
+        }
+        for changes in (
+            {"overall_note": "Non ancora approvato"},
+            {"comments": [comment]},
+        ):
+            with self.subTest(changes=changes), self.assertRaisesRegex(
+                ValueError, "commenti o note pendenti"
+            ):
+                review_server.validate_feedback(
+                    self.payload(action="approve", **changes), self.model
+                )
 
     def test_combined_approval_requires_a_clean_final_proof(self) -> None:
         slides = self.payload()["slides"]

@@ -172,8 +172,10 @@ class ReviewEditorAssetTest(unittest.TestCase):
         validation = self.source.split("function renderValidationState", 1)[1].split(
             "function refreshApprovalValidation", 1
         )[0]
-        self.assertIn("const visible = Boolean(issues.length || submissionError)", validation)
-        self.assertIn("!(submissionError && recoveryCount > 0)", validation)
+        self.assertIn("const durabilityVisible = Boolean(issues.length || submissionError)", validation)
+        visibility = validation.split("elements.validationSummary.hidden", 1)[0]
+        self.assertNotIn("recoveryCount > 0", visibility)
+        self.assertIn("recoveryCount > 0", validation)
         self.assertNotIn("feedback recuperabile", self.source)
         self.assertNotIn("copia recuperabile", self.source)
         self.assertIn("Scarica una copia delle modifiche", self.html)
@@ -822,6 +824,117 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
             "text.includes(segment)",
             self.source,
         )
+
+    def test_p1_comments_make_corrections_the_only_primary_action(self) -> None:
+        summary = self.source.split("function updateChangeSummary()", 1)[1].split(
+            "function lockEditing()", 1
+        )[0]
+        self.assertIn("hasAgentCorrections()", summary)
+        self.assertIn("elements.approveButton.disabled", summary)
+        self.assertIn("reviewActionRoles(", summary)
+        self.assertIn('classList.toggle("button-primary", actionRoles.sendPrimary)', summary)
+        self.assertIn('classList.toggle("button-primary", actionRoles.approvePrimary)', summary)
+        self.assertIn('elements.approveButton.hidden = waiting', summary)
+        self.assertIn('id="retry-connection-button"', self.html)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js non disponibile")
+    def test_p1_outcomes_primary_roles_and_combined_labels_execute_fail_closed(self) -> None:
+        script = r'''
+const assert = require("node:assert/strict");
+const { consentStepLabels, reviewActionRoles, serverBatchOutcome } = require(process.argv[1]);
+const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const other = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+assert.equal(serverBatchOutcome({}, id), "pending");
+assert.equal(serverBatchOutcome({ applied_feedback_id: id }, id), "applied");
+assert.equal(serverBatchOutcome({
+  applied_feedback_id: id,
+  processed_feedback_id: id,
+}, id), "applied", "processed_feedback_id da solo non è una conferma coerente");
+assert.equal(serverBatchOutcome({
+  applied_feedback_id: id,
+  processed_feedback_id: id,
+  approval_processing_status: { feedback_id: id, status: "processed" },
+}, id), "processed");
+assert.equal(serverBatchOutcome({
+  processed_feedback_id: id,
+  approval_processing_status: { feedback_id: id, status: "processed" },
+}, id), "pending", "processing senza ricevuta di apply non deve chiudere il batch");
+assert.equal(serverBatchOutcome({
+  applied_feedback_id: id,
+  processed_feedback_id: other,
+  approval_processing_status: { feedback_id: id, status: "processed" },
+}, id), "applied", "due ricevute discordanti devono restare in attesa");
+assert.equal(serverBatchOutcome({
+  applied_feedback_id: id,
+  approval_processing_status: { feedback_id: id, status: "approval_blocked" },
+}, id), "approval_blocked");
+assert.equal(serverBatchOutcome({
+  applied_feedback_id: id,
+  approval_processing_status: { feedback_id: id, status: "error" },
+}, id), "approval_error");
+assert.equal(serverBatchOutcome({
+  applied_feedback_id: id,
+  processed_feedback_id: other,
+  approval_processing_status: { feedback_id: other, status: "processed" },
+}, id), "applied", "lo stato di un altro batch non deve chiudere quello corrente");
+
+assert.deepEqual(reviewActionRoles(true, false), { sendPrimary: true, approvePrimary: false });
+assert.deepEqual(reviewActionRoles(false, false), { sendPrimary: false, approvePrimary: true });
+assert.deepEqual(reviewActionRoles(true, true), { sendPrimary: false, approvePrimary: false });
+assert.deepEqual(consentStepLabels(true), { content: "Consenso unico", visual: "Inclusa nel consenso" });
+assert.deepEqual(consentStepLabels(false), { content: "Primo consenso", visual: "Secondo consenso" });
+'''
+        result = subprocess.run(
+            ["node", "-e", script, str(EDITOR)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_p1_server_outcome_does_not_treat_approval_receipt_as_success(self) -> None:
+        outcome = self.source.split("function serverBatchOutcome", 1)[1].split(
+            "function reviewActionRoles", 1
+        )[0]
+        self.assertIn("processed_feedback_id", outcome)
+        self.assertIn("approval_processing_status", outcome)
+        self.assertIn('return "approval_blocked"', outcome)
+        self.assertIn('? "applied" : "pending"', outcome)
+        self.assertIn('outcome === "processed"', self.source)
+        for unsupported in (
+            "feedback_processed_id",
+            "last_processed_feedback_id",
+            "approval_processed_feedback_id",
+            "feedback_processing_status",
+            "feedback_results",
+        ):
+            with self.subTest(field=unsupported):
+                self.assertNotIn(unsupported, outcome)
+
+    def test_p1_durability_recovery_connection_and_return_cta_are_explicit(self) -> None:
+        self.assertIn('draftPersistenceState = safeStorageSet', self.source)
+        self.assertIn('submissionDurabilityState = "received"', self.source)
+        self.assertIn('draftDurabilityCopy()', self.source)
+        self.assertIn('connectionState = "offline"', self.source)
+        self.assertIn('function retryConnection()', self.source)
+        self.assertIn('returnChatPinned = true', self.source)
+        self.assertIn('returnChatPinned || waiting || phase === "production"', self.source)
+        self.assertIn('class="responsive-guidance"', self.html)
+        self.assertIn('@media (max-width: 1180px)', self.stylesheet)
+        self.assertIn('id="discard-pending-button"', self.html)
+        self.assertIn('classList.toggle("is-handoff"', self.source)
+        self.assertIn('#mobile-actions-button[hidden]', self.stylesheet)
+        self.assertIn('position: sticky;', self.stylesheet.split("@media (max-width: 820px)", 1)[1])
+        poll = self.source.split("async function pollStatus()", 1)[1].split(
+            "function clearPendingSelection", 1
+        )[0]
+        blocked = poll.split('outcome === "approval_blocked"', 1)[1].split(
+            'outcome === "applied"', 1
+        )[0]
+        self.assertIn("pendingSubmission = null", blocked)
+        self.assertIn("if (retryableError) lockEditing()", blocked)
+        self.assertIn("else releaseEditingLock()", blocked)
 
 
 if __name__ == "__main__":

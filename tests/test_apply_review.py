@@ -957,6 +957,31 @@ class ApplyReviewTest(unittest.TestCase):
         self.assertFalse(payload["workflow_state_changed"])
         self.assertEqual(self.manifest()["workflow_state"], "bozza")
 
+    def test_approval_with_note_or_comment_fails_before_manifest_write(self) -> None:
+        comment = {
+            "id": "comment-approval",
+            "kind": "brand",
+            "slide_id": "",
+            "field": "",
+            "quote": "",
+            "feedback": "Da rivedere",
+        }
+        for changes in (
+            {"overall_note": "Non ancora approvato"},
+            {"comments": [comment]},
+            {"comments": ""},
+            {"comments": {}},
+        ):
+            with self.subTest(changes=changes):
+                before = base_manifest()
+                result = self.apply(
+                    before,
+                    base_feedback(self.full_batch(), action="approve", **changes),
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("commenti o note pendenti", result.stderr)
+                self.assertEqual(self.manifest(), before)
+
     def test_post_visual_edit_rewinds_atomically_to_the_reapproval_checkpoint(self) -> None:
         manifest = base_manifest()
         set_workflow_state(manifest, "qa")

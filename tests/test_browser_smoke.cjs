@@ -310,6 +310,24 @@ function manifestFixture() {
   };
 }
 
+test("P1 editor UI contracts: corrections priority, durable recovery, reconnect and return CTA", async () => {
+  const [app, html, styles] = await Promise.all([
+    fs.readFile(path.join(ROOT, "assets", "review-editor", "app.js"), "utf8"),
+    fs.readFile(path.join(ROOT, "assets", "review-editor", "index.html"), "utf8"),
+    fs.readFile(path.join(ROOT, "assets", "review-editor", "styles.css"), "utf8"),
+  ]);
+  assert.match(app, /hasAgentCorrections\(\)/);
+  assert.match(app, /processed_feedback_id/);
+  assert.match(app, /approval_processing_status/);
+  assert.match(app, /function retryConnection\(\)/);
+  assert.match(app, /draftPersistenceState = safeStorageSet/);
+  assert.match(app, /returnChatPinned \|\| waiting \|\| phase === "production"/);
+  assert.match(html, /id="retry-connection-button"/);
+  assert.match(html, /class="responsive-guidance"/);
+  assert.match(styles, /@media \(max-width: 1180px\)/);
+  assert.match(styles, /#return-chat-button\.is-pinned/);
+});
+
 async function stopProcess(processHandle, milliseconds = 5_000) {
   if (processHandle.exitCode !== null || processHandle.signalCode !== null) return;
   const exited = new Promise((resolve) => processHandle.once("exit", resolve));
@@ -497,7 +515,10 @@ test("browser reale: i due consensi restano distinti e la prova visiva è read-f
     page,
     `document.querySelector('#editor').classList.contains('proof-mode')
       && !document.querySelector('#editor').classList.contains('proof-editing')
-      && document.querySelector('#approve-button').textContent === 'Genera'`,
+      && document.querySelector('#approve-button').textContent === 'Genera'
+      && !document.querySelector('#approve-button').hidden
+      && !document.querySelector('#approve-button').disabled
+      && !document.querySelector('#actionbar').classList.contains('handoff-only')`,
     "secondo checkpoint read-first",
   );
   assert.deepEqual(
@@ -552,7 +573,12 @@ test("browser reale: i due consensi restano distinti e la prova visiva è read-f
       filmstripScrollable: slides.scrollWidth > slides.clientWidth,
       previewWidth: preview.width,
       desktopActions: getComputedStyle(document.querySelector('.actions')).display,
+      mobileTriggerHidden: document.querySelector('#mobile-actions-button').hidden,
       mobileActions: getComputedStyle(document.querySelector('#mobile-actions-button')).display,
+      topbarPosition: getComputedStyle(document.querySelector('.topbar')).position,
+      sequencePosition: getComputedStyle(document.querySelector('#sequence-nav')).position,
+      sequenceTop: getComputedStyle(document.querySelector('#sequence-nav')).top,
+      responsiveContext: document.querySelector('#responsive-guidance').textContent,
     };
   })()`);
   assert.ok(mobile.bodyWidth <= mobile.viewportWidth, JSON.stringify(mobile));
@@ -560,7 +586,13 @@ test("browser reale: i due consensi restano distinti e la prova visiva è read-f
   assert.equal(mobile.filmstripScrollable, true);
   assert.ok(mobile.previewWidth >= 280 && mobile.previewWidth < 390, JSON.stringify(mobile));
   assert.equal(mobile.desktopActions, "none");
+  assert.equal(mobile.mobileTriggerHidden, false);
   assert.notEqual(mobile.mobileActions, "none");
+  assert.equal(mobile.topbarPosition, "static");
+  assert.equal(mobile.sequencePosition, "sticky");
+  assert.equal(mobile.sequenceTop, "0px");
+  assert.match(mobile.responsiveContext, /Browser Smoke · 4 slide · Editoriale · copertina con immagine/);
+  assert.match(mobile.responsiveContext, /scegli se approvare/);
   await captureReviewScreenshot(client, page, "proof-mobile.png");
   await closePage(client, page);
 });
@@ -588,7 +620,9 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   await fs.writeFile(manifestPath, `${JSON.stringify(manifestFixture(), null, 2)}\n`, "utf8");
   await fs.mkdir(chromeDirectory);
 
-  const returnThreadId = "01a01e64-3e6e-7b71-950d-c425e032e34e";
+  const returnThreadId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(process.env.CODEX_THREAD_ID || "")
+    ? process.env.CODEX_THREAD_ID
+    : "01a01e64-3e6e-7b71-950d-c425e032e34e";
   server = await startServer(manifestPath, sessionDirectory, returnThreadId);
   chrome = await startChrome(chromeDirectory);
   client = new CdpClient(chrome.webSocketUrl);
@@ -603,6 +637,59 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   assert.equal(session.return_url, `codex://threads/${returnThreadId}`);
   assert.equal(session.production.producer, "approved-preview-dom-v2");
   assert.deepEqual(session.proof.required_slide_ids, ["cover", "item-2", "outro"]);
+
+  const recoveryPage = await newIncognitoPage(client);
+  await client.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `(() => {
+      const originalSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function storageFailure(key, value) {
+        if (this === window.localStorage) throw new DOMException('Storage disabled', 'QuotaExceededError');
+        return originalSetItem.call(this, key, value);
+      };
+    })();`,
+  }, recoveryPage.sessionId);
+  await client.send("Network.enable", {}, recoveryPage.sessionId);
+  await client.send("Network.setBlockedURLs", { urls: ["*/api/session*"] }, recoveryPage.sessionId);
+  await navigate(client, recoveryPage, server.ready.url);
+  await waitFor(
+    client,
+    recoveryPage,
+    "document.querySelector('#loading .file-launcher-panel button')?.textContent === 'Riprova connessione'",
+    "errore iniziale con retry visibile",
+  );
+  await client.send("Network.setBlockedURLs", { urls: [] }, recoveryPage.sessionId);
+  await evaluate(client, recoveryPage, "document.querySelector('#loading .file-launcher-panel button').click()");
+  await waitFor(
+    client,
+    recoveryPage,
+    "document.documentElement.dataset.previewReady === 'true'",
+    "retry iniziale riuscito",
+  );
+  await evaluate(client, recoveryPage, `(() => {
+    const note = document.querySelector('#overall-note');
+    note.value = 'Conserva questa correzione';
+    note.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await waitFor(
+    client,
+    recoveryPage,
+    `!document.querySelector('#validation-summary').hidden
+      && !document.querySelector('#export-recovery-button').hidden
+      && document.querySelector('#validation-summary-copy').textContent.includes('solo in memoria')`,
+    "avviso reale di bozza non persistita",
+  );
+  const storageRecoveryState = await evaluate(client, recoveryPage, `({
+      warning: document.querySelector('#validation-summary-copy').textContent,
+      recoveryVisible: !document.querySelector('#export-recovery-button').hidden,
+    })`);
+  assert.deepEqual(
+    { warning: storageRecoveryState.warning, recoveryVisible: storageRecoveryState.recoveryVisible },
+    {
+      warning: "Il browser non ha salvato la bozza. La bozza è solo in memoria in questa scheda: scaricane una copia prima di ricaricare.",
+      recoveryVisible: true,
+    },
+  );
+  await closePage(client, recoveryPage);
 
   const approvalPage = await newIncognitoPage(client);
   await navigate(client, approvalPage, server.ready.url);
@@ -678,6 +765,43 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   }
 
   await evaluate(client, approvalPage, `(() => {
+    const note = document.querySelector('#overall-note');
+    note.value = 'Rendi il tono più diretto';
+    note.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await waitFor(
+    client,
+    approvalPage,
+    `!document.querySelector('#send-button').hidden
+      && document.querySelector('#send-button').classList.contains('button-primary')
+      && document.querySelector('#approve-button').disabled`,
+    "correzioni come unica azione primaria",
+  );
+  assert.deepEqual(
+    await evaluate(client, approvalPage, `({
+      primaryIds: [...document.querySelectorAll('#actionbar .button-primary:not([hidden])')].map((button) => button.id),
+      approveSecondary: document.querySelector('#approve-button').classList.contains('button-secondary'),
+      mobileApproveSecondary: document.querySelector('#mobile-approve-button').classList.contains('button-secondary'),
+    })`),
+    {
+      primaryIds: ["send-button"],
+      approveSecondary: true,
+      mobileApproveSecondary: true,
+    },
+  );
+  await evaluate(client, approvalPage, `(() => {
+    const note = document.querySelector('#overall-note');
+    note.value = '';
+    note.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await waitFor(
+    client,
+    approvalPage,
+    "document.querySelector('#send-button').hidden && !document.querySelector('#approve-button').disabled",
+    "ripristino azione di approvazione",
+  );
+
+  await evaluate(client, approvalPage, `(() => {
     const input = document.querySelector('#field-item-1-summary');
     input.focus();
     input.setSelectionRange(0, 5);
@@ -734,8 +858,33 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
       scope: document.querySelector('#approval-dialog').dataset.approvalScope || "",
       title: document.querySelector('#approval-dialog-title').textContent,
       currentStep: document.querySelector('#workflow-steps [aria-current="step"] strong').textContent,
+      contentConsent: document.querySelector('[data-workflow-step="content"] small').textContent,
+      visualConsent: document.querySelector('[data-workflow-step="visual"] small').textContent,
+      acknowledgmentVisible: !document.querySelector('#proof-acknowledgment-wrap').hidden,
     })`),
-    { label: "Genera", correctionHidden: true, scope: "profile_text_and_visual", title: "Generare il carosello?", currentStep: "Profilo e testi" },
+    {
+      label: "Genera",
+      correctionHidden: true,
+      scope: "profile_text_and_visual",
+      title: "Generare il carosello?",
+      currentStep: "Profilo e testi",
+      contentConsent: "Consenso unico",
+      visualConsent: "Inclusa nel consenso",
+      acknowledgmentVisible: true,
+    },
+  );
+  await evaluate(client, approvalPage, "document.querySelector('#confirm-approval').click()");
+  assert.deepEqual(
+    await evaluate(client, approvalPage, `({
+      dialogOpen: document.querySelector('#approval-dialog').open,
+      focused: document.activeElement?.id || '',
+      toast: document.querySelector('#toast').textContent,
+    })`),
+    {
+      dialogOpen: true,
+      focused: "proof-acknowledgment",
+      toast: "Prendi atto delle slide campione non ancora viste prima di confermare.",
+    },
   );
   await evaluate(client, approvalPage, "document.querySelector('#approval-dialog').close()");
 
@@ -768,9 +917,12 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   );
   await evaluate(client, approvalPage, `document.querySelector('#approve-button').click()`);
   await waitFor(client, approvalPage, "document.querySelector('#approval-dialog').open === true", "dialog approvazione combinata");
-  assert.equal(
-    await evaluate(client, approvalPage, "document.querySelector('#approval-dialog').dataset.approvalScope"),
-    "profile_text_and_visual",
+  assert.deepEqual(
+    await evaluate(client, approvalPage, `({
+      scope: document.querySelector('#approval-dialog').dataset.approvalScope,
+      acknowledgmentHidden: document.querySelector('#proof-acknowledgment-wrap').hidden,
+    })`),
+    { scope: "profile_text_and_visual", acknowledgmentHidden: true },
   );
   await evaluate(client, approvalPage, `document.querySelector('#confirm-approval').click()`);
   const feedbackPath = path.join(sessionDirectory, "feedback.json");
@@ -783,10 +935,13 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
 
   const sessionState = await readJsonWhen(
     path.join(sessionDirectory, "session-state.json"),
-    (value) => value.applied_feedback_id === approval.feedback_id,
-    "Persistenza stato approvazione combinata",
+    (value) => value.processed_feedback_id === approval.feedback_id
+      && value.approval_processing_status?.feedback_id === approval.feedback_id
+      && value.approval_processing_status?.status === "processed",
+    "Persistenza elaborazione approvazione combinata",
   );
   assert.equal(sessionState.applied_feedback_id, approval.feedback_id);
+  assert.equal(sessionState.processed_feedback_id, approval.feedback_id);
   const approvedManifest = await readJsonWhen(
     manifestPath,
     (value) => value.workflow_state === "prova_visuale_approvata"
@@ -822,6 +977,7 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
       copy: document.querySelector('#workflow-journey-copy').textContent,
       returnHidden: document.querySelector('#return-chat-button').hidden,
       returnLabel: document.querySelector('#return-chat-button').textContent.trim(),
+      returnPosition: getComputedStyle(document.querySelector('#return-chat-button')).position,
     })`),
     {
       status: "Pronto per la produzione",
@@ -829,6 +985,7 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
       copy: "I due consensi sono registrati. Il rendering non è ancora iniziato.",
       returnHidden: false,
       returnLabel: "Torna alla chat",
+      returnPosition: "fixed",
     },
   );
   await closePage(client, approvalPage);
@@ -910,6 +1067,31 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
     `document.querySelector('#editor').classList.contains('locked')`,
     "submit confermato e UI bloccata",
   );
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 1,
+    mobile: true,
+  }, editorPage.sessionId);
+  await waitFor(client, editorPage, "window.innerWidth === 390", "handoff mobile 390 px");
+  assert.deepEqual(
+    await evaluate(client, editorPage, `({
+      mobileTriggerHidden: document.querySelector('#mobile-actions-button').hidden,
+      mobileTriggerDisplay: getComputedStyle(document.querySelector('#mobile-actions-button')).display,
+      handoffOnly: document.querySelector('#actionbar').classList.contains('handoff-only'),
+      returnVisible: !document.querySelector('#return-chat-button').hidden,
+      returnFixed: getComputedStyle(document.querySelector('#return-chat-button')).position,
+      returnBottom: getComputedStyle(document.querySelector('#return-chat-button')).bottom,
+    })`),
+    {
+      mobileTriggerHidden: true,
+      mobileTriggerDisplay: "none",
+      handoffOnly: true,
+      returnVisible: true,
+      returnFixed: "fixed",
+      returnBottom: "16px",
+    },
+  );
   const feedback = await readJsonWhen(
     feedbackPath,
     (value) => value.action === "feedback" && value.feedback_id !== approval.feedback_id,
@@ -955,6 +1137,25 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   assert.ok(
     recovery.orders.some((order) => JSON.stringify(order) === '["cover","item-2","item-1","outro"]'),
     JSON.stringify(recovery),
+  );
+  await client.send("Target.activateTarget", { targetId: editorPage.targetId });
+  await waitFor(client, editorPage, "document.hidden === false", "scheda attiva per il polling");
+  await client.send("Network.setBlockedURLs", { urls: ["*/api/status*"] }, editorPage.sessionId);
+  await evaluate(client, editorPage, "document.querySelector('#retry-connection-button').click()");
+  await waitFor(
+    client,
+    editorPage,
+    "document.querySelector('#agent-status-label').textContent === 'Connessione persa' && !document.querySelector('#retry-connection-button').hidden",
+    "disconnessione resa esplicita dopo errori consecutivi",
+    30_000,
+  );
+  await client.send("Network.setBlockedURLs", { urls: [] }, editorPage.sessionId);
+  await evaluate(client, editorPage, "document.querySelector('#retry-connection-button').click()");
+  await waitFor(
+    client,
+    editorPage,
+    "document.querySelector('#retry-connection-button').hidden",
+    "riconnessione esplicita",
   );
   await closePage(client, editorPage);
 });

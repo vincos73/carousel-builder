@@ -21,7 +21,11 @@ from review_core import (  # noqa: E402
     LockUnavailableError,
     strict_json_loads,
 )
-from review_server import absolute_input_path, reject_symlink_path  # noqa: E402
+from review_server import (  # noqa: E402
+    absolute_input_path,
+    reject_symlink_path,
+    set_approval_processing_status,
+)
 
 
 APPROVAL_TARGETS = {
@@ -40,29 +44,6 @@ def _json_object(value: str, *, label: str) -> dict:
     return parsed
 
 
-def _feedback_stage(feedback_path: Path) -> tuple[str, str | None, str | None]:
-    try:
-        feedback = strict_json_loads(feedback_path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise ValueError(f"Batch feedback non trovato: {feedback_path}") from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Batch feedback non valido: {exc}") from exc
-    if not isinstance(feedback, dict):
-        raise ValueError("Il batch feedback deve contenere un oggetto JSON")
-    action = feedback.get("action")
-    stage = feedback.get("approval_stage")
-    scope = feedback.get("approval_scope")
-    if action not in {"feedback", "approve"}:
-        raise ValueError("Il batch feedback non contiene un'azione valida")
-    if stage is not None and stage not in APPROVAL_TARGETS:
-        raise ValueError("Il batch feedback contiene un approval_stage non valido")
-    if scope is not None and scope != COMBINED_APPROVAL_SCOPE:
-        raise ValueError("Il batch feedback contiene un approval_scope non valido")
-    if scope == COMBINED_APPROVAL_SCOPE and stage != "profile_text":
-        raise ValueError("Il batch combinato deve partire dal checkpoint profile_text")
-    return action, stage, scope
-
-
 def process_review(
     manifest_input: Path,
     feedback_input: Path,
@@ -76,7 +57,6 @@ def process_review(
     reject_symlink_path(feedback_path, field="Il batch feedback")
     reject_symlink_path(session_dir, field="La cartella di sessione")
 
-    action, approval_stage, approval_scope = _feedback_stage(feedback_path)
     applied = subprocess.run(
         [
             sys.executable,
@@ -96,6 +76,21 @@ def process_review(
     if applied.returncode != 0 or apply_result.get("status") == "error":
         raise ValueError(apply_result.get("error") or "Applicazione del feedback fallita")
 
+    # apply_review has verified the append-only batch while holding the
+    # transaction locks.  Do not pre-read the batch here: that would permit a
+    # changed file to drive a different workflow branch than the one applied.
+    action = apply_result.get("action")
+    approval_stage = apply_result.get("approval_stage")
+    approval_scope = apply_result.get("approval_scope")
+    if action not in {"feedback", "approve"}:
+        raise ValueError("apply_review.py non ha restituito un'azione valida")
+    if approval_stage is not None and approval_stage not in APPROVAL_TARGETS:
+        raise ValueError("apply_review.py ha restituito un approval_stage non valido")
+    if approval_scope is not None and approval_scope != COMBINED_APPROVAL_SCOPE:
+        raise ValueError("apply_review.py ha restituito un approval_scope non valido")
+    if approval_scope == COMBINED_APPROVAL_SCOPE and approval_stage != "profile_text":
+        raise ValueError("Il batch combinato deve partire dal checkpoint profile_text")
+
     status = build_status(manifest_path, session_dir_input=session_dir)
     result = {
         "status": "processed",
@@ -106,6 +101,13 @@ def process_review(
         "transitions": [],
     }
     if action != "approve":
+        set_approval_processing_status(
+            session_dir=session_dir,
+            manifest_path=manifest_path,
+            feedback_id=str(apply_result.get("feedback_id") or ""),
+            status="processed",
+            action=action,
+        )
         return result
 
     resolved_stage = approval_stage or apply_result.get("approval_stage")
@@ -131,22 +133,55 @@ def process_review(
         ):
             result["status"] = "approval_blocked"
             result["workflow"] = status
+            set_approval_processing_status(
+                session_dir=session_dir,
+                manifest_path=manifest_path,
+                feedback_id=str(apply_result.get("feedback_id") or ""),
+                status="approval_blocked",
+                action=action,
+                message="L'approvazione è stata applicata ma il checkpoint non può avanzare",
+            )
             return result
-        advanced = advance_workflow(
-            manifest_path,
-            session_dir_path=session_dir,
-            expected_state=status["workflow_state"],
-            expected_revision=status["revision"],
-            target=target,
-        )
+        try:
+            advanced = advance_workflow(
+                manifest_path,
+                session_dir_path=session_dir,
+                expected_state=status["workflow_state"],
+                expected_revision=status["revision"],
+                target=target,
+            )
+        except Exception as exc:
+            set_approval_processing_status(
+                session_dir=session_dir,
+                manifest_path=manifest_path,
+                feedback_id=str(apply_result.get("feedback_id") or ""),
+                status="error",
+                action=action,
+                message=str(exc),
+            )
+            raise
         result["transitions"].append(advanced)
         result["advanced"] = advanced
         status = build_status(manifest_path, session_dir_input=session_dir)
     result["workflow"] = status
     if not result["transitions"]:
         result["status"] = "already_processed"
+        set_approval_processing_status(
+            session_dir=session_dir,
+            manifest_path=manifest_path,
+            feedback_id=str(apply_result.get("feedback_id") or ""),
+            status="processed",
+            action=action,
+        )
         return result
     result["status"] = "advanced"
+    set_approval_processing_status(
+        session_dir=session_dir,
+        manifest_path=manifest_path,
+        feedback_id=str(apply_result.get("feedback_id") or ""),
+        status="processed",
+        action=action,
+    )
     return result
 
 

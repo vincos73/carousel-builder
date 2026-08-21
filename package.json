@@ -1,7 +1,7 @@
 {
   "name": "carousel-builder-ci",
   "private": true,
-  "version": "2.14.1",
+  "version": "2.14.2",
   "engines": {
     "node": "22.23.1"
   },

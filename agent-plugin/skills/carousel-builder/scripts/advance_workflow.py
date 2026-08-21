@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import hashlib
 import json
+import math
 import os
 import re
 import stat
 import sys
+import struct
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -55,6 +59,558 @@ QA_ADVISORY_CHECKS = frozenset({"fonts", "human_sample_review"})
 ARTIFACT_KIND_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 EXPORT_RESULT_SCHEMA = "carousel-builder-export-v1"
 QA_REPORT_SCHEMA = "carousel-builder-qa-v1"
+
+# The export is intentionally decoded here, so keep every allocation bounded.
+# These are generous for the local renderer while preventing malformed inputs
+# from turning the workflow gate into an unbounded parser/decompressor.
+MAX_PDF_BYTES = 768 * 1024 * 1024
+MAX_PDF_BASE_BYTES = 16 * 1024 * 1024
+MAX_PDF_BYTES_PER_PAGE = 16 * 1024 * 1024
+MAX_PDF_OBJECTS = 10_000
+MAX_PDF_OBJECT_BYTES = 8 * 1024 * 1024
+MAX_PDF_PAGES = 2_000
+MAX_PDF_PARSE_DEPTH = 64
+MAX_PNG_BYTES = 64 * 1024 * 1024
+MAX_PNG_IDAT_BYTES = 48 * 1024 * 1024
+MAX_PNG_RAW_BYTES = 128 * 1024 * 1024
+MAX_PNG_CHUNKS = 100_000
+PDF_POINT_SCALE = 9 / 16
+
+
+class _PdfRef(tuple):
+    """Small immutable marker for an indirect PDF object reference."""
+
+    __slots__ = ()
+
+    def __new__(cls, object_number: int, generation: int) -> "_PdfRef":
+        return tuple.__new__(cls, (object_number, generation))
+
+
+class _PdfParser:
+    """Bounded enough PDF token parser for the structural delivery contract."""
+
+    _WHITESPACE = b" \t\r\n\f\x00"
+    _DELIMITERS = b"()<>[]{}/%"
+
+    def __init__(self, data: bytes, *, max_depth: int = MAX_PDF_PARSE_DEPTH) -> None:
+        self.data = data
+        self.length = len(data)
+        self.max_depth = max_depth
+
+    def _skip(self, index: int) -> int:
+        while index < self.length:
+            byte = self.data[index]
+            if byte in self._WHITESPACE:
+                index += 1
+                continue
+            if byte == ord("%"):
+                newline = self.data.find(b"\n", index)
+                index = self.length if newline < 0 else newline + 1
+                continue
+            break
+        return index
+
+    def _token(self, index: int) -> tuple[bytes, int]:
+        start = index
+        while index < self.length:
+            byte = self.data[index]
+            if byte in self._WHITESPACE or byte in self._DELIMITERS:
+                break
+            index += 1
+        if index == start:
+            raise ValueError("token PDF vuoto")
+        return self.data[start:index], index
+
+    def value(self, index: int = 0, *, depth: int = 0) -> tuple[object, int]:
+        if depth > self.max_depth:
+            raise ValueError("profondità PDF eccessiva")
+        index = self._skip(index)
+        if index >= self.length:
+            raise ValueError("valore PDF troncato")
+        if self.data.startswith(b"<<", index):
+            return self.dictionary(index, depth=depth + 1)
+        if self.data[index] == ord("["):
+            values: list[object] = []
+            index += 1
+            while True:
+                index = self._skip(index)
+                if index >= self.length:
+                    raise ValueError("array PDF troncato")
+                if self.data[index] == ord("]"):
+                    return values, index + 1
+                value, index = self.value(index, depth=depth + 1)
+                # Resolve the common `number number R` form as one value.
+                if (
+                    isinstance(value, (int, float))
+                    and index < self.length
+                ):
+                    second_index = self._skip(index)
+                    try:
+                        second, after_second = self.value(second_index)
+                    except ValueError:
+                        second = None
+                    if isinstance(second, (int, float)) and float(second).is_integer():
+                        after_ref = self._skip(after_second)
+                        if self.data.startswith(b"R", after_ref):
+                            value = _PdfRef(int(value), int(second))
+                            index = after_ref + 1
+                values.append(value)
+        if self.data[index] == ord("("):
+            depth = 1
+            index += 1
+            while index < self.length and depth:
+                byte = self.data[index]
+                if byte == ord("\\"):
+                    index += 2
+                    continue
+                if byte == ord("("):
+                    depth += 1
+                elif byte == ord(")"):
+                    depth -= 1
+                index += 1
+            if depth:
+                raise ValueError("stringa PDF troncata")
+            return "", index
+        if self.data[index] == ord("<"):
+            end = self.data.find(b">", index + 1)
+            if end < 0:
+                raise ValueError("stringa esadecimale PDF troncata")
+            return "", end + 1
+        if self.data[index] == ord("/"):
+            token, index = self._token(index + 1)
+            return token.decode("latin1"), index
+        token, index = self._token(index)
+        try:
+            text = token.decode("ascii")
+            if re.fullmatch(r"[+-]?\d+", text):
+                return int(text), index
+            if re.fullmatch(r"[+-]?(?:\d+\.\d*|\.\d+)", text):
+                return float(text), index
+        except UnicodeDecodeError:
+            pass
+        return token, index
+
+    def dictionary(self, index: int = 0, *, depth: int = 0) -> tuple[dict[str, object], int]:
+        if depth > self.max_depth:
+            raise ValueError("profondità PDF eccessiva")
+        if not self.data.startswith(b"<<", index):
+            raise ValueError("dizionario PDF atteso")
+        values: dict[str, object] = {}
+        index += 2
+        while True:
+            index = self._skip(index)
+            if self.data.startswith(b">>", index):
+                return values, index + 2
+            if index >= self.length or self.data[index] != ord("/"):
+                raise ValueError("chiave PDF non valida")
+            key, index = self._token(index + 1)
+            value, index = self.value(index, depth=depth + 1)
+            # Indirect references in dictionaries are common for /Pages and
+            # are not represented by the generic scalar parser above.
+            if isinstance(value, (int, float)):
+                second_index = self._skip(index)
+                try:
+                    second, after_second = self.value(second_index)
+                except ValueError:
+                    second = None
+                if isinstance(second, (int, float)) and float(second).is_integer():
+                    after_ref = self._skip(after_second)
+                    if self.data.startswith(b"R", after_ref):
+                        value = _PdfRef(int(value), int(second))
+                        index = after_ref + 1
+            values[key.decode("latin1")] = value
+
+
+def _pdf_skip(data: bytes, index: int) -> int:
+    while index < len(data) and data[index] in _PdfParser._WHITESPACE:
+        index += 1
+    return index
+
+
+def _parse_pdf_xref(data: bytes) -> tuple[dict[_PdfRef, int], _PdfRef]:
+    """Read the authoritative classic xref chain and trailer Root."""
+    candidates = list(re.finditer(rb"startxref\s+(\d+)", data))
+    if not candidates:
+        raise ValueError("PDF non parsabile: senza startxref")
+    xref: dict[_PdfRef, int] = {}
+    root: _PdfRef | None = None
+    visited_offsets: set[int] = set()
+    last_error: ValueError | None = None
+    # The last valid marker is the normal PDF case.  Trying preceding markers
+    # also prevents a marker-like byte sequence in a trailing stream from
+    # masking the real one.
+    for candidate in reversed(candidates):
+        try:
+            offset = int(candidate.group(1))
+            xref.clear()
+            root = None
+            visited_offsets.clear()
+            sections = 0
+            while True:
+                if offset in visited_offsets:
+                    raise ValueError("catena xref ciclica")
+                visited_offsets.add(offset)
+                sections += 1
+                if sections > 32 or offset < 0 or offset >= len(data):
+                    raise ValueError("offset xref non valido")
+                index = _pdf_skip(data, offset)
+                if not data.startswith(b"xref", index):
+                    raise ValueError("tabella xref mancante")
+                index = _pdf_skip(data, index + 4)
+                while True:
+                    line_end = data.find(b"\n", index)
+                    if line_end < 0:
+                        raise ValueError("xref troncato")
+                    line = data[index:line_end].strip().rstrip(b"\r")
+                    index = line_end + 1
+                    if line == b"trailer":
+                        break
+                    header = re.fullmatch(rb"(\d+)\s+(\d+)", line)
+                    if not header:
+                        raise ValueError("sottosezione xref non valida")
+                    first = int(header.group(1))
+                    count = int(header.group(2))
+                    if (
+                        count < 0
+                        or count > MAX_PDF_OBJECTS
+                        or first > MAX_PDF_OBJECTS
+                        or first + count > MAX_PDF_OBJECTS + 1
+                    ):
+                        raise ValueError("limite oggetti PDF superato")
+                    for number in range(first, first + count):
+                        line_end = data.find(b"\n", index)
+                        if line_end < 0:
+                            raise ValueError("xref troncato")
+                        entry = data[index:line_end].strip().rstrip(b"\r")
+                        index = line_end + 1
+                        parsed = re.fullmatch(rb"(\d{1,12})\s+(\d{1,8})\s+([nf])", entry)
+                        if not parsed:
+                            raise ValueError("voce xref non valida")
+                        entry_offset = int(parsed.group(1))
+                        generation = int(parsed.group(2))
+                        if parsed.group(3) == b"n":
+                            if entry_offset >= len(data):
+                                raise ValueError("offset oggetto PDF non valido")
+                            if len(xref) >= MAX_PDF_OBJECTS:
+                                raise ValueError("limite oggetti PDF superato")
+                            xref.setdefault(_PdfRef(number, generation), entry_offset)
+                trailer_value, index = _PdfParser(data).dictionary(_pdf_skip(data, index))
+                candidate_root = trailer_value.get("Root")
+                if candidate_root is not None and root is None:
+                    if not isinstance(candidate_root, _PdfRef):
+                        raise ValueError("trailer Root non è un riferimento PDF")
+                    root = candidate_root
+                previous = trailer_value.get("Prev")
+                if previous is None:
+                    break
+                if not isinstance(previous, int) or isinstance(previous, bool):
+                    raise ValueError("trailer Prev non valido")
+                offset = previous
+            if root is None:
+                raise ValueError("trailer Root mancante")
+            if root not in xref:
+                raise ValueError("trailer Root non presente nello xref")
+            return xref, root
+        except ValueError as exc:
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise ValueError(f"PDF xref non valido: {last_error}") from last_error
+    raise ValueError("PDF xref non valido")
+
+
+def _parse_pdf_objects(data: bytes) -> tuple[dict[_PdfRef, object], _PdfRef]:
+    xref, root = _parse_pdf_xref(data)
+    objects: dict[_PdfRef, object] = {}
+    offsets = sorted(set(xref.values()))
+    for ref, offset in xref.items():
+        next_index = bisect.bisect_right(offsets, offset)
+        next_offset = offsets[next_index] if next_index < len(offsets) else len(data)
+        end = min(next_offset, offset + MAX_PDF_OBJECT_BYTES)
+        if end <= offset:
+            raise ValueError("oggetto PDF troncato")
+        match = re.match(rb"(\d+)\s+(\d+)\s+obj\b", data[offset:end])
+        if not match or int(match.group(1)) != ref[0] or int(match.group(2)) != ref[1]:
+            raise ValueError(f"offset xref non coincide con oggetto PDF {ref[0]}")
+        parser = _PdfParser(data[offset:end])
+        try:
+            value, _ = parser.value(match.end())
+        except (IndexError, ValueError) as exc:
+            raise ValueError(f"oggetto PDF non parsabile {ref[0]}") from exc
+        objects[ref] = value
+    if not objects:
+        raise ValueError("PDF senza oggetti indiretti")
+    return objects, root
+
+
+def _read_bounded_file(path: Path, *, label: str, limit: int) -> bytes:
+    try:
+        size = path.stat().st_size
+        if size > limit:
+            raise ValueError(f"{label} oltre il limite di {limit} byte: {path}")
+        with path.open("rb") as stream:
+            return stream.read(limit + 1)
+    except ValueError:
+        raise
+    except (OSError, MemoryError) as exc:
+        raise ValueError(f"{label} non leggibile: {path}") from exc
+
+
+def _pdf_byte_limit(expected_pages: int) -> int:
+    return min(
+        MAX_PDF_BYTES,
+        MAX_PDF_BASE_BYTES + expected_pages * MAX_PDF_BYTES_PER_PAGE,
+    )
+
+
+def _pdf_resolve(value: object, objects: dict[_PdfRef, object], *, label: str) -> object:
+    if isinstance(value, _PdfRef):
+        if value not in objects:
+            raise ValueError(f"{label}: riferimento PDF mancante {value[0]} {value[1]} R")
+        return objects[value]
+    return value
+
+
+def validate_pdf_artifact(
+    path: Path,
+    *,
+    expected_width: int,
+    expected_height: int,
+    expected_pages: int,
+) -> None:
+    """Require a structurally parseable PDF with the contract page geometry."""
+    if not isinstance(expected_pages, int) or isinstance(expected_pages, bool) or not (
+        1 <= expected_pages <= MAX_PDF_PAGES
+    ):
+        raise ValueError("numero pagine PDF fuori limite")
+    try:
+        byte_limit = _pdf_byte_limit(expected_pages)
+        data = _read_bounded_file(path, label="PDF", limit=byte_limit)
+    except (MemoryError, RecursionError) as exc:
+        raise ValueError(f"PDF non validabile: {path}") from exc
+    if len(data) > byte_limit:
+        raise ValueError(f"PDF oltre il limite di {byte_limit} byte: {path}")
+    if not data.startswith(b"%PDF-") or not data[-64:].rstrip().endswith(b"%%EOF"):
+        raise ValueError(f"PDF non parsabile o troncato: {path}")
+    try:
+        objects, root = _parse_pdf_objects(data)
+        catalog = _pdf_resolve(root, objects, label="trailer.Root")
+        if not isinstance(catalog, dict) or catalog.get("Type") != "Catalog":
+            raise ValueError("trailer.Root non punta a un Catalog PDF")
+        pages_ref = catalog.get("Pages")
+        pages_value = _pdf_resolve(pages_ref, objects, label="Catalog.Pages")
+        if not isinstance(pages_value, dict) or pages_value.get("Type") != "Pages":
+            raise ValueError("Catalog.Pages non è un nodo Pages")
+
+        seen: set[_PdfRef] = set()
+
+        def walk(
+            value: object,
+            inherited_media_box: object = None,
+            depth: int = 0,
+        ) -> list[list[object]]:
+            if depth > MAX_PDF_PARSE_DEPTH:
+                raise ValueError("profondità albero Pages eccessiva")
+            if not isinstance(value, dict):
+                raise ValueError("nodo PDF pagina non è un dizionario")
+            node_type = value.get("Type")
+            media_box = value.get("MediaBox", inherited_media_box)
+            if node_type == "Page":
+                resolved = _pdf_resolve(media_box, objects, label="Page.MediaBox")
+                if not isinstance(resolved, list) or len(resolved) != 4:
+                    raise ValueError("Page.MediaBox non valido")
+                try:
+                    coords = [float(item) for item in resolved]
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Page.MediaBox non numerico") from exc
+                width = coords[2] - coords[0]
+                height = coords[3] - coords[1]
+                expected_pdf_width = expected_width * PDF_POINT_SCALE
+                expected_pdf_height = expected_height * PDF_POINT_SCALE
+                if not (
+                    math.isclose(width, expected_pdf_width, rel_tol=0, abs_tol=1e-6)
+                    and math.isclose(height, expected_pdf_height, rel_tol=0, abs_tol=1e-6)
+                ):
+                    raise ValueError(
+                        f"Page.MediaBox {width:g}x{height:g}, atteso "
+                        f"{expected_pdf_width:g}x{expected_pdf_height:g} pt"
+                    )
+                return [resolved]
+            if node_type != "Pages":
+                raise ValueError("albero Pages contiene un nodo sconosciuto")
+            kids = value.get("Kids")
+            if not isinstance(kids, list) or not kids:
+                raise ValueError("Pages.Kids mancante o vuoto")
+            pages: list[list[object]] = []
+            if len(kids) > MAX_PDF_PAGES:
+                raise ValueError("limite pagine PDF superato")
+            for kid in kids:
+                if not isinstance(kid, _PdfRef):
+                    raise ValueError("Pages.Kids contiene un riferimento non valido")
+                if kid in seen:
+                    raise ValueError("albero Pages ciclico o duplicato")
+                seen.add(kid)
+                pages.extend(
+                    walk(_pdf_resolve(kid, objects, label="Pages.Kids"), media_box, depth + 1)
+                )
+                if len(pages) > MAX_PDF_PAGES:
+                    raise ValueError("limite pagine PDF superato")
+            count = value.get("Count")
+            if not isinstance(count, int) or isinstance(count, bool) or count != len(pages):
+                raise ValueError("Pages.Count non coincide con le pagine effettive")
+            return pages
+
+        pages = walk(pages_value)
+        if len(pages) != expected_pages:
+            raise ValueError(
+                f"PDF con {len(pages)} pagine, attese {expected_pages}"
+            )
+    except (MemoryError, RecursionError) as exc:
+        raise ValueError(f"PDF non validabile ({path}): limiti risorsa superati") from exc
+    except ValueError as exc:
+        raise ValueError(f"PDF non valido ({path}): {exc}") from exc
+
+
+def validate_png_artifact(
+    path: Path,
+    *,
+    expected_width: int,
+    expected_height: int,
+) -> None:
+    """Decode all PNG scanlines and enforce the rendered slide geometry."""
+    try:
+        data = _read_bounded_file(path, label="PNG", limit=MAX_PNG_BYTES)
+    except (MemoryError, RecursionError) as exc:
+        raise ValueError(f"PNG non validabile: {path}") from exc
+    if len(data) > MAX_PNG_BYTES:
+        raise ValueError(f"PNG oltre il limite di {MAX_PNG_BYTES} byte: {path}")
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError(f"PNG non decodificabile: {path}")
+    position = 8
+    ihdr = None
+    idat = bytearray()
+    seen_idat = False
+    closed_idat = False
+    seen_iend = False
+    palette = False
+    chunk_count = 0
+    while position < len(data):
+        chunk_count += 1
+        if chunk_count > MAX_PNG_CHUNKS:
+            raise ValueError(f"PNG oltre il limite di {MAX_PNG_CHUNKS} chunk: {path}")
+        if position + 12 > len(data):
+            raise ValueError(f"PNG troncato: {path}")
+        length = struct.unpack(">I", data[position:position + 4])[0]
+        chunk_start = position + 8
+        chunk_end = chunk_start + length
+        if chunk_end + 4 > len(data):
+            raise ValueError(f"PNG troncato: {path}")
+        chunk_type = data[position + 4:position + 8]
+        payload = data[chunk_start:chunk_end]
+        crc_expected = struct.unpack(">I", data[chunk_end:chunk_end + 4])[0]
+        if (zlib.crc32(chunk_type + payload) & 0xFFFFFFFF) != crc_expected:
+            raise ValueError(f"PNG CRC non valido: {path}")
+        position = chunk_end + 4
+        if chunk_type == b"IHDR":
+            if ihdr is not None or len(payload) != 13 or position != 8 + 12 + 13:
+                raise ValueError(f"PNG IHDR non valido: {path}")
+            ihdr = payload
+            width, height, bit_depth, color_type, compression, filtering, interlace = struct.unpack(">IIBBBBB", payload)
+            if (width, height) != (expected_width, expected_height):
+                raise ValueError(
+                    f"PNG dimensioni {width}x{height}, attese "
+                    f"{expected_width}x{expected_height}: {path}"
+                )
+            valid_depths = {
+                0: {1, 2, 4, 8, 16}, 2: {8, 16}, 3: {1, 2, 4, 8},
+                4: {8, 16}, 6: {8, 16},
+            }
+            if color_type not in valid_depths or bit_depth not in valid_depths[color_type]:
+                raise ValueError(f"PNG combinazione colore non valida: {path}")
+            if compression != 0 or filtering != 0 or interlace != 0:
+                raise ValueError(f"PNG usa un metodo non supportato: {path}")
+        elif chunk_type == b"PLTE":
+            if len(payload) == 0 or len(payload) % 3 or len(payload) > 768:
+                raise ValueError(f"PNG PLTE non valido: {path}")
+            palette = True
+        elif chunk_type == b"IDAT":
+            if ihdr is None or closed_idat:
+                raise ValueError(f"PNG IDAT fuori sequenza: {path}")
+            seen_idat = True
+            if len(idat) + len(payload) > MAX_PNG_IDAT_BYTES:
+                raise ValueError(
+                    f"PNG IDAT oltre il limite di {MAX_PNG_IDAT_BYTES} byte: {path}"
+                )
+            idat.extend(payload)
+        elif chunk_type == b"IEND":
+            if len(payload) != 0 or not seen_idat or position != len(data):
+                raise ValueError(f"PNG IEND non valido: {path}")
+            seen_iend = True
+        elif chunk_type[0] & 0x20 == 0 and chunk_type not in {b"tEXt", b"cHRM", b"gAMA", b"sRGB", b"pHYs", b"tIME", b"tRNS"}:
+            raise ValueError(f"PNG chunk critico sconosciuto: {path}")
+        if seen_idat and chunk_type != b"IDAT" and chunk_type != b"IEND":
+            closed_idat = True
+    if ihdr is None or not seen_iend or not seen_idat:
+        raise ValueError(f"PNG incompleto: {path}")
+    width, height, bit_depth, color_type, *_ = struct.unpack(">IIBBBBB", ihdr)
+    if color_type == 3 and not palette:
+        raise ValueError(f"PNG indicizzato senza palette: {path}")
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
+    row_bytes = (width * channels * bit_depth + 7) // 8
+    bytes_per_pixel = max(1, (channels * bit_depth + 7) // 8)
+    expected_raw = (row_bytes + 1) * height
+    if expected_raw > MAX_PNG_RAW_BYTES:
+        raise ValueError(f"PNG decompressione oltre il limite di {MAX_PNG_RAW_BYTES} byte: {path}")
+    try:
+        decompressor = zlib.decompressobj()
+        raw = decompressor.decompress(bytes(idat), expected_raw + 1)
+        if len(raw) > expected_raw or decompressor.unconsumed_tail:
+            raise ValueError("PNG decompressione oltre la dimensione attesa")
+    except (zlib.error, MemoryError, ValueError) as exc:
+        raise ValueError(f"PNG dati immagine non validi: {path}") from exc
+    if (
+        not decompressor.eof
+        or decompressor.unused_data
+        or decompressor.unconsumed_tail
+        or len(raw) != expected_raw
+    ):
+        raise ValueError(f"PNG dati immagine troncati o extra: {path}")
+    try:
+        previous = bytearray(row_bytes)
+        cursor = 0
+        for _ in range(height):
+            filter_type = raw[cursor]
+            cursor += 1
+            scanline = raw[cursor:cursor + row_bytes]
+            cursor += row_bytes
+            if filter_type > 4:
+                raise ValueError(f"PNG filtro scanline non valido: {path}")
+            # The normal renderer emits filter 0, so retain a fast path for the
+            # large common case while still fully reversing every non-zero filter.
+            if filter_type == 0:
+                previous[:] = scanline
+                continue
+            reconstructed = bytearray(row_bytes)
+            for index, value in enumerate(scanline):
+                left = reconstructed[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+                up = previous[index]
+                upper_left = previous[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+                if filter_type == 1:
+                    predictor = left
+                elif filter_type == 2:
+                    predictor = up
+                elif filter_type == 3:
+                    predictor = (left + up) // 2
+                else:
+                    estimate = left + up - upper_left
+                    distances = (
+                        abs(estimate - left), abs(estimate - up), abs(estimate - upper_left)
+                    )
+                    predictor = (left, up, upper_left)[distances.index(min(distances))]
+                reconstructed[index] = (value + predictor) & 0xFF
+            previous = reconstructed
+    except (MemoryError, RecursionError) as exc:
+        raise ValueError(f"PNG non validabile: limiti risorsa superati: {path}") from exc
 
 
 def read_json_object(path: Path, *, label: str) -> dict:
@@ -343,6 +899,17 @@ def validate_render_result(
     if artifacts["pdf"] != [pdf]:
         raise ValueError("render-result.output non coincide con l'artefatto PDF attestato")
 
+    expected_width = model.get("format", {}).get("width")
+    expected_height = model.get("format", {}).get("height")
+    if not isinstance(expected_width, int) or not isinstance(expected_height, int):
+        raise ValueError("Il contratto render non dichiara dimensioni intere verificabili")
+    validate_pdf_artifact(
+        pdf,
+        expected_width=expected_width,
+        expected_height=expected_height,
+        expected_pages=len(model.get("slides", [])),
+    )
+
     if "png" in expected:
         png_dir = _absolute_directory(result.get("png_dir"), field="render-result.png_dir")
         png_entries = list(png_dir.iterdir())
@@ -364,6 +931,12 @@ def validate_render_result(
             or set(png_files) != set(artifacts["png"])
         ):
             raise ValueError("Il set PNG prodotto non coincide con le slide correnti")
+        for png in artifacts["png"]:
+            validate_png_artifact(
+                png,
+                expected_width=expected_width,
+                expected_height=expected_height,
+            )
     elif "png_dir" in result or "png_files" in result:
         raise ValueError("Il render-result contiene PNG non dichiarati negli output attesi")
 
@@ -375,6 +948,13 @@ def validate_render_result(
             raise ValueError("render-result.contact_sheet deve essere un PNG")
         if artifacts["contact_sheet"] != [contact.resolve()]:
             raise ValueError("render-result.contact_sheet non coincide con l'artefatto attestato")
+        columns = min(4, len(model.get("slides", [])))
+        rows = (len(model.get("slides", [])) + columns - 1) // columns
+        validate_png_artifact(
+            contact,
+            expected_width=48 + columns * 360 + (columns - 1) * 24,
+            expected_height=48 + rows * 450 + (rows - 1) * 24,
+        )
     elif "contact_sheet" in result:
         raise ValueError("Il render-result contiene una contact sheet non dichiarata")
 
