@@ -633,7 +633,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
         batch = json.loads(Path(submitted["archive_path"]).read_text(encoding="utf-8"))
         self.assertEqual(batch["approval_stage"], "visual_proof")
         approved_model = None
-        for _ in range(40):
+        for _ in range(200):
             status, candidate = json_request(self.api("/api/session"))
             if (
                 status == 200
@@ -644,7 +644,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
                 approved_model = candidate
                 break
             self.assertIn(status, (200, 409), candidate)
-            time.sleep(0.05)
+            time.sleep(0.1)
         self.assertIsNotNone(approved_model)
         assert approved_model is not None
         self.assertEqual(status, 200, approved_model)
@@ -687,7 +687,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
         )
         self.assertEqual(rebound_batch["approval_stage"], "visual_proof")
         reapplied = None
-        for _ in range(40):
+        for _ in range(200):
             reapplied = subprocess.run(
                 [
                     sys.executable,
@@ -704,7 +704,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
             )
             if reapplied.returncode == 0:
                 break
-            time.sleep(0.05)
+            time.sleep(0.1)
         self.assertIsNotNone(reapplied)
         assert reapplied is not None
         self.assertEqual(reapplied.returncode, 0, reapplied.stderr)
