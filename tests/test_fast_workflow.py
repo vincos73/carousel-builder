@@ -140,7 +140,7 @@ class FastWorkflowTests(unittest.TestCase):
             "profile_text_and_visual",
         )
 
-    def test_combined_approval_replays_after_capability_metadata_fix(self) -> None:
+    def test_combined_approval_accepts_local_renderer_capability_defaults(self) -> None:
         archive = self._submit_profile_approval(
             combined=True,
             visual_style="corporate-modular",
@@ -156,16 +156,6 @@ class FastWorkflowTests(unittest.TestCase):
             original_fingerprint,
         )
 
-        with self.assertRaisesRegex(ValueError, "deve includere"):
-            process_review.process_review(
-                self.manifest_path,
-                archive,
-                session_dir_input=self.session_dir,
-            )
-
-        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-        manifest["production"]["supported_style_systems"].append("corporate-modular")
-        write_json(self.manifest_path, manifest)
         result = process_review.process_review(
             self.manifest_path,
             archive,
