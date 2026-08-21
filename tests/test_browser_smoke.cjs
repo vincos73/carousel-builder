@@ -349,7 +349,12 @@ test("readJsonWhen termina il polling alla deadline senza lasciare timer", async
       /Polling test oltre 75 ms/,
     );
   } finally {
-    await fs.rm(directory, { recursive: true, force: true });
+    await fs.rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 100,
+    });
   }
 });
 
