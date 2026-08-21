@@ -950,6 +950,10 @@ input:focus {
   background: var(--preview-dark-bg);
 }
 
+.slide-preview.visual-system-corporate-modular.typographic-cover[data-kind="cover"] {
+  align-items: center;
+}
+
 .slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover)::before {
   position: absolute;
   z-index: 1;
@@ -980,10 +984,14 @@ input:focus {
   z-index: 2;
   width: 88%;
   max-width: none;
-  margin-top: clamp(42px, 6cqw, 58px);
+  margin-top: clamp(28px, 4cqw, 44px);
   margin-right: clamp(8px, 1cqw, 14px);
-  margin-left: clamp(14px, 3cqw, 22px);
+  margin-left: clamp(8px, 2cqw, 16px);
   color: var(--preview-light-text);
+}
+
+.slide-preview.visual-system-corporate-modular.typographic-cover[data-kind="cover"] .preview-copy {
+  margin-top: 0;
 }
 
 .slide-preview.visual-system-corporate-modular .preview-title {
@@ -2820,7 +2828,7 @@ input:focus {
 }
 
 .sidebar {
-  top: 108px;
+  top: 96px;
   gap: 12px;
   max-height: calc(100vh - 204px);
   padding-right: 0;
