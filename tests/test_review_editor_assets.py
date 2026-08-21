@@ -712,7 +712,9 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         visual_review = (ROOT / "references" / "visual-review.md").read_text(encoding="utf-8")
         self.assertIn("restare in attesa attiva a ogni prova", skill)
+        self.assertIn("solo per l’handoff Codex Desktop", skill)
         self.assertIn("in ogni checkpoint dell'editor", visual_review)
+        self.assertIn("Altrove compare solo con `--return-thread-id`", visual_review)
         self.assertIn("session-state.json", visual_review)
         self.assertIn("last_feedback_id", visual_review)
         self.assertIn("last_action", visual_review)
@@ -741,11 +743,18 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         self.assertIn("display: block;", frame_rule)
         corporate_copy = self.stylesheet.split(selector + ' .preview-copy', 1)[1].split("}", 1)[0]
         self.assertIn("width: 88%;", corporate_copy)
-        self.assertIn("margin-left: clamp(14px, 3cqw, 22px);", corporate_copy)
-        self.assertIn("margin-top: clamp(42px, 6cqw, 58px);", corporate_copy)
+        self.assertIn("margin-left: clamp(8px, 2cqw, 16px);", corporate_copy)
+        self.assertIn("margin-top: clamp(28px, 4cqw, 44px);", corporate_copy)
         self.assertIn("color: var(--preview-light-text);", corporate_copy)
         title_rule = self.stylesheet.split(selector + ' .preview-title:not([hidden])', 1)[1].split("}", 1)[0]
         self.assertIn("background: transparent;", title_rule)
+        cover_rule = self.stylesheet.split(
+            '.slide-preview.visual-system-corporate-modular.typographic-cover[data-kind="cover"] {', 1
+        )[1].split("}", 1)[0]
+        self.assertIn("align-items: center;", cover_rule)
+
+    def test_sidebar_sticky_offset_aligns_with_the_main_content(self) -> None:
+        self.assertIn(".sidebar {\n  top: 96px;", self.stylesheet)
 
     def test_editorial_system_keeps_its_existing_footer_rule(self) -> None:
         editorial_brand = self.stylesheet.split(

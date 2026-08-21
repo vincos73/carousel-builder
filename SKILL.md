@@ -5,7 +5,7 @@ description: Trasforma URL, articoli e testi in caroselli editoriali 4:5, guidan
 
 # Carousel Builder
 
-Versione: **2.14.0**
+Versione: **2.14.1**
 
 Separare fonte, identità, testi, prova, produzione e QA. L'utente decide le scelte editoriali e visuali: il sistema le segnala, ma blocca solo errori tecnici, strutturali, di sicurezza o del workflow. Nel caso normale l'editor espone una sola azione primaria, `Genera`, conservando le ricevute durevoli. La richiesta iniziale autorizza solo la proposta editoriale.
 
@@ -49,7 +49,7 @@ Usare `conversation` quando almeno una capacità è realmente assente o fallisce
 2. Indicare profilo, fonte, `sequence_mode`, output, numero di slide e testi esatti. Ogni frase compiuta inizia su una nuova riga. Non mostrare manifest o note tecniche.
 3. Selezionare internamente un solo sistema consigliato secondo [visual-systems.md](references/visual-systems.md). Offrire alternative solo su richiesta o incertezza e salvare la scelta in `visual_style_system`.
 4. Usare `typographic` per default; `generated`/`provided` solo se l'utente ha richiesto o fornito un visuale. Nel percorso locale creare uno schema 1.4 `bozza`. Preparare una proposta pulita a 480 px: 180 caratteri con titolo e 320 senza come obiettivi editoriali; gli eccessi scelti dall'utente restano avvisi consultivi.
-5. Avviare l’editor secondo [visual-review.md](references/visual-review.md). In Codex Desktop deve restituire `handoff_ready: true` e un `return_url` per il task corrente; se manca, usare recovery o conversazione. `--return-thread-id` serve agli ambienti senza ID esposto. Riutilizzare una sola tab e `markHandoff()`: conserva la scheda ma non sostituisce il ritorno alla chat. Restare in attesa attiva ogni 50 secondi. `approve` è automatico; `feedback` va interpretato: confermare ID, azione e passo, leggere `carousel_status.py` ed eseguire `process_review.py` solo per batch pendente.
+5. Avviare l’editor secondo [visual-review.md](references/visual-review.md). In Codex Desktop restituisce `handoff_ready: true` e un `return_url`; se manca, usare recovery o conversazione. `Torna alla chat` è solo per l’handoff Codex Desktop; altrove è nascosto senza `--return-thread-id`. Riutilizzare una tab e `markHandoff()`: conserva la scheda ma non sostituisce il ritorno alla chat. Restare in attesa attiva ogni 50 secondi. `approve` è automatico; `feedback` va interpretato: confermare ID, azione e passo, leggere `carousel_status.py` ed eseguire `process_review.py` per batch pendente.
    Un batch pending è durevole: rileggere `session-state.json`, applicarlo con lo stesso `feedback_id` e lasciare la scheda in handoff dopo verifica stato.
 6. Elaborare un batch pendente con `process_review.py <manifest> <feedback> --session-dir <session-dir>`. Per `feedback`, applicare commenti e correzioni. Per `approve`, copy, ordine, profilo ed enfasi sono definitivi: non riaprire il checkpoint. Se l’approvazione è già registrata, continuare dal `next_action`; bloccano solo errori tecnici, strutturali, di sicurezza o workflow.
 7. Dopo ogni batch ricaricare il manifest. `Genera` può registrare entrambi i checkpoint; altrimenti avanza il primo. A `prova_visuale_approvata`, confermare, eseguire `next_action` e proseguire. Dopo `approve` non inviare correzioni autonome: esporre solo blocchi tecnici o strutturali.

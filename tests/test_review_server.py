@@ -67,6 +67,9 @@ class ReturnUrlTest(unittest.TestCase):
                 environ={"CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "Codex Desktop"},
             )
 
+    def test_non_desktop_handoff_is_optional(self) -> None:
+        self.assertIsNone(review_server.resolve_return_url(None, environ={}))
+
 
 class ManifestModelTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -777,7 +780,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.14.0")
+        self.assertEqual(model["editor_version"], "2.14.1")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
