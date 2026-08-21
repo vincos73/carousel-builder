@@ -1927,6 +1927,7 @@ textarea:focus-visible,
   --editor-gold: #6b3f5d;
   --editor-red: #b42318;
   --editor-coral: #6b3f5d;
+  --editor-plum: #6b3f5d;
   --editor-plum-on-dark: #d9b5cd;
   --editor-ink: #2d2e2f;
   --editor-line-dark: rgba(255, 255, 255, 0.2);
@@ -2073,7 +2074,15 @@ input:focus {
 }
 
 .workflow-status::before {
-  color: rgba(255, 255, 255, 0.72);
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--editor-plum);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.82);
+  vertical-align: 1px;
 }
 
 .workflow-status[aria-busy="true"]::before {
@@ -2081,7 +2090,17 @@ input:focus {
 }
 
 @keyframes status-pulse {
-  50% { opacity: 0.35; }
+  50% {
+    opacity: 0.62;
+    transform: scale(1.28);
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.48);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workflow-status[aria-busy="true"]::before {
+    animation: none;
+  }
 }
 
 .meta-label {
