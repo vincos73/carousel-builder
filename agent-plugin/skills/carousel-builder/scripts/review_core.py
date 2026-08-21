@@ -73,6 +73,7 @@ VISUAL_STYLE_ALIASES = {
     "quiet-modular": "corporate-modular",
     "istituzionale": "corporate-modular",
     "institutional": "corporate-modular",
+    "frame": "corporate-modular",
 }
 LOGO_MODES = frozenset({"auto", "hidden"})
 BROWSER_ENGINES = frozenset({"chromium"})

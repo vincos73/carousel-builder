@@ -84,6 +84,8 @@ Qualunque modifica a copy, ordine, profilo, sistema, logo, asset o composizione 
 
 Un batch con `approval_scope: profile_text_and_visual` rappresenta un solo consenso esplicito su testi e preview definitiva. `process_review.py` deve comunque eseguire due transizioni consecutive e aggiungere due ricevute, prima `bozza -> testi_approvati` e poi `testi_approvati -> prova_visuale_approvata`. Non comprimere il ledger e non avanzare automaticamente a `rendering`.
 
+L'applicazione del batch e la sua elaborazione sono due ricevute distinte. `applied_feedback_id` dimostra soltanto che `apply_review.py` ha registrato il batch; `processed_feedback_id` e `approval_processing_status.status: processed`, entrambi riferiti allo stesso ID, dimostrano che `process_review.py` ha concluso il ramo previsto. `approval_blocked` e `error` non sono successi e non devono produrre `approval_processed`.
+
 ## Risultato di export
 
 Durante lo stato `rendering`, eseguire l'export con `--result-json` come descritto in [production-qa.md](production-qa.md#invocazione-local-editor). L'esportatore pubblica il JSON nello stesso gruppo coordinato di PDF, directory PNG e contact sheet richiesti. Il risultato usa `result_schema: carousel-builder-export-v1` e lega:

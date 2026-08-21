@@ -33,6 +33,12 @@ WORKFLOW_STATES = frozenset(CANONICAL_WORKFLOW_STATES) | (
 PRODUCTION_MODES = frozenset({"renderer", "adapter", "layout"})
 PRODUCTION_OUTPUTS = frozenset({"pdf", "png", "contact_sheet"})
 PRODUCTION_OUTPUT_ALIASES = {"contact-sheet": "contact_sheet"}
+LOCAL_RENDER_PRODUCER = "approved-preview-dom-v2"
+LOCAL_RENDER_SUPPORTED_STYLE_SYSTEMS = (
+    "editorial-frame",
+    "editorial-halftone",
+    "corporate-modular",
+)
 
 
 def validated_revision(manifest: dict) -> int:
@@ -265,6 +271,14 @@ def validate_manifest_contract(manifest: dict) -> dict:
             )
         if normalized not in supported_styles:
             supported_styles.append(normalized)
+    # The bundled renderer owns the complete visual-system picker. Older or
+    # hand-authored manifests may list only the initial default, so resolve its
+    # capability contract here instead of letting a later approval fail after
+    # the editor has already accepted the user's selection.
+    if current and production_mode == "renderer" and producer == LOCAL_RENDER_PRODUCER:
+        for style in LOCAL_RENDER_SUPPORTED_STYLE_SYSTEMS:
+            if style not in supported_styles:
+                supported_styles.append(style)
     expected_value = production.get("expected_outputs", [])
     if not isinstance(expected_value, list):
         raise ValueError("production.expected_outputs deve essere una lista")

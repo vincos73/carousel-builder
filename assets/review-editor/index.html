@@ -52,6 +52,7 @@
               <p id="font-status" class="font-status" hidden aria-live="polite"></p>
               <button id="toggle-proof-editing" class="button button-secondary proof-editing-toggle" type="button" aria-expanded="false" hidden>Modifica contenuti o grafica</button>
               <p id="proof-editing-note" class="proof-editing-note" hidden>Le modifiche grafiche richiederanno una nuova prova; quelle ai testi riapriranno anche l’approvazione editoriale.</p>
+              <p id="responsive-guidance" class="responsive-guidance" hidden>Prima delle slide: controlla la sequenza, poi modifica o commenta solo ciò che vuoi inviare.</p>
             </div>
             <ol id="workflow-steps" class="workflow-steps" aria-label="Avanzamento della revisione">
               <li data-workflow-step="content"><span>1</span><strong>Profilo e testi</strong><small>Primo consenso</small></li>
@@ -89,6 +90,8 @@
             <ul id="validation-list" class="validation-list"></ul>
             <div class="validation-actions">
               <button id="retry-submit-button" class="button button-secondary" type="button" hidden>Riprova invio</button>
+              <button id="discard-pending-button" class="button button-ghost" type="button" hidden>Abbandona il retry e modifica</button>
+              <button id="retry-connection-button" class="button button-secondary" type="button" hidden>Riconnetti</button>
               <button id="export-recovery-button" class="button button-secondary" type="button" hidden>Scarica una copia delle modifiche</button>
             </div>
           </section>
@@ -161,7 +164,7 @@
         <button id="send-button" class="button button-secondary" type="button" hidden aria-hidden="true">Invia correzioni</button>
         <button id="approve-button" class="button button-primary" type="button">Genera</button>
       </div>
-      <button id="mobile-actions-button" class="button button-secondary" type="button" aria-haspopup="dialog">Azioni di revisione</button>
+      <button id="mobile-actions-button" class="button button-secondary" type="button" aria-haspopup="dialog">Genera</button>
     </footer>
 
     <dialog id="comment-dialog" class="comment-dialog" aria-labelledby="comment-dialog-title">
@@ -182,6 +185,10 @@
         <h2 id="approval-dialog-title">Generare il carosello?</h2>
         <p id="approval-dialog-copy" class="dialog-copy">Genera ciò che vedi. Gli avvisi visuali ed editoriali restano consultivi; i controlli tecnici e strutturali continuano a proteggere il file e il workflow.</p>
         <p id="approval-summary" class="approval-summary" aria-live="polite"></p>
+        <label id="proof-acknowledgment-wrap" class="proof-acknowledgment" hidden>
+          <input id="proof-acknowledgment" type="checkbox">
+          <span>Prendo atto che non ho ancora visto tutte le slide campione richieste e confermo comunque la decisione.</span>
+        </label>
         <div class="dialog-actions">
           <button class="button button-ghost" value="cancel">Torna alla revisione</button>
           <button id="confirm-approval" class="button button-primary" type="button">Approva i testi</button>

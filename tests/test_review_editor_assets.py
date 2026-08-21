@@ -158,12 +158,24 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertIn("recovery_submissions: recoverySubmissions", self.source)
         self.assertIn('id="export-recovery-button"', self.html)
 
+    def test_auto_apply_failure_stops_spinner_and_keeps_same_batch_retryable(self) -> None:
+        poll = self.source.split("async function pollStatus()", 1)[1].split(
+            "function clearPendingSelection", 1
+        )[0]
+        self.assertIn("approval_processing_error", poll)
+        self.assertIn("awaitingFeedbackId = null", poll)
+        self.assertIn("La richiesta è salvata: puoi ritentare con lo stesso identificativo.", poll)
+        self.assertIn("acknowledgedProcessingErrorId", self.source)
+        self.assertIn("const retryable = Boolean(submissionError && pendingSubmission)", self.source)
+
     def test_saved_recovery_is_quiet_until_a_real_conflict_needs_action(self) -> None:
         validation = self.source.split("function renderValidationState", 1)[1].split(
             "function refreshApprovalValidation", 1
         )[0]
-        self.assertIn("const visible = Boolean(issues.length || submissionError)", validation)
-        self.assertIn("!(submissionError && recoveryCount > 0)", validation)
+        self.assertIn("const durabilityVisible = Boolean(issues.length || submissionError)", validation)
+        visibility = validation.split("elements.validationSummary.hidden", 1)[0]
+        self.assertNotIn("recoveryCount > 0", visibility)
+        self.assertIn("recoveryCount > 0", validation)
         self.assertNotIn("feedback recuperabile", self.source)
         self.assertNotIn("copia recuperabile", self.source)
         self.assertIn("Scarica una copia delle modifiche", self.html)
@@ -250,9 +262,21 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         self.assertIn('const titleWeight = slide.kind === "cover"', self.source)
         self.assertIn('numberValue(type.cover_weight, 500)', self.source)
         self.assertIn("fontLoadCache.get(key) === pending", self.source)
-        self.assertNotIn("@font-face", self.stylesheet)
+        self.assertIn('@font-face {\n  font-family: "Carousel Orbitron";', self.stylesheet)
+        self.assertIn('src: url("/assets/fonts/Orbitron-Variable.ttf") format("truetype");', self.stylesheet)
         self.assertIn('font-family: Arial, "Helvetica Neue", sans-serif;', self.stylesheet)
         self.assertIn('font-family: "Times New Roman", Times, serif;', self.stylesheet)
+
+    def test_product_wordmark_uses_bundled_orbitron_without_changing_ui_font(self) -> None:
+        self.assertIn('<span class="product-title-primary">Carousel</span>', self.html)
+        self.assertIn('<span class="product-title-secondary">Builder</span>', self.html)
+        wordmark = self.stylesheet.split(".product-title {", 1)[1].split("}", 1)[0]
+        self.assertIn('font-family: "Carousel Orbitron", Arial, sans-serif;', wordmark)
+        self.assertIn("text-transform: uppercase;", wordmark)
+        self.assertIn("font-size: clamp(16px, 1.4vw, 21px);", wordmark)
+        self.assertIn("font-family: Arial", self.stylesheet.split(":root {", 1)[1].split("}", 1)[0])
+        self.assertTrue((EDITOR_DIR / "fonts" / "Orbitron-Variable.ttf").is_file())
+        self.assertTrue((EDITOR_DIR / "fonts" / "Orbitron-OFL.txt").is_file())
 
     def test_foreign_pending_locks_without_claiming_or_discarding_local_draft(self) -> None:
         poll = self.source.split("async function pollStatus()", 1)[1].split("function clearPendingSelection", 1)[0]
@@ -558,11 +582,22 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         self.assertNotIn("*::before", reduced_motion)
 
     def test_root_and_agent_plugin_editors_match(self) -> None:
-        for name in ("app.js", "index.html", "styles.css", "vincos-lockup-white.svg"):
-            with self.subTest(name=name):
+        root_files = {
+            path.relative_to(EDITOR_DIR)
+            for path in EDITOR_DIR.rglob("*")
+            if path.is_file()
+        }
+        plugin_files = {
+            path.relative_to(PLUGIN_EDITOR_DIR)
+            for path in PLUGIN_EDITOR_DIR.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(root_files, plugin_files)
+        for relative_path in sorted(root_files):
+            with self.subTest(name=str(relative_path)):
                 self.assertEqual(
-                    (EDITOR_DIR / name).read_bytes(),
-                    (PLUGIN_EDITOR_DIR / name).read_bytes(),
+                    (EDITOR_DIR / relative_path).read_bytes(),
+                    (PLUGIN_EDITOR_DIR / relative_path).read_bytes(),
                 )
 
     def test_root_and_agent_plugin_exporters_match(self) -> None:
@@ -679,7 +714,9 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         visual_review = (ROOT / "references" / "visual-review.md").read_text(encoding="utf-8")
         self.assertIn("restare in attesa attiva a ogni prova", skill)
+        self.assertIn("solo per l’handoff Codex Desktop", skill)
         self.assertIn("in ogni checkpoint dell'editor", visual_review)
+        self.assertIn("Altrove compare solo con `--return-thread-id`", visual_review)
         self.assertIn("session-state.json", visual_review)
         self.assertIn("last_feedback_id", visual_review)
         self.assertIn("last_action", visual_review)
@@ -691,6 +728,50 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         self.assertIn('visual-system-editorial-halftone[data-kind="cover"] .preview-copy', stylesheet)
         self.assertGreaterEqual(stylesheet.count("width: 88%;"), 3)
         self.assertIn("hyphens: none", stylesheet)
+
+    def test_frame_system_uses_all_brand_surfaces_and_an_inset_sheet(self) -> None:
+        self.assertIn('label: "C · Frame"', self.source)
+        self.assertIn('create("div", "preview-frame-field")', self.source)
+        self.assertIn('const usesFrameSheet = selectedVisualSystem === "corporate-modular"', self.source)
+        selector = '.slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover)'
+        self.assertIn(selector, self.stylesheet)
+        corporate_surface = self.stylesheet.split(selector + ' {', 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--preview-dark-bg);", corporate_surface)
+        corporate_sheet = self.stylesheet.split(selector + '::before', 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--preview-light-bg);", corporate_sheet)
+        corporate_accent = self.stylesheet.split(selector + '::after', 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--preview-accent);", corporate_accent)
+        frame_rule = self.stylesheet.split(selector + ' .preview-frame-field', 1)[1].split("}", 1)[0]
+        self.assertIn("display: block;", frame_rule)
+        corporate_copy = self.stylesheet.split(selector + ' .preview-copy', 1)[1].split("}", 1)[0]
+        self.assertIn("width: 88%;", corporate_copy)
+        self.assertIn("margin-left: clamp(8px, 2cqw, 16px);", corporate_copy)
+        self.assertIn("margin-top: clamp(28px, 4cqw, 44px);", corporate_copy)
+        self.assertIn("color: var(--preview-light-text);", corporate_copy)
+        title_rule = self.stylesheet.split(selector + ' .preview-title:not([hidden])', 1)[1].split("}", 1)[0]
+        self.assertIn("background: transparent;", title_rule)
+        cover_rule = self.stylesheet.split(
+            '.slide-preview.visual-system-corporate-modular.typographic-cover[data-kind="cover"] {', 1
+        )[1].split("}", 1)[0]
+        self.assertIn("align-items: center;", cover_rule)
+
+    def test_sidebar_sticky_offset_aligns_with_the_main_content(self) -> None:
+        self.assertIn(".sidebar {\n  top: 96px;", self.stylesheet)
+
+    def test_editorial_system_keeps_its_existing_footer_rule(self) -> None:
+        editorial_brand = self.stylesheet.split(
+            '.slide-preview.visual-system-editorial-frame:is(:not([data-kind="cover"]), .typographic-cover) .preview-brand',
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("border-top: 1px", editorial_brand)
+
+    def test_only_typographic_cover_inherits_the_visual_system(self) -> None:
+        self.assertIn('slide.kind !== "cover"\n        || (slide.kind === "cover" && resolvedCoverMode() === "typographic")', self.source)
+        self.assertIn("if (inheritsVisualSystem) preview.append(constellation, frameField);", self.source)
+        frame_field = self.source.split(
+            'const frameField = create("div", "preview-frame-field")', 1
+        )[1].split('const constellation = create("div", "preview-constellation")', 1)[0]
+        self.assertNotIn("preview.append", frame_field)
 
     def test_local_editor_starts_with_a_clean_proposal_and_advisory_fit(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -743,6 +824,117 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
             "text.includes(segment)",
             self.source,
         )
+
+    def test_p1_comments_make_corrections_the_only_primary_action(self) -> None:
+        summary = self.source.split("function updateChangeSummary()", 1)[1].split(
+            "function lockEditing()", 1
+        )[0]
+        self.assertIn("hasAgentCorrections()", summary)
+        self.assertIn("elements.approveButton.disabled", summary)
+        self.assertIn("reviewActionRoles(", summary)
+        self.assertIn('classList.toggle("button-primary", actionRoles.sendPrimary)', summary)
+        self.assertIn('classList.toggle("button-primary", actionRoles.approvePrimary)', summary)
+        self.assertIn('elements.approveButton.hidden = waiting', summary)
+        self.assertIn('id="retry-connection-button"', self.html)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js non disponibile")
+    def test_p1_outcomes_primary_roles_and_combined_labels_execute_fail_closed(self) -> None:
+        script = r'''
+const assert = require("node:assert/strict");
+const { consentStepLabels, reviewActionRoles, serverBatchOutcome } = require(process.argv[1]);
+const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const other = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+assert.equal(serverBatchOutcome({}, id), "pending");
+assert.equal(serverBatchOutcome({ applied_feedback_id: id }, id), "applied");
+assert.equal(serverBatchOutcome({
+  applied_feedback_id: id,
+  processed_feedback_id: id,
+}, id), "applied", "processed_feedback_id da solo non è una conferma coerente");
+assert.equal(serverBatchOutcome({
+  applied_feedback_id: id,
+  processed_feedback_id: id,
+  approval_processing_status: { feedback_id: id, status: "processed" },
+}, id), "processed");
+assert.equal(serverBatchOutcome({
+  processed_feedback_id: id,
+  approval_processing_status: { feedback_id: id, status: "processed" },
+}, id), "pending", "processing senza ricevuta di apply non deve chiudere il batch");
+assert.equal(serverBatchOutcome({
+  applied_feedback_id: id,
+  processed_feedback_id: other,
+  approval_processing_status: { feedback_id: id, status: "processed" },
+}, id), "applied", "due ricevute discordanti devono restare in attesa");
+assert.equal(serverBatchOutcome({
+  applied_feedback_id: id,
+  approval_processing_status: { feedback_id: id, status: "approval_blocked" },
+}, id), "approval_blocked");
+assert.equal(serverBatchOutcome({
+  applied_feedback_id: id,
+  approval_processing_status: { feedback_id: id, status: "error" },
+}, id), "approval_error");
+assert.equal(serverBatchOutcome({
+  applied_feedback_id: id,
+  processed_feedback_id: other,
+  approval_processing_status: { feedback_id: other, status: "processed" },
+}, id), "applied", "lo stato di un altro batch non deve chiudere quello corrente");
+
+assert.deepEqual(reviewActionRoles(true, false), { sendPrimary: true, approvePrimary: false });
+assert.deepEqual(reviewActionRoles(false, false), { sendPrimary: false, approvePrimary: true });
+assert.deepEqual(reviewActionRoles(true, true), { sendPrimary: false, approvePrimary: false });
+assert.deepEqual(consentStepLabels(true), { content: "Consenso unico", visual: "Inclusa nel consenso" });
+assert.deepEqual(consentStepLabels(false), { content: "Primo consenso", visual: "Secondo consenso" });
+'''
+        result = subprocess.run(
+            ["node", "-e", script, str(EDITOR)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_p1_server_outcome_does_not_treat_approval_receipt_as_success(self) -> None:
+        outcome = self.source.split("function serverBatchOutcome", 1)[1].split(
+            "function reviewActionRoles", 1
+        )[0]
+        self.assertIn("processed_feedback_id", outcome)
+        self.assertIn("approval_processing_status", outcome)
+        self.assertIn('return "approval_blocked"', outcome)
+        self.assertIn('? "applied" : "pending"', outcome)
+        self.assertIn('outcome === "processed"', self.source)
+        for unsupported in (
+            "feedback_processed_id",
+            "last_processed_feedback_id",
+            "approval_processed_feedback_id",
+            "feedback_processing_status",
+            "feedback_results",
+        ):
+            with self.subTest(field=unsupported):
+                self.assertNotIn(unsupported, outcome)
+
+    def test_p1_durability_recovery_connection_and_return_cta_are_explicit(self) -> None:
+        self.assertIn('draftPersistenceState = safeStorageSet', self.source)
+        self.assertIn('submissionDurabilityState = "received"', self.source)
+        self.assertIn('draftDurabilityCopy()', self.source)
+        self.assertIn('connectionState = "offline"', self.source)
+        self.assertIn('function retryConnection()', self.source)
+        self.assertIn('returnChatPinned = true', self.source)
+        self.assertIn('returnChatPinned || waiting || phase === "production"', self.source)
+        self.assertIn('class="responsive-guidance"', self.html)
+        self.assertIn('@media (max-width: 1180px)', self.stylesheet)
+        self.assertIn('id="discard-pending-button"', self.html)
+        self.assertIn('classList.toggle("is-handoff"', self.source)
+        self.assertIn('#mobile-actions-button[hidden]', self.stylesheet)
+        self.assertIn('position: sticky;', self.stylesheet.split("@media (max-width: 820px)", 1)[1])
+        poll = self.source.split("async function pollStatus()", 1)[1].split(
+            "function clearPendingSelection", 1
+        )[0]
+        blocked = poll.split('outcome === "approval_blocked"', 1)[1].split(
+            'outcome === "applied"', 1
+        )[0]
+        self.assertIn("pendingSubmission = null", blocked)
+        self.assertIn("if (retryableError) lockEditing()", blocked)
+        self.assertIn("else releaseEditingLock()", blocked)
 
 
 if __name__ == "__main__":

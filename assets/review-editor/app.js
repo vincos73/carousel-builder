@@ -91,6 +91,39 @@
     };
   }
 
+  function serverBatchOutcome(status, feedbackId) {
+    if (!status || typeof status !== "object" || !feedbackId) return "pending";
+    const processing = status.approval_processing_status;
+    const ownProcessing = Boolean(
+      processing
+      && typeof processing === "object"
+      && processing.feedback_id === feedbackId,
+    );
+    if (ownProcessing && processing.status === "error") return "approval_error";
+    if (ownProcessing && processing.status === "approval_blocked") return "approval_blocked";
+    if (
+      ownProcessing
+      && processing.status === "processed"
+      && status.applied_feedback_id === feedbackId
+      && status.processed_feedback_id === feedbackId
+    ) return "processed";
+    return status.applied_feedback_id === feedbackId ? "applied" : "pending";
+  }
+
+  function reviewActionRoles(correctionsPending, locked) {
+    const sendPrimary = Boolean(correctionsPending && !locked);
+    return {
+      sendPrimary,
+      approvePrimary: Boolean(!sendPrimary && !locked),
+    };
+  }
+
+  function consentStepLabels(combined) {
+    return combined
+      ? { content: "Consenso unico", visual: "Inclusa nel consenso" }
+      : { content: "Primo consenso", visual: "Secondo consenso" };
+  }
+
   if (typeof module === "object" && module.exports) {
     module.exports = {
       collectPaletteDeclarationIssues,
@@ -99,6 +132,9 @@
       geometryPartIsHidden,
       mergePreviewBrand,
       previewReadyForApproval,
+      reviewActionRoles,
+      serverBatchOutcome,
+      consentStepLabels,
       tabDraftStorageKey,
     };
     return;
@@ -190,6 +226,8 @@
     closeMobileActions: document.querySelector("#close-mobile-actions"),
     cancelComment: document.querySelector("#cancel-comment"),
     approvalSummary: document.querySelector("#approval-summary"),
+    proofAcknowledgmentWrap: document.querySelector("#proof-acknowledgment-wrap"),
+    proofAcknowledgment: document.querySelector("#proof-acknowledgment"),
     approvalDialogTitle: document.querySelector("#approval-dialog-title"),
     approvalDialogCopy: document.querySelector("#approval-dialog-copy"),
     visualSystemPicker: document.querySelector("#visual-system-picker"),
@@ -202,6 +240,8 @@
     validationSummaryCopy: document.querySelector("#validation-summary-copy"),
     validationList: document.querySelector("#validation-list"),
     retrySubmitButton: document.querySelector("#retry-submit-button"),
+    discardPendingButton: document.querySelector("#discard-pending-button"),
+    retryConnectionButton: document.querySelector("#retry-connection-button"),
     exportRecoveryButton: document.querySelector("#export-recovery-button"),
     workflowJourney: document.querySelector("#workflow-journey"),
     workflowJourneyTitle: document.querySelector("#workflow-journey-title"),
@@ -216,6 +256,7 @@
     guidancePanel: document.querySelector("#guidance-panel"),
     guidanceTitle: document.querySelector("#guidance-title"),
     guidanceList: document.querySelector("#guidance-list"),
+    responsiveGuidance: document.querySelector("#responsive-guidance"),
   };
 
   let model = null;
@@ -236,6 +277,7 @@
   let recoveryDrafts = [];
   let foreignFeedbackId = null;
   let submissionError = "";
+  let acknowledgedProcessingErrorId = null;
   let staleRevision = null;
   let staleWorkflowState = null;
   let staleApprovalCheckpoint = null;
@@ -248,6 +290,11 @@
   let pollTimer = null;
   let pollInFlight = false;
   let pollFailures = 0;
+  let connectionState = "connecting";
+  let draftPersistenceState = "memory";
+  let unpersistedDraftAvailable = false;
+  let submissionDurabilityState = "none";
+  let returnChatPinned = false;
   let pollAbortController = null;
   let currentSlideId = null;
   let viewedSlideIds = new Set();
@@ -287,8 +334,8 @@
     },
     {
       id: "corporate-modular",
-      label: "C · Istituzionale",
-      description: "Sistema istituzionale: un indice compatto ordina metodo, dati e processi senza sottrarre spazio al testo.",
+      label: "C · Frame",
+      description: "Sistema Frame: un foglio editoriale incastonato usa fondo scuro, superficie chiara e accento del brand.",
     },
   ];
 
@@ -381,6 +428,19 @@
     } catch (_error) {
       // A stale local draft is less harmful than interrupting a review.
     }
+  }
+
+  function draftDurabilityCopy() {
+    return draftPersistenceState === "browser"
+      ? "La bozza è salvata nel browser."
+      : "La bozza è solo in memoria in questa scheda: scaricane una copia prima di ricaricare.";
+  }
+
+  function submissionDurabilityCopy() {
+    if (submissionDurabilityState === "applied") return "Applicazione confermata dal server.";
+    if (submissionDurabilityState === "processed") return "Elaborazione confermata dal server; attendo l’aggiornamento della sessione.";
+    if (submissionDurabilityState === "received") return `Il server ha ricevuto la richiesta. ${draftDurabilityCopy()}`;
+    return `La richiesta non ha ancora una conferma HTTP. ${draftDurabilityCopy()}`;
   }
 
   function getOrCreateTabId(key) {
@@ -949,6 +1009,11 @@
     return Array.isArray(values) ? values.filter((id) => typeof id === "string") : [];
   }
 
+  function unseenCanonicalProofSlideIds() {
+    if (model?.approval_checkpoint !== "visual_proof" && !fastApprovalEligible()) return [];
+    return requiredProofSlideIds().filter((slideId) => !viewedSlideIds.has(slideId));
+  }
+
   function browserProofDescriptor() {
     const userAgent = navigator.userAgent || "";
     const candidates = [
@@ -1191,6 +1256,7 @@
     if (!elements.guidancePanel || !elements.guidanceList || !elements.guidanceTitle) return;
     elements.guidancePanel.hidden = phase === "production";
     if (phase === "production") return;
+    const fast = fastApprovalEligible();
     const guidance = phase === "visual"
       ? {
           title: "Come controllare la prova",
@@ -1201,23 +1267,72 @@
             "Approva la prova visiva: è il secondo consenso, distinto da quello sui testi.",
           ],
         }
-      : {
-          title: "Come revisionare",
-          items: [
-            "Correggi i testi nell’editor accanto all’anteprima.",
-            "Seleziona una parola o una frase per applicare uno stile o aggiungere un commento.",
-            "Sposta o elimina le slide interne con i comandi della slide.",
-            "Approva i testi per dare il primo consenso e chiedere la prova visiva.",
-          ],
-        };
+      : fast
+        ? {
+            title: "Come revisionare",
+            items: [
+              "Controlla profilo, sequenza, testi e resa grafica definitiva.",
+              "Correggi direttamente i testi oppure annota ciò che deve cambiare.",
+              "Apri copertina, card campione e chiusura prima della decisione.",
+              "Genera per dare un unico consenso esplicito a testi e prova visiva.",
+            ],
+          }
+        : {
+            title: "Come revisionare",
+            items: [
+              "Correggi i testi nell’editor accanto all’anteprima.",
+              "Seleziona una parola o una frase per applicare uno stile o aggiungere un commento.",
+              "Sposta o elimina le slide interne con i comandi della slide.",
+              "Approva i testi per dare il primo consenso e chiedere la prova visiva.",
+            ],
+          };
     elements.guidanceTitle.textContent = guidance.title;
     elements.guidanceList.replaceChildren(...guidance.items.map((item) => create("li", "", item)));
+    if (elements.responsiveGuidance) {
+      const brandName = String(previewBrand().name || "Profilo senza nome").trim();
+      const systemName = visualSystemDefinition(
+        visualSystems.find((system) => system.id === selectedVisualSystem) || visualSystems[0],
+      ).label.replace(/^[A-Z] · /, "");
+      const coverName = resolvedCoverMode() === "typographic" ? "copertina solo testo" : "copertina con immagine";
+      const context = `${brandName} · ${draftSlides.length} slide · ${systemName} · ${coverName}.`;
+      elements.responsiveGuidance.textContent = phase === "visual"
+        ? `${context} Controlla copertina, card campione e chiusura, poi scegli se approvare o inviare una correzione.`
+        : fast
+          ? `${context} Il consenso è unico: controlla testi e grafica prima di generare.`
+          : `${context} Controlla la sequenza, poi modifica o commenta solo ciò che vuoi inviare.`;
+    }
   }
 
   function returnToChat() {
     if (!returnUrl) return;
     elements.returnChatButton?.setAttribute("aria-busy", "true");
     window.location.assign(returnUrl);
+  }
+
+  function renderLoadError(error) {
+    connectionState = "offline";
+    const panel = create("div", "file-launcher-panel");
+    panel.append(
+      create("h2", "", "Connessione non disponibile"),
+      create("p", "", `${error?.message || "Impossibile caricare la sessione."} La bozza locale non viene cancellata.`),
+    );
+    const retry = create("button", "button button-primary", "Riprova connessione");
+    retry.type = "button";
+    retry.addEventListener("click", () => {
+      retry.disabled = true;
+      connectionState = "connecting";
+      loadSession()
+        .then(() => schedulePoll(0))
+        .catch((nextError) => {
+          retry.disabled = false;
+          renderLoadError(nextError);
+        });
+    });
+    panel.append(retry);
+    elements.loading?.replaceChildren(panel);
+    elements.loading?.classList.remove("hidden");
+    elements.editor?.classList.add("hidden");
+    elements.actionbar?.classList.add("hidden");
   }
 
   function renderWorkflowJourney() {
@@ -1256,6 +1371,11 @@
     };
     elements.workflowJourneyTitle.textContent = titles[phase];
     elements.workflowJourneyCopy.textContent = copies[phase];
+    const stepLabels = consentStepLabels(fast);
+    const contentStepDetail = elements.workflowSteps?.querySelector('[data-workflow-step="content"] small');
+    const visualStepDetail = elements.workflowSteps?.querySelector('[data-workflow-step="visual"] small');
+    if (contentStepDetail) contentStepDetail.textContent = stepLabels.content;
+    if (visualStepDetail) visualStepDetail.textContent = stepLabels.visual;
     const order = ["content", "visual", "production"];
     const currentIndex = order.indexOf(phase);
     for (const step of elements.workflowSteps?.querySelectorAll("[data-workflow-step]") || []) {
@@ -1276,6 +1396,10 @@
       status = "error";
       statusLabel = "Batch registrato";
       statusDetail = "L’invio è al sicuro, ma l’applicazione non è ancora confermata. La rotella si è fermata per segnalare l’attesa: puoi ritentare con lo stesso identificativo senza creare duplicati.";
+    } else if (connectionState === "offline") {
+      status = "error";
+      statusLabel = "Connessione persa";
+      statusDetail = `Le azioni server sono sospese. ${draftDurabilityCopy()} Usa Riconnetti quando il server è disponibile.`;
     } else if (submissionError) {
       status = "error";
       statusLabel = "Invio da controllare";
@@ -1288,9 +1412,7 @@
           ? "Aggiornamento in corso in un’altra scheda"
           : "Invio in corso";
       statusDetail = pendingSubmissionAcknowledged
-        ? returnUrl
-          ? "Il batch è al sicuro e l’applicazione prosegue in background. Puoi tornare alla chat."
-          : "Il batch è al sicuro e l’applicazione prosegue in background; la nuova revisione comparirà automaticamente."
+        ? `${submissionDurabilityCopy()} Ti aggiorno qui appena viene elaborata. ${returnUrl ? "Puoi tornare alla chat." : "La nuova revisione comparirà automaticamente."}`
         : "Attendo la conferma del server locale.";
     } else if (phase === "production") {
       status = delivered ? "complete" : productionReady ? "ready" : "working";
@@ -1321,10 +1443,13 @@
     elements.agentStatusLabel.textContent = statusLabel;
     elements.agentStatusDetail.textContent = statusDetail;
     if (elements.returnChatButton) {
-      const canReturn = Boolean(returnUrl && (waiting || phase === "production"));
+      const canReturn = Boolean(returnUrl && (returnChatPinned || waiting || phase === "production"));
+      const retryOnly = Boolean(submissionError && isPendingSubmission(pendingSubmission));
       elements.returnChatButton.hidden = !canReturn;
       elements.returnChatButton.disabled = !canReturn;
       elements.returnChatButton.setAttribute("aria-hidden", String(!canReturn));
+      elements.returnChatButton.classList.toggle("is-pinned", canReturn);
+      elements.returnChatButton.classList.toggle("is-handoff", canReturn && (waiting || retryOnly));
     }
     renderProofMode();
     renderGuidance(phase);
@@ -1343,22 +1468,50 @@
       mobile.hidden = desktop.hidden;
       mobile.setAttribute("aria-hidden", String(desktop.hidden));
       mobile.setAttribute("aria-disabled", String(desktop.disabled));
+      if ([elements.mobileSendButton, elements.mobileApproveButton].includes(mobile)) {
+        mobile.classList.toggle("button-primary", desktop.classList.contains("button-primary"));
+        mobile.classList.toggle("button-secondary", !desktop.classList.contains("button-primary"));
+      }
+    }
+    if (elements.mobileActionsButton && elements.approveButton) {
+      const candidates = [elements.sendButton, elements.approveButton]
+        .filter((button) => button && !button.hidden && !button.disabled);
+      const primaryButton = candidates.find((button) => button.classList.contains("button-primary")) || candidates[0];
+      const primary = primaryButton?.textContent || "";
+      const retryOnly = Boolean(submissionError && isPendingSubmission(pendingSubmission));
+      const handoffOnly = hasPendingLock() || retryOnly;
+      elements.mobileActionsButton.hidden = handoffOnly || candidates.length === 0;
+      elements.mobileActionsButton.setAttribute("aria-hidden", String(elements.mobileActionsButton.hidden));
+      elements.mobileActionsButton.textContent = primary || "Azioni di revisione";
+      elements.mobileActionsButton.setAttribute("aria-label", `Azioni di revisione. Azione principale: ${primary || "nessuna"}`);
+      elements.actionbar?.classList.toggle("handoff-only", handoffOnly);
+      if (handoffOnly && elements.mobileActionsDialog?.open) elements.mobileActionsDialog.close();
     }
   }
 
   function updateChangeSummary() {
     if (!model) return;
     const count = computeChangeCount();
-    const waiting = hasPendingLock();
+    const retryOnly = Boolean(submissionError && isPendingSubmission(pendingSubmission));
+    const waiting = hasPendingLock() || retryOnly;
+    const serverUnavailable = connectionState === "offline";
     const visualWaiting = waiting
       && !pendingSubmissionAcknowledged
       && !submissionError
       && !isStalePendingSubmission();
     const contentAlreadyApproved = model.workflow_state !== "bozza";
     const sendVisible = hasAgentCorrections() || (contentAlreadyApproved && count > 0);
+    const actionRoles = reviewActionRoles(
+      sendVisible,
+      waiting || serverUnavailable || hasStaleBase(),
+    );
     if (elements.sendButton) {
       elements.sendButton.hidden = !sendVisible;
       elements.sendButton.setAttribute("aria-hidden", String(!sendVisible));
+    }
+    if (elements.approveButton) {
+      elements.approveButton.classList.toggle("button-primary", actionRoles.approvePrimary);
+      elements.approveButton.classList.toggle("button-secondary", !actionRoles.approvePrimary);
     }
     if (hasStaleBase()) {
       if (elements.resetButton) elements.resetButton.disabled = false;
@@ -1371,10 +1524,12 @@
     }
     if (elements.resetButton) elements.resetButton.disabled = count === 0 || waiting;
     if (elements.undoButton) elements.undoButton.disabled = !undoState || waiting;
-    if (elements.sendButton) elements.sendButton.disabled = count === 0 || waiting;
+    if (elements.sendButton) elements.sendButton.disabled = count === 0 || waiting || serverUnavailable;
     if (elements.approveButton) {
       const approvalComplete = ["prova_visuale_approvata", "rendering", "qa", "consegnato"].includes(model.workflow_state);
       elements.approveButton.disabled = waiting
+        || serverUnavailable
+        || hasAgentCorrections()
         || approvalComplete
         || !previewReadyForApproval(document.documentElement.dataset);
     }
@@ -1384,7 +1539,11 @@
       : approvedContentHasChanges
         ? "Invia correzioni · poi riapprova"
         : "Invia correzioni";
-    if (elements.sendButton) elements.sendButton.textContent = sendLabel;
+    if (elements.sendButton) {
+      elements.sendButton.textContent = sendLabel;
+      elements.sendButton.classList.toggle("button-primary", actionRoles.sendPrimary);
+      elements.sendButton.classList.toggle("button-secondary", !actionRoles.sendPrimary);
+    }
     if (elements.mobileSendButton) elements.mobileSendButton.textContent = sendLabel;
     if (elements.workflowBadge) {
       elements.workflowBadge.textContent = isStalePendingSubmission()
@@ -1397,6 +1556,14 @@
       elements.workflowBadge.toggleAttribute("aria-busy", visualWaiting);
     }
     elements.editor?.setAttribute("aria-busy", String(visualWaiting));
+    if (elements.approveButton) {
+      elements.approveButton.hidden = waiting;
+      elements.approveButton.setAttribute("aria-hidden", String(waiting));
+    }
+    if (elements.sendButton) {
+      elements.sendButton.hidden = sendVisible === false || waiting;
+      elements.sendButton.setAttribute("aria-hidden", String(elements.sendButton.hidden));
+    }
     syncMobileActions();
     updateApprovalCopy();
   }
@@ -1461,7 +1628,15 @@
     if (!model || productionRender) return;
     window.clearTimeout(storageTimer);
     storageTimer = null;
-    safeStorageSet(storageKey, draftStorageValue());
+    draftPersistenceState = safeStorageSet(storageKey, draftStorageValue()) ? "browser" : "memory";
+    unpersistedDraftAvailable = draftPersistenceState === "memory" && computeChangeCount() > 0;
+    if (unpersistedDraftAvailable && hasAgentCorrections()) {
+      submissionError = `Il browser non ha salvato la bozza. ${draftDurabilityCopy()}`;
+    } else if (submissionError.startsWith("Il browser non ha salvato la bozza.")) {
+      submissionError = "";
+    }
+    renderWorkflowJourney();
+    renderValidationState();
   }
 
   function persistDraft({ immediate = false } = {}) {
@@ -1474,7 +1649,24 @@
 
   function exportRecoverySubmissions() {
     loadDedicatedRecoveries();
-    if (!recoverySubmissions.length && !recoveryDrafts.length) return;
+    const storageWarning = submissionError.startsWith("Il browser non ha salvato la bozza.");
+    const currentDraft = model && (
+      computeChangeCount() > 0
+      || unpersistedDraftAvailable
+      || storageWarning
+    ) ? {
+      schema: "carousel-builder-draft-recovery-v1",
+      recovery_id: createFeedbackId(),
+      reason: "manual-export",
+      related_feedback_id: pendingSubmission?.feedback_id || "",
+      base_revision: model.revision,
+      base_workflow_state: model.workflow_state || "",
+      base_approval_checkpoint: model.approval_checkpoint || "",
+      detected_revision: model.revision,
+      preserved_at: new Date().toISOString(),
+      draft: currentDraftRecoverySource(),
+    } : null;
+    if (!recoverySubmissions.length && !recoveryDrafts.length && !currentDraft) return;
     const artifact = {
       schema: "carousel-builder-feedback-recovery-export-v1",
       exported_at: new Date().toISOString(),
@@ -1482,6 +1674,7 @@
       submissions: clone(recoverySubmissions),
       drafts: clone(recoveryDrafts),
     };
+    if (currentDraft) artifact.drafts.push(currentDraft);
     const blob = new Blob([`${JSON.stringify(artifact, null, 2)}\n`], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -1543,6 +1736,7 @@
     recoveryDrafts = [];
     foreignFeedbackId = null;
     submissionError = "";
+    acknowledgedProcessingErrorId = null;
     staleWorkflowState = null;
     staleApprovalCheckpoint = null;
     validationMode = false;
@@ -1550,7 +1744,10 @@
     if (productionRender) return;
     try {
       loadDedicatedRecoveries();
-      const saved = JSON.parse(safeStorageGet(storageKey) || "null");
+      const savedRaw = safeStorageGet(storageKey);
+      draftPersistenceState = savedRaw !== null ? "browser" : "memory";
+      unpersistedDraftAvailable = false;
+      const saved = JSON.parse(savedRaw || "null");
       for (const recovery of Array.isArray(saved?.recovery_submissions) ? saved.recovery_submissions : []) addRecoverySubmission(recovery);
       for (const recovery of Array.isArray(saved?.recovery_drafts) ? saved.recovery_drafts : []) addRecoveryDraft(recovery);
       if (isRecoverySubmission(saved?.recovery_submission)) addRecoverySubmission(saved.recovery_submission);
@@ -1574,6 +1771,7 @@
         || savedPending.payload.render_fingerprint === (model.render_fingerprint || "")
       ));
       if (savedPending && sameBase && sameFingerprint) {
+        returnChatPinned = true;
         pendingSubmission = savedPending;
         awaitingFeedbackId = savedPending.feedback_id;
         pendingSubmissionAcknowledged = saved?.pending_submission_acknowledged === true;
@@ -2581,7 +2779,9 @@
 
   function previewColors(index, kind) {
     const palette = previewBrand().palette || {};
-    const useDark = kind === "cover" || kind === "outro" || index % 2 === 0;
+    const usesFrameSheet = selectedVisualSystem === "corporate-modular"
+      && (kind !== "cover" || resolvedCoverMode() === "typographic");
+    const useDark = !usesFrameSheet && (kind === "cover" || kind === "outro" || index % 2 === 0);
     const accent = safeColor(palette.accent || palette.primary || palette.accent_primary, "#6b3f5d");
     const backgroundDark = safeColor(palette.background_dark, "#2d2e2f");
     const backgroundLight = safeColor(palette.background_light, "#f8f7f4");
@@ -2768,10 +2968,12 @@
       preview.style.setProperty("--preview-light-text", colors.textOnLight);
       preview.style.setProperty("--preview-accent-text", colors.accentText);
       preview.dataset.kind = slide.kind;
+      preview.dataset.coverMode = slide.kind === "cover" ? resolvedCoverMode() : "internal";
       preview.dataset.surface = colors.surface;
       preview.dataset.constellationPosition = index % 2 === 0 ? "high" : "low";
       preview.dataset.productionSource = "approved-preview";
       preview.classList.add(`visual-system-${selectedVisualSystem}`);
+      preview.classList.toggle("typographic-cover", slide.kind === "cover" && resolvedCoverMode() === "typographic");
       preview.classList.toggle("has-real-italic", hasRealItalicFont());
       const coverVisual = selectedVisualProof()?.cover_visual || model.cover_visual;
       let coverMedia = null;
@@ -2806,9 +3008,13 @@
       const pageTotal = String(draftSlides.length).padStart(2, "0");
       const pageNumber = create("span", "preview-page", `${pageCurrent} / ${pageTotal}`);
       pageNumber.setAttribute("aria-label", `Pagina ${index + 1} di ${draftSlides.length}`);
+      const frameField = create("div", "preview-frame-field");
+      frameField.setAttribute("aria-hidden", "true");
       const constellation = create("div", "preview-constellation");
       constellation.setAttribute("aria-hidden", "true");
-      if (slide.kind !== "cover") {
+      const inheritsVisualSystem = slide.kind !== "cover"
+        || (slide.kind === "cover" && resolvedCoverMode() === "typographic");
+      if (inheritsVisualSystem) {
         for (const role of ["primary", "core", "ring", "moon", "satellite"]) {
           constellation.append(create("span", `preview-sphere preview-sphere-${role}`));
         }
@@ -2817,6 +3023,11 @@
       const brand = previewBrand();
       const signature = String(brand.signature || "").trim();
       const website = String(brand.website || "").trim();
+      const signatureMatchesWebsite = Boolean(
+        signature
+        && website
+        && signature.toLocaleLowerCase() === website.toLocaleLowerCase()
+      );
       const logoRole = logoRoleForSlide(slide, index);
       const logo = brand.logos?.[logoRole];
       const hasLogo = logo?.available === true && typeof logo.endpoint === "string" && logo.endpoint;
@@ -2826,10 +3037,12 @@
         image.src = api(logo.endpoint);
         image.alt = brand.name ? `Logo ${brand.name}` : "Logo del brand";
         previewBrandNode.append(image);
-      } else if (signature) previewBrandNode.append(create("span", "preview-signature", signature));
+      } else if (signature && !signatureMatchesWebsite) previewBrandNode.append(create("span", "preview-signature", signature));
       if (website) previewBrandNode.append(create("span", "preview-website", website));
-      previewBrandNode.hidden = logoMode === "hidden" ? !signature && !website : !hasLogo && !signature && !website;
-      if (slide.kind !== "cover") preview.append(constellation);
+      previewBrandNode.hidden = logoMode === "hidden"
+        ? (!signature || signatureMatchesWebsite) && !website
+        : !hasLogo && (!signature || signatureMatchesWebsite) && !website;
+      if (inheritsVisualSystem) preview.append(constellation, frameField);
       if (coverMedia) preview.append(coverMedia);
       preview.append(pageNumber, previewCopy, previewBrandNode);
       const form = create("div", "slide-form");
@@ -2990,6 +3203,7 @@
       "preview-summary",
       "preview-page",
       "preview-brand",
+      "preview-frame-field",
       "preview-logo",
       "preview-website",
       "preview-sphere-primary",
@@ -3458,15 +3672,17 @@
     clearInlineValidation();
     const issues = activeValidationIssues;
     const recoveryCount = recoverySubmissions.length + recoveryDrafts.length;
-    const visible = Boolean(issues.length || submissionError);
-    elements.validationSummary.hidden = !visible;
-    if (visible) elements.validationSummary.setAttribute("role", "alert");
+    const durabilityVisible = Boolean(issues.length || submissionError)
+      || connectionState === "offline"
+      || unpersistedDraftAvailable;
+    elements.validationSummary.hidden = !durabilityVisible;
+    if (durabilityVisible) elements.validationSummary.setAttribute("role", "alert");
     else elements.validationSummary.removeAttribute("role");
-    elements.validationSummary.setAttribute("aria-live", visible ? "assertive" : "off");
+    elements.validationSummary.setAttribute("aria-live", durabilityVisible ? "assertive" : "off");
     if (elements.validationSummaryCopy) {
       elements.validationSummaryCopy.textContent = submissionError
-        ? submissionError
-        : "Risolvi i problemi indicati per approvare la revisione.";
+        || (connectionState === "offline" ? "Connessione al server persa. La bozza resta modificabile: riconnetti per inviare o approvare." : "")
+        || (unpersistedDraftAvailable ? `Il browser non ha salvato la bozza. ${draftDurabilityCopy()}` : "Risolvi i problemi indicati per approvare la revisione.");
     }
     elements.validationList.replaceChildren();
     const groupedByTarget = new Map();
@@ -3500,13 +3716,28 @@
       elements.retrySubmitButton.hidden = !retryable;
       elements.retrySubmitButton.disabled = false;
       elements.retrySubmitButton.dataset.pendingControl = "true";
+      if (elements.discardPendingButton) {
+        elements.discardPendingButton.hidden = !retryable;
+        elements.discardPendingButton.disabled = false;
+        elements.discardPendingButton.dataset.pendingControl = "true";
+      }
     }
     if (elements.exportRecoveryButton) {
-      elements.exportRecoveryButton.hidden = !(submissionError && recoveryCount > 0);
+      const storageWarning = submissionError.startsWith("Il browser non ha salvato la bozza.");
+      elements.exportRecoveryButton.hidden = !(
+        recoveryCount > 0
+        || unpersistedDraftAvailable
+        || storageWarning
+      );
       elements.exportRecoveryButton.disabled = false;
       elements.exportRecoveryButton.dataset.pendingControl = "true";
     }
-    if (focus && visible) window.requestAnimationFrame(() => focusValidationIssue(issues[0]));
+    if (elements.retryConnectionButton) {
+      elements.retryConnectionButton.hidden = connectionState !== "offline";
+      elements.retryConnectionButton.disabled = false;
+      elements.retryConnectionButton.dataset.pendingControl = "true";
+    }
+    if (focus && durabilityVisible) window.requestAnimationFrame(() => focusValidationIssue(issues[0]));
   }
 
   function refreshApprovalValidation() {
@@ -3584,6 +3815,7 @@
     pendingSubmission = null;
     pendingSubmissionStartedAt = null;
     pendingSubmissionAcknowledged = false;
+    submissionDurabilityState = "none";
     if (!keepError) submissionError = "";
     persistDraft({ immediate: true });
     releaseEditingLock();
@@ -3613,8 +3845,11 @@
     awaitingFeedbackId = pendingSubmission.feedback_id;
     pendingSubmissionStartedAt = Date.now();
     pendingSubmissionAcknowledged = false;
+    acknowledgedProcessingErrorId = null;
     armPendingSubmissionWatchdog();
-    submissionError = "";
+    submissionError = draftPersistenceState === "memory" && computeChangeCount() > 0
+      ? `Il browser non ha salvato la bozza. ${draftDurabilityCopy()}`
+      : "";
     persistDraft({ immediate: true });
     lockEditing();
     renderValidationState();
@@ -3629,6 +3864,7 @@
         if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
           const rejectedAction = pendingSubmission.action;
           preservePendingSubmission(`http-${response.status}`, message);
+          submissionDurabilityState = "none";
           submissionError = `${message}. Le modifiche non sono state perse: scaricane una copia prima di ricaricare.`;
           clearPendingSubmission();
           if (response.status === 422 && rejectedAction === "approve") await loadSession();
@@ -3640,24 +3876,28 @@
       if (data.feedback_id !== pendingSubmission.feedback_id) throw new Error("Il server ha restituito un identificativo di feedback inatteso.");
       awaitingFeedbackId = pendingSubmission.feedback_id;
       pendingSubmissionAcknowledged = true;
+      submissionDurabilityState = "received";
       clearPendingSubmissionWatchdog();
-      submissionError = "";
+      submissionError = draftPersistenceState === "memory"
+        ? `Il server ha ricevuto la richiesta, ma ${draftDurabilityCopy()}`
+        : "";
       persistDraft({ immediate: true });
       lockEditing();
       renderValidationState();
       showToast(pendingSubmission.action === "approve"
-        ? "Richiesta di approvazione inviata. Ti aggiorno qui appena viene elaborata."
-        : "Correzioni inviate. Ti aggiorno qui appena vengono elaborate.");
+        ? `Richiesta di approvazione ricevuta. ${draftDurabilityCopy()}`
+        : `Correzioni ricevute. ${draftDurabilityCopy()}`);
       updateChangeSummary();
       schedulePoll(0);
     } catch (error) {
+      submissionDurabilityState = "none";
       submissionError = error?.name === "AbortError"
-        ? "L’invio non ha ricevuto conferma entro il tempo previsto. La richiesta è salvata e può essere ritentata senza duplicarla."
-        : `${error.message || "Invio non riuscito"}. La richiesta è salvata e può essere ritentata senza duplicarla.`;
+        ? `L’invio non ha ricevuto conferma entro il tempo previsto. ${submissionDurabilityCopy()}`
+        : `${error.message || "Invio non riuscito"}. ${submissionDurabilityCopy()}`;
       persistDraft({ immediate: true });
       lockEditing();
       renderValidationState({ focus: true });
-      showToast("Stato dell’invio non confermato. La bozza è al sicuro.", true);
+      showToast(`Stato dell’invio non confermato. ${draftDurabilityCopy()}`, true);
       updateChangeSummary();
       schedulePoll(0);
     }
@@ -3703,6 +3943,7 @@
       }
     }
     pendingSubmission = { feedback_id: feedbackId, action, payload };
+    returnChatPinned = true;
     pendingSubmissionStartedAt = Date.now();
     armPendingSubmissionWatchdog();
     awaitingFeedbackId = feedbackId;
@@ -3739,8 +3980,13 @@
       const { response, data: status } = await fetchJson("/api/status", { cache: "no-store", signal: pollAbortController.signal });
       if (!response.ok) throw new Error(status.error || "Stato non disponibile");
       pollFailures = 0;
+      connectionState = "connected";
+      if (submissionError.startsWith("Connessione al server persa.")) submissionError = "";
       const baseChange = statusBaseChange(status);
-      if (awaitingFeedbackId && status.applied_feedback_id === awaitingFeedbackId) {
+      const outcome = awaitingFeedbackId
+        ? serverBatchOutcome(status, awaitingFeedbackId)
+        : "pending";
+      if (awaitingFeedbackId && outcome === "processed") {
         const appliedFeedbackId = awaitingFeedbackId;
         const submittedAction = pendingSubmission?.action || "feedback";
         const submittedVisualSystem = pendingSubmission?.payload?.visual_style_system || "";
@@ -3749,6 +3995,8 @@
         pendingSubmission = null;
         pendingSubmissionStartedAt = null;
         pendingSubmissionAcknowledged = false;
+        submissionDurabilityState = "processed";
+        acknowledgedProcessingErrorId = null;
         markRecoveryApplied(appliedFeedbackId);
         submissionError = "";
         validationMode = false;
@@ -3767,6 +4015,72 @@
           showToast("Prova visiva approvata. La produzione può iniziare.");
         } else {
           showToast("Le modifiche dirette sono state applicate. Controlla la nuova revisione.");
+        }
+        return;
+      }
+      if (awaitingFeedbackId && (outcome === "approval_blocked" || outcome === "approval_error")) {
+        const blockedFeedbackId = awaitingFeedbackId;
+        const retryableError = outcome === "approval_error";
+        preservePendingSubmission(retryableError ? "approval-processing-error" : "approval-blocked");
+        clearPendingSubmissionWatchdog();
+        awaitingFeedbackId = null;
+        pendingSubmissionAcknowledged = retryableError;
+        submissionDurabilityState = "applied";
+        if (!retryableError) {
+          pendingSubmission = null;
+          pendingSubmissionStartedAt = null;
+        }
+        submissionError = retryableError
+          ? `Il server ha ricevuto l’approvazione ${blockedFeedbackId}, ma l’elaborazione ha restituito un errore. ${draftDurabilityCopy()} Puoi ritentare con lo stesso identificativo.`
+          : `Il server ha ricevuto l’approvazione ${blockedFeedbackId}, ma il checkpoint è bloccato. ${draftDurabilityCopy()} Puoi correggere e inviare un nuovo batch.`;
+        persistDraft({ immediate: true });
+        if (retryableError) lockEditing();
+        else releaseEditingLock();
+        renderWorkflowJourney();
+        updateChangeSummary();
+        renderValidationState({ focus: true });
+        if (acknowledgedProcessingErrorId !== blockedFeedbackId) {
+          acknowledgedProcessingErrorId = blockedFeedbackId;
+          showToast(outcome === "approval_error" ? "Elaborazione dell’approvazione non riuscita: nessuna conferma falsa." : "Approvazione ricevuta ma checkpoint bloccato: nessuna conferma falsa.", true);
+        }
+        return;
+      }
+      if (awaitingFeedbackId && outcome === "applied" && !status.approval_processing_error) {
+        submissionDurabilityState = "received";
+        submissionError = `Il server indica che il batch è stato applicato, ma non ha ancora confermato l’elaborazione. ${draftDurabilityCopy()}`;
+        persistDraft({ immediate: true });
+        renderWorkflowJourney();
+        updateChangeSummary();
+        renderValidationState();
+        return;
+      }
+      const processingError = status.approval_processing_error;
+      const processingErrorId = typeof processingError?.feedback_id === "string"
+        ? processingError.feedback_id
+        : "";
+      const ownProcessingError = Boolean(processingErrorId && (
+        processingErrorId === awaitingFeedbackId
+        || processingErrorId === pendingSubmission?.feedback_id
+      ));
+      if (ownProcessingError) {
+        clearPendingSubmissionWatchdog();
+        awaitingFeedbackId = null;
+        pendingSubmissionAcknowledged = true;
+        submissionDurabilityState = "applied";
+        const message = typeof processingError.message === "string" && processingError.message
+          ? processingError.message
+          : "L’applicazione automatica non è riuscita.";
+        submissionError = draftPersistenceState === "browser"
+          ? `${message} La richiesta è salvata: puoi ritentare con lo stesso identificativo.`
+          : `${message} ${submissionDurabilityCopy()} Puoi ritentare con lo stesso identificativo.`;
+        persistDraft({ immediate: true });
+        lockEditing();
+        renderWorkflowJourney();
+        updateChangeSummary();
+        renderValidationState({ focus: true });
+        if (acknowledgedProcessingErrorId !== processingErrorId) {
+          acknowledgedProcessingErrorId = processingErrorId;
+          showToast("Applicazione automatica bloccata: puoi ritentare.", true);
         }
         return;
       }
@@ -3900,12 +4214,33 @@
         showToast("L'agente ha aggiornato i testi. Ricarica per vedere la revisione corrente.", true);
       }
     } catch (error) {
-      if (error?.name !== "AbortError" || !document.hidden) pollFailures += 1;
+      if (error?.name !== "AbortError" || !document.hidden) {
+        pollFailures += 1;
+        if (pollFailures >= 3) {
+          connectionState = "offline";
+          submissionError = `Connessione al server persa. ${draftDurabilityCopy()}`;
+          renderWorkflowJourney();
+          updateChangeSummary();
+          renderValidationState();
+        } else {
+          connectionState = "degraded";
+        }
+      }
     } finally {
       pollAbortController = null;
       pollInFlight = false;
       schedulePoll();
     }
+  }
+
+  function retryConnection() {
+    pollFailures = 0;
+    connectionState = "connecting";
+    if (submissionError.startsWith("Connessione al server persa.")) submissionError = "";
+    renderWorkflowJourney();
+    updateChangeSummary();
+    renderValidationState();
+    schedulePoll(0);
   }
 
   function clearPendingSelection({ focus = true } = {}) {
@@ -4081,7 +4416,15 @@
         : model.workflow_state === "testi_approvati"
           ? "Questo è il secondo consenso e autorizza la produzione."
           : "Questo è il primo consenso e riguarda profilo, sequenza e testi.";
-      elements.approvalSummary.textContent = `Hai visualizzato ${viewedSlideIds.size} di ${draftSlides.length} slide. ${logoSummary}. Enfasi applicate: ${metrics.bold} ${metrics.bold === 1 ? "grassetto" : "grassetti"}, ${metrics.italic} ${metrics.italic === 1 ? "corsivo" : "corsivi"}, ${metrics.underline} ${metrics.underline === 1 ? "sottolineatura" : "sottolineature"}, ${metrics.accent} ${metrics.accent === 1 ? "evidenziazione" : "evidenziazioni"}. ${densitySummary} ${advisorySummary} ${scopeSummary}`;
+      const unseenProof = unseenCanonicalProofSlideIds();
+      const proofNotice = unseenProof.length
+        ? ` Non hai ancora visto ${unseenProof.length} slide campione canoniche. Puoi comunque confermare dopo averne preso atto.`
+        : "";
+      elements.approvalSummary.textContent = `Hai visualizzato ${viewedSlideIds.size} di ${draftSlides.length} slide. ${logoSummary}. Enfasi applicate: ${metrics.bold} ${metrics.bold === 1 ? "grassetto" : "grassetti"}, ${metrics.italic} ${metrics.italic === 1 ? "corsivo" : "corsivi"}, ${metrics.underline} ${metrics.underline === 1 ? "sottolineatura" : "sottolineature"}, ${metrics.accent} ${metrics.accent === 1 ? "evidenziazione" : "evidenziazioni"}. ${densitySummary} ${advisorySummary} ${scopeSummary}${proofNotice}`;
+      if (elements.proofAcknowledgmentWrap && elements.proofAcknowledgment) {
+        elements.proofAcknowledgmentWrap.hidden = unseenProof.length === 0;
+        elements.proofAcknowledgment.checked = false;
+      }
     }
     elements.approvalDialog?.showModal();
   });
@@ -4100,10 +4443,23 @@
       updateApprovalCopy();
       return;
     }
+    if (unseenCanonicalProofSlideIds().length && !elements.proofAcknowledgment?.checked) {
+      if (elements.proofAcknowledgmentWrap) elements.proofAcknowledgmentWrap.hidden = false;
+      showToast("Prendi atto delle slide campione non ancora viste prima di confermare.", true);
+      elements.proofAcknowledgment?.focus();
+      return;
+    }
     elements.approvalDialog?.close();
     submit("approve");
   });
   elements.retrySubmitButton?.addEventListener("click", () => sendPendingSubmission());
+  elements.discardPendingButton?.addEventListener("click", () => {
+    if (!isPendingSubmission(pendingSubmission)) return;
+    preservePendingSubmission("retry-abandoned-by-reviewer");
+    clearPendingSubmission({ keepError: false });
+    showToast("Retry abbandonato. La copia di recupero resta disponibile; ora puoi modificare e inviare un nuovo batch.");
+  });
+  elements.retryConnectionButton?.addEventListener("click", retryConnection);
   elements.exportRecoveryButton?.addEventListener("click", exportRecoverySubmissions);
   elements.saveComment?.addEventListener("click", (event) => {
     event.preventDefault();
@@ -4197,8 +4553,5 @@
     .catch(() => undefined)
     .then(() => loadSession())
     .then(() => schedulePoll(0))
-    .catch((error) => {
-      elements.loading?.replaceChildren(create("p", "", error.message || "Impossibile aprire l'editor."));
-      showToast(error.message || "Impossibile aprire l'editor", true);
-    });
+    .catch((error) => renderLoadError(error));
 })();

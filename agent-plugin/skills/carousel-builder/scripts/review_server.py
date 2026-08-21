@@ -68,7 +68,7 @@ from manifest_contract import (  # noqa: E402
 
 MAX_BODY_BYTES = 1_000_000
 MAX_COMMENTS = 200
-EDITOR_VERSION = "2.13.2"
+EDITOR_VERSION = "2.14.2"
 RENDER_CONTRACT = "approved-preview-dom-v2"
 EMPHASIS_RANGE_SUFFIX = "_ranges"
 TYPOGRAPHY_DEFAULTS = {
@@ -132,7 +132,7 @@ PALETTE_COLOR_FIELDS = (
 VISUAL_STYLE_SYSTEMS = {
     "editorial-frame": "Editoriale",
     "editorial-halftone": "Geometrico",
-    "corporate-modular": "Istituzionale",
+    "corporate-modular": "Frame",
 }
 VISUAL_STYLE_ALTERNATES = {
     "editorial-frame": "corporate-modular",
@@ -170,6 +170,36 @@ def return_url_for_thread(thread_id: str | None) -> str | None:
     if not THREAD_ID_RE.fullmatch(normalized):
         raise ValueError("return-thread-id non valido")
     return f"codex://threads/{normalized}"
+
+
+def resolve_return_url(
+    explicit_thread_id: str | None,
+    *,
+    environ: dict[str, str] | None = None,
+) -> str | None:
+    """Resolve a safe Codex handoff and fail closed inside Codex Desktop."""
+    environment = os.environ if environ is None else environ
+    explicit_url = return_url_for_thread(explicit_thread_id)
+    environment_thread_id = environment.get("CODEX_THREAD_ID")
+    environment_url = None
+    if environment_thread_id:
+        try:
+            environment_url = return_url_for_thread(environment_thread_id)
+        except ValueError:
+            if explicit_url is None:
+                raise ValueError("CODEX_THREAD_ID non valido") from None
+
+    originator = environment.get("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "")
+    codex_desktop = originator.strip().casefold() == "codex desktop"
+    if codex_desktop and explicit_url and environment_url and explicit_url != environment_url:
+        raise ValueError("return-thread-id non coincide con il task Codex corrente")
+
+    return_url = explicit_url or environment_url
+    if codex_desktop and return_url is None:
+        raise ValueError(
+            "Codex Desktop richiede CODEX_THREAD_ID o --return-thread-id per l’handoff"
+        )
+    return return_url
 
 
 def valid_return_url(value: object) -> str | None:
@@ -358,6 +388,123 @@ def feedback_event(feedback_path: Path, feedback: dict) -> dict:
     }
 
 
+def set_approval_processing_error(
+    *,
+    session_dir: Path,
+    manifest_path: Path,
+    feedback_id: str,
+    message: str | None,
+) -> None:
+    """Persist an auto-apply failure so the browser can stop waiting and retry."""
+    state_path = session_dir / "session-state.json"
+    transaction_lock = InterprocessLock(session_dir / ".review-transaction.lock")
+    with transaction_lock:
+        if not path_entry_exists(state_path):
+            return
+        state = read_private_json(state_path)
+        validate_state_manifest(state, manifest_path)
+        if state.get("last_feedback_id") != feedback_id:
+            return
+        if message is None:
+            state.pop("approval_processing_error", None)
+        else:
+            state["approval_processing_error"] = {
+                "feedback_id": feedback_id,
+                "message": str(message)[:1_000],
+                "recorded_at": now_iso(),
+            }
+            state["approval_processing_status"] = {
+                "feedback_id": feedback_id,
+                "status": "error",
+                "message": str(message)[:1_000],
+                "recorded_at": now_iso(),
+            }
+        atomic_write_json(state_path, state)
+
+
+def set_approval_processing_status(
+    *,
+    session_dir: Path,
+    manifest_path: Path,
+    feedback_id: str,
+    status: str,
+    action: str | None = None,
+    message: str | None = None,
+) -> dict:
+    """Persist and verify the outcome of processing separately from apply.
+
+    A successful apply receipt is not enough to claim that processing finished:
+    the session may have moved on to another feedback batch, or another
+    process may hold the transaction lock.  Every caller therefore gets a
+    verified persisted state or an exception.
+    """
+    if status not in {"applied", "processed", "approval_blocked", "error"}:
+        raise ValueError(f"Stato di processing non valido: {status}")
+    state_path = session_dir / "session-state.json"
+    transaction_lock = InterprocessLock(session_dir / ".review-transaction.lock")
+    with transaction_lock:
+        if not path_entry_exists(state_path):
+            raise ValueError("session-state.json manca durante la persistenza del processing")
+        state = read_private_json(state_path)
+        validate_state_manifest(state, manifest_path)
+        if state.get("last_feedback_id") != feedback_id:
+            raise ValueError(
+                "Lo stato della sessione è cambiato prima della persistenza del processing"
+            )
+        value = {
+            "feedback_id": feedback_id,
+            "status": status,
+            "recorded_at": now_iso(),
+        }
+        if action is not None:
+            value["action"] = action
+        if message:
+            value["message"] = str(message)[:1_000]
+        state["approval_processing_status"] = value
+        if status == "processed":
+            state["processed_feedback_id"] = feedback_id
+            if action is not None:
+                state["processed_feedback_action"] = action
+            state["processed_at"] = value["recorded_at"]
+            state.pop("approval_processing_error", None)
+        elif status in {"approval_blocked", "error"}:
+            if status == "error":
+                state["approval_processing_error"] = {
+                    "feedback_id": feedback_id,
+                    "message": str(message or "Elaborazione fallita")[:1_000],
+                    "recorded_at": value["recorded_at"],
+                }
+            else:
+                state.pop("approval_processing_error", None)
+            if state.get("processed_feedback_id") == feedback_id:
+                state.pop("processed_feedback_id", None)
+                state.pop("processed_feedback_action", None)
+                state.pop("processed_at", None)
+        atomic_write_json(state_path, state)
+        persisted = read_private_json(state_path)
+        validate_state_manifest(persisted, manifest_path)
+        if persisted.get("last_feedback_id") != feedback_id:
+            raise ValueError(
+                "Lo stato della sessione è cambiato durante la persistenza del processing"
+            )
+        if persisted.get("approval_processing_status") != value:
+            raise ValueError(
+                "approval_processing_status non è stato persistito integralmente"
+            )
+        if status == "processed" and (
+            persisted.get("processed_feedback_id") != feedback_id
+            or (action is not None and persisted.get("processed_feedback_action") != action)
+        ):
+            raise ValueError(
+                "processed_feedback_id non è stato persistito integralmente"
+            )
+        if status != "processed" and persisted.get("processed_feedback_id") == feedback_id:
+            raise ValueError(
+                "Lo stato processed precedente non è stato rimosso integralmente"
+            )
+        return persisted
+
+
 def emit_event(value: dict) -> bool:
     """Best-effort event transport; durable session files remain authoritative."""
     try:
@@ -377,6 +524,19 @@ def auto_process_approval(
     feedback_id = safe_feedback_id(event.get("feedback_id"))
     archive_path = feedback_archive_path(session_dir, feedback_id)
     try:
+        set_approval_processing_error(
+            session_dir=session_dir,
+            manifest_path=manifest_path,
+            feedback_id=feedback_id,
+            message=None,
+        )
+    except (OSError, TypeError, ValueError, LockUnavailableError) as exc:
+        return {
+            "event": "approval_processing_error",
+            "feedback_id": feedback_id,
+            "error": f"Impossibile preparare il retry dell'approvazione: {exc}",
+        }
+    try:
         completed = subprocess.run(
             [
                 sys.executable,
@@ -393,6 +553,15 @@ def auto_process_approval(
             timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
+        try:
+            set_approval_processing_error(
+                session_dir=session_dir,
+                manifest_path=manifest_path,
+                feedback_id=feedback_id,
+                message=str(exc),
+            )
+        except (OSError, TypeError, ValueError, LockUnavailableError):
+            pass
         return {
             "event": "approval_processing_error",
             "feedback_id": feedback_id,
@@ -411,19 +580,104 @@ def auto_process_approval(
             "status": "error",
             "error": "process_review.py non ha restituito un oggetto JSON",
         }
+    try:
+        set_approval_processing_error(
+            session_dir=session_dir,
+            manifest_path=manifest_path,
+            feedback_id=feedback_id,
+            message=(
+                str(result.get("error") or "Applicazione automatica non riuscita")
+                if result.get("status") == "error"
+                else None
+            ),
+        )
+    except (OSError, TypeError, ValueError, LockUnavailableError):
+        pass
     workflow = result.get("workflow") if isinstance(result.get("workflow"), dict) else {}
+    result_status = result.get("status")
+    processing_persisted = True
+    try:
+        if result_status == "approval_blocked":
+            persisted = set_approval_processing_status(
+                session_dir=session_dir,
+                manifest_path=manifest_path,
+                feedback_id=feedback_id,
+                status="approval_blocked",
+                action="approve",
+                message="L'approvazione è stata applicata ma il checkpoint non può avanzare",
+            )
+            if not isinstance(persisted, dict):
+                raise ValueError("La persistenza dell'esito non è verificabile")
+        elif result_status in {"advanced", "already_processed", "processed"}:
+            persisted = set_approval_processing_status(
+                session_dir=session_dir,
+                manifest_path=manifest_path,
+                feedback_id=feedback_id,
+                status="processed",
+                action="approve",
+            )
+            if not isinstance(persisted, dict):
+                raise ValueError("La persistenza dell'esito non è verificabile")
+    except (OSError, TypeError, ValueError, LockUnavailableError) as exc:
+        processing_persisted = False
+        try:
+            set_approval_processing_error(
+                session_dir=session_dir,
+                manifest_path=manifest_path,
+                feedback_id=feedback_id,
+                message=f"Persistenza dell'esito non riuscita: {exc}",
+            )
+        except (OSError, TypeError, ValueError, LockUnavailableError):
+            pass
+        return {
+            "event": "approval_processing_error",
+            "feedback_id": feedback_id,
+            "status": result_status or "error",
+            "error": f"Persistenza dell'esito non riuscita: {exc}",
+        }
     return {
         "event": (
             "approval_processed"
-            if result.get("status") != "error"
+            if processing_persisted
+            and result_status in {"advanced", "already_processed", "processed"}
+            else "approval_blocked"
+            if result_status == "approval_blocked"
             else "approval_processing_error"
         ),
         "feedback_id": feedback_id,
-        "status": result.get("status", "error"),
+        "status": result_status or "error",
+        "applied_feedback_id": workflow.get("applied_feedback_id"),
+        "processed_feedback_id": (
+            feedback_id
+            if result_status in {"advanced", "already_processed", "processed"}
+            else None
+        ),
         "workflow_state": workflow.get("workflow_state"),
         "revision": workflow.get("revision"),
         **({"error": result.get("error")} if result.get("error") else {}),
     }
+
+
+def auto_process_approval_serialized(
+    *,
+    submit_lock,
+    manifest_path: Path,
+    session_dir: Path,
+    event: dict,
+) -> dict:
+    """Keep status polling from racing the approval transaction.
+
+    The HTTP response is sent before automatic processing starts, so the
+    browser can poll immediately.  Session reads and processing must share the
+    same in-process lock; otherwise a non-blocking filesystem lock can lose the
+    race and leave the durable batch waiting without a processing outcome.
+    """
+    with submit_lock:
+        return auto_process_approval(
+            manifest_path=manifest_path,
+            session_dir=session_dir,
+            event=event,
+        )
 
 
 def commit_feedback(
@@ -467,6 +721,11 @@ def commit_feedback(
     atomic_write_json(feedback_path, feedback)
     next_state = dict(current_state)
     next_state.update(state_patch)
+    next_state.pop("approval_processing_error", None)
+    next_state.pop("approval_processing_status", None)
+    next_state.pop("processed_feedback_id", None)
+    next_state.pop("processed_feedback_action", None)
+    next_state.pop("processed_at", None)
     atomic_write_json(state_path, next_state)
     return feedback_event(feedback_path, feedback)
 
@@ -548,6 +807,11 @@ def recover_feedback_commit(
     atomic_write_json(feedback_path, feedback)
     next_state = dict(current_state)
     next_state.update(state_patch)
+    next_state.pop("approval_processing_error", None)
+    next_state.pop("approval_processing_status", None)
+    next_state.pop("processed_feedback_id", None)
+    next_state.pop("processed_feedback_action", None)
+    next_state.pop("processed_at", None)
     atomic_write_json(state_path, next_state)
     return feedback_event(feedback_path, feedback)
 
@@ -1409,7 +1673,7 @@ def manifest_model(
         and proof.get("render_fingerprint") == model["render_fingerprint"]
         and contract["proof"]["slide_ids"] == contract["proof"]["required_slide_ids"]
         and contract["proof"]["browser"] is not None
-        and contract["production"]["mode"] in {"renderer", "adapter"}
+        and contract["production"]["mode"] == "renderer"
         and contract["production"]["producer"] == RENDER_CONTRACT
         and contract["production"]["selected_style_supported"]
     )
@@ -1561,6 +1825,21 @@ def validate_feedback(
             }
         )
 
+    overall_note = text(
+        payload.get("overall_note"), field="overall_note", limit=10_000
+    )
+    extra_pending_notes = any(
+        bool(payload.get(key))
+        for key in ("notes", "pending_notes", "review_notes", "note")
+    )
+    if action == "approve" and (
+        normalized_comments or overall_note.strip() or extra_pending_notes
+    ):
+        raise ValueError(
+            "Un'approvazione non può contenere commenti o note pendenti; "
+            "invia prima una correzione"
+        )
+
     visual_style_system = None
     for key in ("visual_style_system", "selected_style_system", "style_system"):
         if key in payload:
@@ -1688,14 +1967,9 @@ def validate_feedback(
                 payload.get("proof_browser"), required=True
             )
             production = model.get("production", {})
-            allowed_modes = (
-                {"renderer"}
-                if approval_scope == COMBINED_APPROVAL_SCOPE
-                else {"renderer", "adapter"}
-            )
-            if production.get("mode") not in allowed_modes:
+            if production.get("mode") != "renderer":
                 raise ValueError(
-                    "La prova visuale può essere approvata solo con un renderer o adapter"
+                    "La prova visuale del local-editor richiede production.mode=renderer"
                 )
             if production.get("producer") != RENDER_CONTRACT:
                 raise ValueError(
@@ -1720,9 +1994,7 @@ def validate_feedback(
         "base_revision": base_revision,
         "slides": normalized_slides,
         "comments": normalized_comments,
-        "overall_note": text(
-            payload.get("overall_note"), field="overall_note", limit=10_000
-        ),
+        "overall_note": overall_note,
         "logo_mode": logo_mode,
         "cover_mode": cover_mode,
         "warnings": warnings,
@@ -1752,7 +2024,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        return_url = return_url_for_thread(args.return_thread_id)
+        return_url = resolve_return_url(args.return_thread_id)
         manifest_path = absolute_input_path(args.manifest)
         session_dir = absolute_input_path(args.session_dir)
         reject_symlink_path(manifest_path, field="Il manifest")
@@ -1914,12 +2186,25 @@ def main() -> int:
                 )
                 last_id = current_state.get("last_feedback_id")
                 applied_id = current_state.get("applied_feedback_id")
+                processing_error = current_state.get("approval_processing_error")
+                if not (
+                    last_id
+                    and last_id != applied_id
+                    and isinstance(processing_error, dict)
+                    and processing_error.get("feedback_id") == last_id
+                ):
+                    processing_error = None
                 return {
                     **value,
                     "last_feedback_id": last_id,
                     "last_action": current_state.get("last_action"),
                     "applied_feedback_id": applied_id,
+                    "processed_feedback_id": current_state.get("processed_feedback_id"),
                     "feedback_pending": bool(last_id and last_id != applied_id),
+                    "approval_processing_error": processing_error,
+                    "approval_processing_status": current_state.get(
+                        "approval_processing_status"
+                    ),
                 }
             finally:
                 for lock in reversed(locks):
@@ -2017,6 +2302,10 @@ def main() -> int:
                 "/assets/vincos-lockup-white.svg": (
                     assets_dir / "vincos-lockup-white.svg",
                     "image/svg+xml; charset=utf-8",
+                ),
+                "/assets/fonts/Orbitron-Variable.ttf": (
+                    assets_dir / "fonts" / "Orbitron-Variable.ttf",
+                    "font/ttf",
                 ),
             }
             static_asset = static_assets.get(parsed.path)
@@ -2303,7 +2592,8 @@ def main() -> int:
             self.send_json(HTTPStatus.OK, event)
             if event.get("action") == "approve":
                 emit_event(
-                    auto_process_approval(
+                    auto_process_approval_serialized(
+                        submit_lock=submit_lock,
                         manifest_path=manifest_path,
                         session_dir=session_dir,
                         event=event,
@@ -2331,6 +2621,8 @@ def main() -> int:
             "url": url,
             "session_dir": str(session_dir),
             "manifest": str(manifest_path),
+            "return_url": return_url,
+            "handoff_ready": return_url is not None,
         }
     )
     if recovered_event is not None:

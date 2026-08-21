@@ -158,8 +158,8 @@ Verificare:
 - grassetti, corsivi, sottolineature ed evidenziatori approvati, senza corsivi sintetici o sovrapposizioni;
 - evidenziatore adattato separatamente a ogni fondo: accento originale quando leggibile, variante derivata scura con testo chiaro oppure chiara con testo scuro, sempre con contrasto del testo almeno 4.5:1;
 - sistema visivo risolto, varianti controllate e struttura HTML/CSS/SVG coerenti;
-- firma strutturale obbligatoria presente sulle card interne e sulla chiusura e geometricamente coerente con la prova approvata: cornice completa per `editorial-frame`, costellazione di cinque corpi per `editorial-halftone`, indice modulare e guida orizzontale per `corporate-modular`;
-- copertina priva degli elementi strutturali dei tre sistemi, così immagine, titolo, numerazione e firma non entrano in conflitto;
+- firma strutturale obbligatoria presente sulle card interne e sulla chiusura e geometricamente coerente con la prova approvata: cornice completa per `editorial-frame`, costellazione di cinque corpi per `editorial-halftone`, foglio disassato su campo scuro, campitura d’accento e attacco evidenziato per `corporate-modular`, con eventuale regola verticale;
+- copertina tipografica coerente con il sistema visivo selezionato; la copertina con immagine resta priva degli elementi strutturali, così immagine, titolo, numerazione e firma non entrano in conflitto;
 - eventuale immagine di copertina confinata nella colonna verticale destra, con titolo e sottotitolo nella colonna sinistra, senza sovrapposizione, trasparenza o gradiente compensativo;
 - dimensioni e rapporto d'aspetto richiesti;
 - sfondo esteso esattamente da `x=0`, `y=0` fino a 1080×1350, senza strisce o margini introdotti dal renderer;
@@ -198,6 +198,8 @@ Prima della consegna verificare:
 - in modalità `renderer` o `adapter`, presenza di `production.supported_style_systems` con il sistema selezionato; `proof.style_system_verified` resta diagnostico;
 - nel percorso `local-editor`, esito positivo del contratto `approved-preview-dom-v2`, prova visuale ancora approvata e legata agli asset correnti, e parità esatta di revisione, contenuto, geometria e pixel tra anteprima e produzione prima e dopo la cattura;
 - assenza di file incompleti o duplicati presentati come finali.
+
+Nel percorso `local-editor`, `advance_workflow.py` non si limita a estensione, presenza e digest: decodifica struttura, CRC, scanline e filtri di ogni PNG, verifica le dimensioni effettive e controlla la contact sheet alla geometria prevista. Per il PDF segue `startxref`, tabella xref, `trailer.Root`, Catalog e albero Pages; richiede una pagina per slide e `MediaBox` 810×1012,5 pt, equivalente al raster 1440×1800 px usato dall'export. File troncati, strutture non collegate al Root, dimensioni errate e input oltre i limiti dichiarati bloccano `rendering -> qa` anche se il digest attestato coincide.
 
 Se fallisce un controllo tecnico, strutturale, di sicurezza, integrità o workflow, conservare gli output validi, mantenere lo stato precedente e offrire ripetizione o fallback. Non avanzare a `consegnato`. Un avviso visuale, editoriale, tipografico o di revisione umana non impedisce invece la consegna.
 
