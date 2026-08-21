@@ -1,0 +1,298 @@
+{
+  "schema_version": "1.4",
+  "source_type": "article",
+  "sequence_mode": "narrative",
+  "visual_style_system": "corporate-modular",
+  "logo_mode": "hidden",
+  "source_url": "https://vincos.it/2026/03/06/comunicazione-e-democrazia-boccia-artieri/",
+  "target_channels": [
+    "instagram_feed",
+    "linkedin_document"
+  ],
+  "channel_variants": [],
+  "workflow_state": "consegnato",
+  "revision": 3,
+  "workflow_receipts": [
+    {
+      "from": "bozza",
+      "to": "testi_approvati",
+      "revision": 2,
+      "render_fingerprint": "3a8206931af2544445ee80c3ed6720489ecc7fe603420cf4cbfe77dfab5bba16",
+      "evidence_sha256": "0edca037c658dca4aff2f72bf54dc3e43cf3c64edfe1933fcb331a24a8c5c56c",
+      "advanced_at": "2026-08-21T07:54:32.550857+00:00"
+    },
+    {
+      "from": "testi_approvati",
+      "to": "prova_visuale_approvata",
+      "revision": 3,
+      "render_fingerprint": "3a8206931af2544445ee80c3ed6720489ecc7fe603420cf4cbfe77dfab5bba16",
+      "evidence_sha256": "bb338cd9e0684cb48653f8c78fce3086e21e9249332ee1bc4690a198b28af16a",
+      "advanced_at": "2026-08-21T07:56:03.268646+00:00"
+    },
+    {
+      "from": "prova_visuale_approvata",
+      "to": "rendering",
+      "revision": 3,
+      "render_fingerprint": "3a8206931af2544445ee80c3ed6720489ecc7fe603420cf4cbfe77dfab5bba16",
+      "evidence_sha256": "cb8b831cef25cf8201afb9fa0f129d81df14e4fae2670fa0234fb1b9acbb9fc5",
+      "advanced_at": "2026-08-21T07:56:11.574523+00:00"
+    },
+    {
+      "from": "rendering",
+      "to": "qa",
+      "revision": 3,
+      "render_fingerprint": "3a8206931af2544445ee80c3ed6720489ecc7fe603420cf4cbfe77dfab5bba16",
+      "evidence_sha256": "cbd44a6a3c5bffeeb7f102a75680783def0c5a0aad6901039e152e6b482d964a",
+      "advanced_at": "2026-08-21T07:57:14.848748+00:00"
+    },
+    {
+      "from": "qa",
+      "to": "consegnato",
+      "revision": 3,
+      "render_fingerprint": "3a8206931af2544445ee80c3ed6720489ecc7fe603420cf4cbfe77dfab5bba16",
+      "evidence_sha256": "a5c82608a549610dfadf5aa99aa32a32e07d27162ef2a7fc5bc313540ff1f791",
+      "advanced_at": "2026-08-21T07:57:14.855923+00:00"
+    }
+  ],
+  "production": {
+    "mode": "renderer",
+    "producer": "approved-preview-dom-v2",
+    "supported_style_systems": [
+      "editorial-frame",
+      "corporate-modular"
+    ],
+    "expected_outputs": [
+      "pdf",
+      "png"
+    ]
+  },
+  "proof": {
+    "slide_ids": [
+      "cover",
+      "item-4",
+      "outro"
+    ],
+    "style_system_verified": false,
+    "approved": true,
+    "browser": {
+      "engine": "chromium",
+      "major": 151
+    },
+    "render_fingerprint": "3a8206931af2544445ee80c3ed6720489ecc7fe603420cf4cbfe77dfab5bba16"
+  },
+  "format": {
+    "ratio": "4:5",
+    "master_width": 1080,
+    "master_height": 1350,
+    "width": 1440,
+    "height": 1800,
+    "preview_width": 480,
+    "preview_height": 600
+  },
+  "typography": {
+    "cover_px": 112,
+    "cover_subtitle_px": 56,
+    "section_title_px": 72,
+    "body_px": 64,
+    "metadata_px": 26,
+    "cover_weight": 500,
+    "cover_subtitle_weight": 500,
+    "section_title_weight": 800,
+    "body_weight": 620,
+    "body_line_height": 1.12,
+    "sentence_gap_em": 0.6,
+    "cover_subtitle_line_height": 1.08,
+    "body_tracking_em": -0.025,
+    "min_auto_scale": 0.92,
+    "overflow_policy": "error_and_copy_revision"
+  },
+  "cover_title": "La democrazia nell'era della post-affidabilità",
+  "cover_subtitle": "test",
+  "cover_title_bold": [
+    "post-affidabilità"
+  ],
+  "cover_title_italic": [],
+  "cover_title_underline": [],
+  "cover_title_accent": [],
+  "cover_image": "",
+  "cover_image_position": "50% 50%",
+  "cover_alt_text": "Copertina tipografica sul rapporto tra fiducia, comunicazione, democrazia e intelligenza artificiale.",
+  "cover_visual_concepts": [],
+  "cover_visual_metaphor": "",
+  "cover_visual_prompt": "",
+  "cover_mode": "typographic",
+  "brand": {
+    "profile_type": "carousel-brand",
+    "schema_version": "1.1",
+    "name": "Editorial Carousel",
+    "website": "",
+    "signature": "",
+    "tagline": "",
+    "logos": {},
+    "fonts": {
+      "display": {
+        "family": "Arial",
+        "source": "system"
+      },
+      "body": {
+        "family": "Arial",
+        "source": "system"
+      },
+      "emphasis_italic": {
+        "family": "Arial Italic",
+        "source": "system"
+      }
+    },
+    "palette": {
+      "surface_mode": "alternating",
+      "background_light": "#F8F7F4",
+      "background_dark": "#2D2E2F",
+      "text_on_light": "#2D2E2F",
+      "text_on_dark": "#FFFFFF",
+      "accent": "#6B3F5D"
+    },
+    "visual_direction": {
+      "mode": "editorial-geometric",
+      "description": "Forme pulite e metafore essenziali, con slide interne tipografiche.",
+      "references": [],
+      "avoid": [],
+      "internal_slides": "clean_typographic"
+    },
+    "visual_signature": {
+      "style_system": "editorial-frame"
+    },
+    "outro": {
+      "enabled": true,
+      "goal": "comment",
+      "copy_mode": "generate_from_source",
+      "eyebrow": "",
+      "fixed_title": "",
+      "fixed_body": ""
+    }
+  },
+  "items": [
+    {
+      "id": "item-1",
+      "layout": "editorial",
+      "title": "",
+      "title_bold": [],
+      "title_italic": [],
+      "title_underline": [],
+      "title_accent": [],
+      "summary": "Non viviamo soltanto nell'era della post-verità.\nLa crisi più profonda è la perdita di fiducia in istituzioni, scienza e media.\nSenza fiducia, ogni discorso nasce già polarizzato.",
+      "summary_bold": [
+        "perdita di fiducia"
+      ],
+      "summary_italic": [],
+      "summary_underline": [],
+      "summary_accent": [],
+      "alt_text": "La crisi della fiducia verso istituzioni, scienza e media porta i discorsi pubblici a nascere già polarizzati."
+    },
+    {
+      "id": "item-2",
+      "layout": "editorial",
+      "title": "",
+      "title_bold": [],
+      "title_italic": [],
+      "title_underline": [],
+      "title_accent": [],
+      "summary": "La scomparsa dei corpi intermedi ha favorito leaderismo e disintermediazione.\nI social accelerano il processo premiando contenuti emotivi e polarizzanti.\nI politici diventano influencer e gli elettori fandom e anti-fandom.",
+      "summary_bold": [
+        "corpi intermedi",
+        "contenuti emotivi e polarizzanti"
+      ],
+      "summary_italic": [],
+      "summary_underline": [],
+      "summary_accent": [],
+      "alt_text": "La scomparsa dei corpi intermedi e l'accelerazione dei social trasformano politici ed elettori in protagonisti di dinamiche da fandom."
+    },
+    {
+      "id": "item-3",
+      "layout": "editorial",
+      "title": "",
+      "title_bold": [],
+      "title_italic": [],
+      "title_underline": [],
+      "title_accent": [],
+      "summary": "La manipolazione non è sempre spettacolare.\nPuò essere quotidiana, continua e a bassa intensità.\nErode lentamente la nostra fiducia in ciò che vediamo.",
+      "summary_bold": [
+        "a bassa intensità"
+      ],
+      "summary_italic": [],
+      "summary_underline": [],
+      "summary_accent": [],
+      "alt_text": "Una manipolazione quotidiana e continua può erodere lentamente la fiducia in ciò che vediamo."
+    },
+    {
+      "id": "item-4",
+      "layout": "editorial",
+      "title": "",
+      "title_bold": [],
+      "title_italic": [],
+      "title_underline": [],
+      "title_accent": [],
+      "summary": "La Fringe Democracy nasce ai margini, in spazi meno regolamentati.\nDa lì possono emergere complottismo e posizioni anti-mainstream, ma anche movimenti come ecologismo e femminismo.\nLa sfida è integrare gli esclusi senza legittimare la disinformazione.",
+      "summary_bold": [
+        "Fringe Democracy",
+        "integrare gli esclusi"
+      ],
+      "summary_italic": [],
+      "summary_underline": [],
+      "summary_accent": [],
+      "alt_text": "Gli spazi marginali della comunicazione possono alimentare disinformazione, ma anche movimenti sociali; la sfida è includere senza legittimare la disinformazione."
+    },
+    {
+      "id": "item-5",
+      "layout": "editorial",
+      "title": "",
+      "title_bold": [],
+      "title_italic": [],
+      "title_underline": [],
+      "title_accent": [],
+      "summary": "L'IA non è un oracolo della verità.\nPuò diventare un partner comunicativo, ma richiede pensiero critico ed educazione.\nResta aperta la domanda sul potere degli algoritmi nel dibattito pubblico.",
+      "summary_bold": [
+        "partner comunicativo",
+        "pensiero critico"
+      ],
+      "summary_italic": [],
+      "summary_underline": [],
+      "summary_accent": [],
+      "alt_text": "L'intelligenza artificiale può essere un partner comunicativo, ma richiede pensiero critico e solleva domande sul potere degli algoritmi."
+    }
+  ],
+  "outro": {
+    "enabled": true,
+    "eyebrow": "",
+    "title": "Guarda l'intervista completa",
+    "body": "Giovanni Boccia Artieri racconta come stanno cambiando comunicazione, democrazia e IA.",
+    "goal": "comment",
+    "alt_text": "Chiusura che invita a guardare l'intervista completa su comunicazione, democrazia e intelligenza artificiale.",
+    "summary_accent": [
+      "Giovanni Boccia Artieri "
+    ]
+  },
+  "accessibility": {
+    "reading_order": [
+      "cover",
+      "item-1",
+      "item-2",
+      "item-3",
+      "item-4",
+      "item-5",
+      "outro"
+    ],
+    "transcript": "La democrazia nell'era della post-affidabilità.\nNon viviamo soltanto nell'era della post-verità. La crisi più profonda è la perdita di fiducia in istituzioni, scienza e media. Senza fiducia, ogni discorso nasce già polarizzato.\nLa scomparsa dei corpi intermedi ha favorito leaderismo e disintermediazione. I social accelerano il processo premiando contenuti emotivi e polarizzanti. I politici diventano influencer e gli elettori fandom e anti-fandom.\nLa manipolazione non è sempre spettacolare. Può essere quotidiana, continua e a bassa intensità. Erode lentamente la nostra fiducia in ciò che vediamo.\nLa Fringe Democracy nasce ai margini, in spazi meno regolamentati. Da lì possono emergere complottismo e posizioni anti-mainstream, ma anche movimenti come ecologismo e femminismo. La sfida è integrare gli esclusi senza legittimare la disinformazione.\nL'IA non è un oracolo della verità. Può diventare un partner comunicativo, ma richiede pensiero critico ed educazione. Resta aperta la domanda sul potere degli algoritmi nel dibattito pubblico.\nGuarda l'intervista completa. Giovanni Boccia Artieri racconta come stanno cambiando comunicazione, democrazia e IA."
+  },
+  "review": {
+    "mode": "visual",
+    "last_feedback_id": "36ad0d2f-9a6d-4c0a-963d-74fa0e71596d",
+    "last_action": "approve",
+    "last_feedback_sha256": "2792f569dac1d16895a1277ebecb5df01f19b1331c3f34a15a40da43f0f01a76",
+    "applied_manifest_revision": 3,
+    "approval_requested": true,
+    "comments_pending": 0,
+    "updated_at": "2026-08-21T07:56:03.260340+00:00",
+    "approval_stage": "visual_proof",
+    "visual_style_system": "corporate-modular"
+  }
+}
