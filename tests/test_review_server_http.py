@@ -102,7 +102,11 @@ class ReviewServerHTTPTest(unittest.TestCase):
             text=True,
         )
         self.addCleanup(self.stop)
-        ready = json.loads(self.process.stdout.readline())
+        ready_line = self.process.stdout.readline()
+        if not ready_line:
+            stderr = self.process.stderr.read() if self.process.stderr else ""
+            self.fail(f"review_server non si è avviato: {stderr}")
+        ready = json.loads(ready_line)
         self.url = ready["url"]
         parsed = urlparse(self.url)
         self.origin = f"http://127.0.0.1:{parsed.port}"
@@ -603,21 +607,19 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.assertEqual(status, 200, submitted)
         batch = json.loads(Path(submitted["archive_path"]).read_text(encoding="utf-8"))
         self.assertEqual(batch["approval_stage"], "profile_text")
-        applied = subprocess.run(
-            [
-                sys.executable,
-                str(SCRIPTS / "apply_review.py"),
-                str(self.manifest_path),
-                submitted["archive_path"],
-                "--session-dir",
-                str(self.session_dir),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        self.assertEqual(applied.returncode, 0, applied.stderr)
+        applied_model = None
+        for _ in range(200):
+            status, candidate = json_request(self.api("/api/session"))
+            if (
+                status == 200
+                and candidate["applied_feedback_id"] == submitted["feedback_id"]
+                and candidate["workflow_state"] == "testi_approvati"
+            ):
+                applied_model = candidate
+                break
+            self.assertIn(status, (200, 409), candidate)
+            time.sleep(0.1)
+        self.assertIsNotNone(applied_model)
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         self.assertFalse(manifest["proof"]["approved"])
         self.assertNotIn("render_fingerprint", manifest["proof"])

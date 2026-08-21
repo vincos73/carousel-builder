@@ -775,6 +775,29 @@ class AdvanceWorkflowTest(unittest.TestCase):
 
         self.assertEqual(victim.read_bytes(), b"external-content")
 
+    def test_artifact_hash_opens_the_descriptor_in_binary_mode(self) -> None:
+        artifact = self.workdir / "artifact.png"
+        payload = b"prefix\r\nsuffix\x1aafter-eof"
+        artifact.write_bytes(payload)
+        original_open = os.open
+        binary_flag = getattr(os, "O_BINARY", 0x8000)
+        captured_flags: list[int] = []
+
+        def binary_aware_open(path: Path, flags: int) -> int:
+            captured_flags.append(flags)
+            return original_open(path, flags & ~binary_flag)
+
+        with mock.patch.object(
+            advance_workflow.os, "O_BINARY", binary_flag, create=True
+        ), mock.patch.object(
+            advance_workflow.os, "open", side_effect=binary_aware_open
+        ):
+            digest = advance_workflow.sha256_regular_file(artifact)
+
+        self.assertEqual(digest, hashlib.sha256(payload).hexdigest())
+        self.assertTrue(captured_flags)
+        self.assertTrue(captured_flags[0] & binary_flag)
+
     @unittest.skipIf(
         os.name == "nt",
         "Windows impedisce già la sostituzione mentre l'artefatto è aperto",

@@ -963,7 +963,15 @@ def sha256_regular_file(path: Path) -> str:
     """Hash one stable, singly linked regular file without following symlinks."""
     if path.is_symlink():
         raise ValueError(f"L'artefatto non può essere un collegamento simbolico: {path}")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    # Windows' CRT defaults low-level descriptors to text mode unless
+    # ``O_BINARY`` is explicit. Text translation would make a digest depend on
+    # the platform (for example, CRLF bytes inside PNGs), so every artifact
+    # must be opened as an exact byte stream.
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_BINARY", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
