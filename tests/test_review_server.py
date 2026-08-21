@@ -517,15 +517,17 @@ class ManifestModelTest(unittest.TestCase):
                 session_dir / ".review-transaction.lock"
             )
             lock.acquire()
-            self.addCleanup(lock.release)
-            with self.assertRaises(review_server.LockUnavailableError):
-                review_server.set_approval_processing_status(
-                    session_dir=session_dir,
-                    manifest_path=manifest_path,
-                    feedback_id=feedback_id,
-                    status="processed",
-                    action="approve",
-                )
+            try:
+                with self.assertRaises(review_server.LockUnavailableError):
+                    review_server.set_approval_processing_status(
+                        session_dir=session_dir,
+                        manifest_path=manifest_path,
+                        feedback_id=feedback_id,
+                        status="processed",
+                        action="approve",
+                    )
+            finally:
+                lock.release()
 
     def test_renderer_bundle_byte_changes_invalidate_fingerprint(self) -> None:
         manifest = base_manifest()

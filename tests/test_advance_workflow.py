@@ -780,12 +780,14 @@ class AdvanceWorkflowTest(unittest.TestCase):
         payload = b"prefix\r\nsuffix\x1aafter-eof"
         artifact.write_bytes(payload)
         original_open = os.open
-        binary_flag = getattr(os, "O_BINARY", 0x8000)
+        native_binary_flag = getattr(os, "O_BINARY", 0)
+        binary_flag = native_binary_flag or 0x8000
         captured_flags: list[int] = []
 
         def binary_aware_open(path: Path, flags: int) -> int:
             captured_flags.append(flags)
-            return original_open(path, flags & ~binary_flag)
+            forwarded_flags = flags if native_binary_flag else flags & ~binary_flag
+            return original_open(path, forwarded_flags)
 
         with mock.patch.object(
             advance_workflow.os, "O_BINARY", binary_flag, create=True
