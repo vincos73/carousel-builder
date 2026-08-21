@@ -1004,9 +1004,27 @@
     return visualProofOptions().find((option) => option?.id === selectedVisualSystem) || null;
   }
 
+  function canonicalProofSlideIds(slides) {
+    const items = Array.isArray(slides)
+      ? slides.filter((slide) => slide?.kind === "item" && typeof slide.id === "string")
+      : [];
+    if (!items.length) return [];
+    const density = (slide) => String(slide.title || "").trim().length + String(slide.summary || "").trim().length;
+    let densest = items[0];
+    for (const item of items.slice(1)) {
+      if (density(item) > density(densest)) densest = item;
+    }
+    return ["cover", densest.id, ...(slides.some((slide) => slide?.kind === "outro") ? ["outro"] : [])];
+  }
+
   function requiredProofSlideIds() {
-    const values = model?.proof?.required_slide_ids;
-    return Array.isArray(values) ? values.filter((id) => typeof id === "string") : [];
+    const supplied = model?.proof?.required_slide_ids;
+    const serverIds = Array.isArray(supplied) ? supplied.filter((id) => typeof id === "string") : [];
+    if (model?.workflow_state === "bozza" && model?.approval_checkpoint === "profile_text") {
+      const draftIds = canonicalProofSlideIds(draftSlides);
+      if (draftIds.length) return draftIds;
+    }
+    return serverIds;
   }
 
   function unseenCanonicalProofSlideIds() {
