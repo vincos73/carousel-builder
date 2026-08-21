@@ -433,17 +433,10 @@ test("browser reale: i due consensi restano distinti e la prova visiva è read-f
   assert.equal(approval.approval_scope, undefined);
   const sessionState = await readJsonWhen(
     path.join(sessionDirectory, "session-state.json"),
-    (value) => typeof value.last_feedback_path === "string" && value.last_feedback_path,
+    (value) => value.applied_feedback_id === approval.feedback_id,
     "Persistenza stato approvazione",
   );
-  const processed = spawnSync(process.env.PYTHON || "python3", [
-    path.join(ROOT, "scripts", "process_review.py"),
-    manifestPath,
-    sessionState.last_feedback_path,
-    "--session-dir",
-    sessionDirectory,
-  ], { cwd: ROOT, encoding: "utf8" });
-  assert.equal(processed.status, 0, processed.stderr || processed.stdout);
+  assert.equal(sessionState.applied_feedback_id, approval.feedback_id);
   await waitFor(
     client,
     page,
@@ -730,21 +723,16 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
 
   const sessionState = await readJsonWhen(
     path.join(sessionDirectory, "session-state.json"),
-    (value) => typeof value.last_feedback_path === "string" && value.last_feedback_path,
+    (value) => value.applied_feedback_id === approval.feedback_id,
     "Persistenza stato approvazione combinata",
   );
-  const processed = spawnSync(process.env.PYTHON || "python3", [
-    path.join(ROOT, "scripts", "process_review.py"),
+  assert.equal(sessionState.applied_feedback_id, approval.feedback_id);
+  const approvedManifest = await readJsonWhen(
     manifestPath,
-    sessionState.last_feedback_path,
-    "--session-dir",
-    sessionDirectory,
-  ], { cwd: ROOT, encoding: "utf8" });
-  assert.equal(processed.status, 0, processed.stderr || processed.stdout);
-  const processResult = JSON.parse(processed.stdout);
-  assert.equal(processResult.status, "advanced");
-  assert.equal(processResult.advanced.to, "prova_visuale_approvata");
-  const approvedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    (value) => value.workflow_state === "prova_visuale_approvata"
+      && value.proof?.approved === true,
+    "Completamento consenso combinato",
+  );
   assert.equal(approvedManifest.proof.approved, true);
   assert.deepEqual(approvedManifest.proof.browser, approval.proof_browser);
   const proofManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));

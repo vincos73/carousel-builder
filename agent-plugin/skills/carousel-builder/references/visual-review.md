@@ -15,7 +15,7 @@ python3 <skill>/scripts/review_server.py <manifest.json> --session-dir <session-
 ```
 
 4. Usare una sola superficie: preferire e riusare il browser interno; usare Chrome solo su richiesta o se quello interno non funziona. Con capacità locali, l'apertura dell'editor è obbligatoria. Controllare la proposta a 480 px prima di mostrarla.
-5. Mantenere il processo in ascolto in ogni checkpoint dell'editor. Non concludere il turno dopo l'apertura né chiedere «fatto». Confermare subito in chat ogni batch ricevuto. Con `--return-thread-id`, mostrare `Torna alla chat` dopo l'invio e negli stati successivi, usando solo `codex://threads/<thread-id>`. A ogni turno acquisire o riusare la tab e chiamare `markHandoff()` prima del lavoro e prima di una possibile fine; reclamare una tab visibile con binding stale. Il ritorno avviene solo dopo il click dell'utente, mai automaticamente.
+5. Mantenere il processo in ascolto in ogni checkpoint dell'editor. Non concludere il turno dopo l'apertura né chiedere «fatto». Confermare subito in chat ogni batch ricevuto. Il server applica automaticamente i batch `approve` attraverso `process_review.py`; i batch `feedback` restano in attesa dell’agente perché commenti e note richiedono interpretazione. Dopo la conferma HTTP l’editor deve mostrare uno stato statico di batch registrato e continuare il polling senza rotella. Con `--return-thread-id`, mostrare `Torna alla chat` dopo l'invio e negli stati successivi, usando solo `codex://threads/<thread-id>`. A ogni turno acquisire o riusare la tab e chiamare `markHandoff()` prima del lavoro e prima di una possibile fine; reclamare una tab visibile con binding stale. Il ritorno avviene solo dopo il click dell'utente, mai automaticamente.
    Dopo l'apertura attendere sul processo per intervalli fino a 50 secondi, riusando il suo identificativo. Ripetere finché arriva l'evento o l'utente interrompe; non inviare una risposta finale durante l'attesa.
 6. Attendere al massimo 50 secondi per volta. Senza output, leggere `session-state.json`: se `last_feedback_id` differisce da `applied_feedback_id`, usare `last_action` e `last_feedback_path` come segnale durevole. Per stati legacy usare `feedback.json`. Ripetere finché arriva un batch o l'utente interrompe.
 7. Usare l'output come notifica e `session-state.json` come fonte durevole. Se attesa e lettura dello stato non sono possibili, dichiararlo e usare la ripresa manuale in chat.
@@ -36,7 +36,7 @@ L'editor mostra tre passaggi persistenti: profilo e testi, prova visiva, produzi
 
 ## Ricezione e applicazione
 
-Quando il server segnala un batch, riprendere automaticamente il lavoro e leggere `archive_path`, oppure `last_feedback_path` dallo stato quando la notifica non è arrivata. Usare `<session-dir>/feedback.json` soltanto come alias compatibile con le sessioni precedenti. Prima di applicarlo controllare che:
+Quando il server segnala un batch, riprendere automaticamente il lavoro e leggere `archive_path`, oppure `last_feedback_path` dallo stato quando la notifica non è arrivata. Eseguire prima `carousel_status.py`: un batch `approve` può essere già applicato automaticamente e in quel caso si continua dal `next_action`; un batch `feedback` resta normalmente pendente. Usare `<session-dir>/feedback.json` soltanto come alias compatibile con le sessioni precedenti. Prima di applicare un batch ancora pendente controllare che:
 
 - `session-state.json` associ la cartella di sessione allo stesso manifest richiesto;
 - `base_revision` corrisponda alla revisione corrente del manifest;

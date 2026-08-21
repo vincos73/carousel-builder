@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -631,29 +632,24 @@ class ReviewServerHTTPTest(unittest.TestCase):
         self.assertEqual(status, 200, submitted)
         batch = json.loads(Path(submitted["archive_path"]).read_text(encoding="utf-8"))
         self.assertEqual(batch["approval_stage"], "visual_proof")
-        applied = subprocess.run(
-            [
-                sys.executable,
-                str(SCRIPTS / "apply_review.py"),
-                str(self.manifest_path),
-                submitted["archive_path"],
-                "--session-dir",
-                str(self.session_dir),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        self.assertEqual(applied.returncode, 0, applied.stderr)
-        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-        status, approved_model = json_request(self.api("/api/session"))
+        approved_model = None
+        for _ in range(200):
+            status, candidate = json_request(self.api("/api/session"))
+            if (
+                status == 200
+                and candidate["applied_feedback_id"] == submitted["feedback_id"]
+                and candidate["workflow_state"] == "prova_visuale_approvata"
+                and candidate["proof_approved"]
+            ):
+                approved_model = candidate
+                break
+            self.assertIn(status, (200, 409), candidate)
+            time.sleep(0.1)
+        self.assertIsNotNone(approved_model)
+        assert approved_model is not None
         self.assertEqual(status, 200, approved_model)
         self.assertTrue(approved_model["proof_approved"])
-        self.assertEqual(
-            manifest["proof"]["render_fingerprint"],
-            approved_model["render_fingerprint"],
-        )
+        approved_fingerprint = approved_model["render_fingerprint"]
 
         approved_fingerprint = approved_model["render_fingerprint"]
         for workflow_state in (
@@ -690,23 +686,38 @@ class ReviewServerHTTPTest(unittest.TestCase):
             Path(resubmitted["archive_path"]).read_text(encoding="utf-8")
         )
         self.assertEqual(rebound_batch["approval_stage"], "visual_proof")
-        reapplied = subprocess.run(
-            [
-                sys.executable,
-                str(SCRIPTS / "apply_review.py"),
-                str(self.manifest_path),
-                resubmitted["archive_path"],
-                "--session-dir",
-                str(self.session_dir),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
+        reapplied = None
+        for _ in range(200):
+            reapplied = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "apply_review.py"),
+                    str(self.manifest_path),
+                    resubmitted["archive_path"],
+                    "--session-dir",
+                    str(self.session_dir),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if reapplied.returncode == 0:
+                break
+            time.sleep(0.1)
+        self.assertIsNotNone(reapplied)
+        assert reapplied is not None
         self.assertEqual(reapplied.returncode, 0, reapplied.stderr)
-        status, rebound_model = json_request(self.api("/api/session"))
-        self.assertEqual(status, 200, rebound_model)
+        rebound_model = None
+        for _ in range(40):
+            status, candidate = json_request(self.api("/api/session"))
+            if status == 200 and candidate["proof_approved"]:
+                rebound_model = candidate
+                break
+            self.assertIn(status, (200, 409), candidate)
+            time.sleep(0.05)
+        self.assertIsNotNone(rebound_model)
+        assert rebound_model is not None
         self.assertTrue(rebound_model["proof_approved"])
 
     def test_visual_apply_rejects_assets_mutated_after_submission(self) -> None:

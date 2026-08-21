@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import stat
+import subprocess
 import sys
 import threading
 from datetime import datetime, timezone
@@ -67,7 +68,7 @@ from manifest_contract import (  # noqa: E402
 
 MAX_BODY_BYTES = 1_000_000
 MAX_COMMENTS = 200
-EDITOR_VERSION = "2.13.1"
+EDITOR_VERSION = "2.13.2"
 RENDER_CONTRACT = "approved-preview-dom-v2"
 EMPHASIS_RANGE_SUFFIX = "_ranges"
 TYPOGRAPHY_DEFAULTS = {
@@ -364,6 +365,65 @@ def emit_event(value: dict) -> bool:
     except (BrokenPipeError, OSError, ValueError):
         return False
     return True
+
+
+def auto_process_approval(
+    *,
+    manifest_path: Path,
+    session_dir: Path,
+    event: dict,
+) -> dict:
+    """Apply a durable approval without waiting for a later agent turn."""
+    feedback_id = safe_feedback_id(event.get("feedback_id"))
+    archive_path = feedback_archive_path(session_dir, feedback_id)
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "process_review.py"),
+                str(manifest_path),
+                str(archive_path),
+                "--session-dir",
+                str(session_dir),
+            ],
+            cwd=SCRIPT_DIR.parent,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "event": "approval_processing_error",
+            "feedback_id": feedback_id,
+            "error": str(exc),
+        }
+    output = completed.stdout.strip() if completed.returncode in {0, 3} else completed.stderr.strip()
+    try:
+        result = strict_json_loads(output)
+    except (json.JSONDecodeError, ValueError):
+        result = {
+            "status": "error",
+            "error": output or "process_review.py non ha restituito JSON",
+        }
+    if not isinstance(result, dict):
+        result = {
+            "status": "error",
+            "error": "process_review.py non ha restituito un oggetto JSON",
+        }
+    workflow = result.get("workflow") if isinstance(result.get("workflow"), dict) else {}
+    return {
+        "event": (
+            "approval_processed"
+            if result.get("status") != "error"
+            else "approval_processing_error"
+        ),
+        "feedback_id": feedback_id,
+        "status": result.get("status", "error"),
+        "workflow_state": workflow.get("workflow_state"),
+        "revision": workflow.get("revision"),
+        **({"error": result.get("error")} if result.get("error") else {}),
+    }
 
 
 def commit_feedback(
@@ -2241,6 +2301,14 @@ def main() -> int:
                 except OSError:
                     pass
             self.send_json(HTTPStatus.OK, event)
+            if event.get("action") == "approve":
+                emit_event(
+                    auto_process_approval(
+                        manifest_path=manifest_path,
+                        session_dir=session_dir,
+                        event=event,
+                    )
+                )
 
     try:
         server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
@@ -2267,6 +2335,14 @@ def main() -> int:
     )
     if recovered_event is not None:
         emit_event(recovered_event)
+        if recovered_event.get("action") == "approve":
+            emit_event(
+                auto_process_approval(
+                    manifest_path=manifest_path,
+                    session_dir=session_dir,
+                    event=recovered_event,
+                )
+            )
         try:
             journal_path.unlink(missing_ok=True)
         except OSError:

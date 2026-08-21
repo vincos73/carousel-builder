@@ -103,7 +103,7 @@ class ReviewEditorAssetTest(unittest.TestCase):
         journey = self.source.split("function renderWorkflowJourney()", 1)[1].split(
             "function syncMobileActions", 1
         )[0]
-        self.assertIn("Richiesta ricevuta", journey)
+        self.assertIn("Richiesta registrata", journey)
         self.assertIn('const productionReady = workflowState === "prova_visuale_approvata"', journey)
         self.assertIn('const rendering = workflowState === "rendering"', journey)
         self.assertIn('const qualityAssurance = workflowState === "qa"', journey)

@@ -229,6 +229,9 @@
   let pendingSelection = null;
   let awaitingFeedbackId = null;
   let pendingSubmission = null;
+  let pendingSubmissionStartedAt = null;
+  let pendingSubmissionAcknowledged = false;
+  let pendingSubmissionWatchdogTimer = null;
   let recoverySubmissions = [];
   let recoveryDrafts = [];
   let foreignFeedbackId = null;
@@ -269,6 +272,7 @@
   const POLL_BASE_DELAY = 2000;
   const POLL_MAX_DELAY = 30000;
   const REQUEST_TIMEOUT = 8000;
+  const PENDING_SUBMISSION_STALE_DELAY = 15000;
 
   const visualSystems = [
     {
@@ -414,6 +418,37 @@
       && value.payload?.action === value.action
       && ["feedback", "approve"].includes(value.action),
     );
+  }
+
+  function pendingSubmissionAgeMs() {
+    if (!Number.isFinite(pendingSubmissionStartedAt)) return 0;
+    return Math.max(0, Date.now() - pendingSubmissionStartedAt);
+  }
+
+  function isStalePendingSubmission() {
+    return isPendingSubmission(pendingSubmission)
+      && !pendingSubmissionAcknowledged
+      && pendingSubmissionAgeMs() >= PENDING_SUBMISSION_STALE_DELAY;
+  }
+
+  function clearPendingSubmissionWatchdog() {
+    window.clearTimeout(pendingSubmissionWatchdogTimer);
+    pendingSubmissionWatchdogTimer = null;
+  }
+
+  function armPendingSubmissionWatchdog() {
+    clearPendingSubmissionWatchdog();
+    if (pendingSubmissionAcknowledged || !isPendingSubmission(pendingSubmission) || !Number.isFinite(pendingSubmissionStartedAt)) return;
+    const remaining = Math.max(250, PENDING_SUBMISSION_STALE_DELAY - pendingSubmissionAgeMs());
+    pendingSubmissionWatchdogTimer = window.setTimeout(() => {
+      pendingSubmissionWatchdogTimer = null;
+      if (!isPendingSubmission(pendingSubmission) || !isStalePendingSubmission()) return;
+      submissionError = "Il batch è stato registrato ma l’agente non ha ancora confermato l’applicazione. Non è un timeout: puoi ritentare con lo stesso identificativo oppure lasciare la scheda aperta.";
+      renderWorkflowJourney();
+      updateChangeSummary();
+      renderValidationState();
+      showToast("Batch registrato: l’applicazione non è ancora confermata.", true);
+    }, remaining);
   }
 
   function isRecoverySubmission(value) {
@@ -1237,16 +1272,26 @@
       ? "Esamina la prova; quando sei pronto, approvala oppure riapri le modifiche."
       : "Rivedi il carosello e scegli come proseguire.";
     let status = "review";
-    if (submissionError) {
+    if (isStalePendingSubmission()) {
+      status = "error";
+      statusLabel = "Batch registrato";
+      statusDetail = "L’invio è al sicuro, ma l’applicazione non è ancora confermata. La rotella si è fermata per segnalare l’attesa: puoi ritentare con lo stesso identificativo senza creare duplicati.";
+    } else if (submissionError) {
       status = "error";
       statusLabel = "Invio da controllare";
       statusDetail = "La bozza è al sicuro. Segui le indicazioni mostrate per ritentare o recuperarla.";
     } else if (waiting) {
-      status = "working";
-      statusLabel = foreignFeedbackId ? "Aggiornamento in corso in un’altra scheda" : "Richiesta ricevuta";
-      statusDetail = returnUrl
-        ? "L’agente sta elaborando la richiesta. Il batch è salvato; puoi tornare alla chat dal pulsante qui sotto."
-        : "L’agente sta elaborando la richiesta. Il batch è salvato e la nuova revisione comparirà automaticamente.";
+      status = pendingSubmissionAcknowledged ? "ready" : "working";
+      statusLabel = pendingSubmissionAcknowledged
+        ? "Richiesta registrata"
+        : foreignFeedbackId
+          ? "Aggiornamento in corso in un’altra scheda"
+          : "Invio in corso";
+      statusDetail = pendingSubmissionAcknowledged
+        ? returnUrl
+          ? "Il batch è al sicuro e l’applicazione prosegue in background. Puoi tornare alla chat."
+          : "Il batch è al sicuro e l’applicazione prosegue in background; la nuova revisione comparirà automaticamente."
+        : "Attendo la conferma del server locale.";
     } else if (phase === "production") {
       status = delivered ? "complete" : productionReady ? "ready" : "working";
       statusLabel = delivered
@@ -1305,6 +1350,10 @@
     if (!model) return;
     const count = computeChangeCount();
     const waiting = hasPendingLock();
+    const visualWaiting = waiting
+      && !pendingSubmissionAcknowledged
+      && !submissionError
+      && !isStalePendingSubmission();
     const contentAlreadyApproved = model.workflow_state !== "bozza";
     const sendVisible = hasAgentCorrections() || (contentAlreadyApproved && count > 0);
     if (elements.sendButton) {
@@ -1338,10 +1387,16 @@
     if (elements.sendButton) elements.sendButton.textContent = sendLabel;
     if (elements.mobileSendButton) elements.mobileSendButton.textContent = sendLabel;
     if (elements.workflowBadge) {
-      elements.workflowBadge.textContent = waiting ? "Inviato · in attesa dell’agente" : labelForValue(workflowLabels, model.workflow_state, "Stato non definito");
-      elements.workflowBadge.toggleAttribute("aria-busy", waiting);
+      elements.workflowBadge.textContent = isStalePendingSubmission()
+        ? "Batch registrato · applicazione in attesa"
+        : pendingSubmissionAcknowledged
+          ? "Batch registrato · applicazione in corso"
+        : waiting
+          ? "Invio in corso"
+          : labelForValue(workflowLabels, model.workflow_state, "Stato non definito");
+      elements.workflowBadge.toggleAttribute("aria-busy", visualWaiting);
     }
-    elements.editor?.setAttribute("aria-busy", String(waiting));
+    elements.editor?.setAttribute("aria-busy", String(visualWaiting));
     syncMobileActions();
     updateApprovalCopy();
   }
@@ -1389,6 +1444,10 @@
       cover_mode: selectedCoverMode,
       visual_style_system: selectedVisualSystem,
       awaiting_feedback_id: awaitingFeedbackId,
+      pending_submission_started_at: Number.isFinite(pendingSubmissionStartedAt)
+        ? new Date(pendingSubmissionStartedAt).toISOString()
+        : null,
+      pending_submission_acknowledged: pendingSubmissionAcknowledged,
       pending_submission: pendingSubmission,
       recovery_submissions: recoverySubmissions,
       recovery_drafts: recoveryDrafts,
@@ -1454,6 +1513,8 @@
       cover_mode: modelCoverMode(),
       visual_style_system: modelVisualSystem(),
       awaiting_feedback_id: null,
+      pending_submission_started_at: null,
+      pending_submission_acknowledged: false,
       pending_submission: null,
       recovery_submissions: recoverySubmissions,
       recovery_drafts: recoveryDrafts,
@@ -1475,6 +1536,9 @@
     undoState = null;
     awaitingFeedbackId = null;
     pendingSubmission = null;
+    pendingSubmissionStartedAt = null;
+    pendingSubmissionAcknowledged = false;
+    clearPendingSubmissionWatchdog();
     recoverySubmissions = [];
     recoveryDrafts = [];
     foreignFeedbackId = null;
@@ -1512,6 +1576,10 @@
       if (savedPending && sameBase && sameFingerprint) {
         pendingSubmission = savedPending;
         awaitingFeedbackId = savedPending.feedback_id;
+        pendingSubmissionAcknowledged = saved?.pending_submission_acknowledged === true;
+        const savedStartedAt = Date.parse(saved.pending_submission_started_at || "");
+        pendingSubmissionStartedAt = Number.isFinite(savedStartedAt) ? savedStartedAt : Date.now();
+        armPendingSubmissionWatchdog();
       } else if (savedPending) {
         const reason = !sameRevision
           ? "base-revision-mismatch"
@@ -3511,8 +3579,11 @@
   }
 
   function clearPendingSubmission({ keepError = true } = {}) {
+    clearPendingSubmissionWatchdog();
     awaitingFeedbackId = null;
     pendingSubmission = null;
+    pendingSubmissionStartedAt = null;
+    pendingSubmissionAcknowledged = false;
     if (!keepError) submissionError = "";
     persistDraft({ immediate: true });
     releaseEditingLock();
@@ -3540,6 +3611,9 @@
     }
     preservePendingSubmission("pre-post-backup", "", currentDraftRecoverySource());
     awaitingFeedbackId = pendingSubmission.feedback_id;
+    pendingSubmissionStartedAt = Date.now();
+    pendingSubmissionAcknowledged = false;
+    armPendingSubmissionWatchdog();
     submissionError = "";
     persistDraft({ immediate: true });
     lockEditing();
@@ -3565,6 +3639,8 @@
       }
       if (data.feedback_id !== pendingSubmission.feedback_id) throw new Error("Il server ha restituito un identificativo di feedback inatteso.");
       awaitingFeedbackId = pendingSubmission.feedback_id;
+      pendingSubmissionAcknowledged = true;
+      clearPendingSubmissionWatchdog();
       submissionError = "";
       persistDraft({ immediate: true });
       lockEditing();
@@ -3627,6 +3703,8 @@
       }
     }
     pendingSubmission = { feedback_id: feedbackId, action, payload };
+    pendingSubmissionStartedAt = Date.now();
+    armPendingSubmissionWatchdog();
     awaitingFeedbackId = feedbackId;
     submissionError = "";
     persistDraft({ immediate: true });
@@ -3666,8 +3744,11 @@
         const appliedFeedbackId = awaitingFeedbackId;
         const submittedAction = pendingSubmission?.action || "feedback";
         const submittedVisualSystem = pendingSubmission?.payload?.visual_style_system || "";
+        clearPendingSubmissionWatchdog();
         awaitingFeedbackId = null;
         pendingSubmission = null;
+        pendingSubmissionStartedAt = null;
+        pendingSubmissionAcknowledged = false;
         markRecoveryApplied(appliedFeedbackId);
         submissionError = "";
         validationMode = false;
@@ -3758,11 +3839,14 @@
         if (ownPending) {
           foreignFeedbackId = null;
           awaitingFeedbackId = serverFeedbackId;
+          pendingSubmissionAcknowledged = true;
+          clearPendingSubmissionWatchdog();
           submissionError = "";
         } else {
           if (isPendingSubmission(pendingSubmission)) preservePendingSubmission("foreign-feedback-pending");
           preserveCurrentDraft("foreign-feedback-pending", serverFeedbackId || "");
           pendingSubmission = null;
+          pendingSubmissionAcknowledged = false;
           awaitingFeedbackId = null;
           foreignFeedbackId = serverFeedbackId || "feedback-esterno";
           submissionError = "Un’altra scheda sta inviando modifiche. Questa bozza resta salvata e tornerà modificabile al termine dell’invio.";
