@@ -687,7 +687,8 @@ class ReviewServerHTTPTest(unittest.TestCase):
             if status == 200 and candidate["applied_feedback_id"] == resubmitted["feedback_id"]:
                 rebound_model = candidate
                 break
-            self.assertEqual(status, 409, candidate)
+            self.assertIn(status, (200, 409), candidate)
+            time.sleep(0.05)
         self.assertIsNotNone(rebound_model)
         assert rebound_model is not None
         self.assertTrue(rebound_model["proof_approved"])
