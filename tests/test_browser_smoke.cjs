@@ -299,7 +299,7 @@ function manifestFixture() {
       },
     },
     items: [
-      { id: "item-1", layout: "editorial", title: "", summary: "Prima frase.", summary_accent: ["Prima frase."], alt_text: "Prima card" },
+      { id: "item-1", layout: "editorial", title: "", summary: "Prima frase.", summary_accent: ["frase."], alt_text: "Prima card" },
       { id: "item-2", layout: "editorial", title: "", summary: "Seconda frase più densa.", alt_text: "Seconda card" },
     ],
     outro: { enabled: true, title: "Chiusura", body: "Corpo della chiusura.", alt_text: "Chiusura" },
