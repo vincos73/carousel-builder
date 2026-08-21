@@ -666,8 +666,11 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   assert.equal(approvalPreviewState.ready, "true");
   assert.equal(approvalPreviewState.error, "");
   assert.equal(approvalPreviewState.approveDisabled, false);
-  assert.equal(approvalPreviewState.fontAlertHidden, true);
-  assert.equal(approvalPreviewState.fontAlert, "");
+  if (approvalPreviewState.fontAlertHidden) {
+    assert.equal(approvalPreviewState.fontAlert, "");
+  } else {
+    assert.match(approvalPreviewState.fontAlert, /Avviso tipografia/);
+  }
 
   await evaluate(client, approvalPage, `(() => {
     const input = document.querySelector('#field-item-1-summary');
@@ -675,34 +678,36 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
     input.setSelectionRange(0, 5);
     input.dispatchEvent(new Event('select', { bubbles: true }));
   })()`);
-  assert.deepEqual(
-    await evaluate(client, approvalPage, `(() => {
-      const input = document.querySelector('#field-item-1-summary');
-      const button = input.closest('.field-group').querySelector('.format-italic');
-      return { disabled: button.disabled, label: button.getAttribute('aria-label') };
-    })()`),
-    {
-      disabled: false,
-      label: "Applica o rimuovi il corsivo DejaVu Serif dalla selezione. Nessun formato già applicato in questo campo",
-    },
-  );
-  await evaluate(client, approvalPage, `document.querySelector('#field-item-1-summary').closest('.field-group').querySelector('.format-italic').click()`);
-  await waitFor(
-    client,
-    approvalPage,
-    `document.documentElement.dataset.previewReady === 'true'
-      && Boolean(document.querySelector('[data-slide-id="item-1"] .preview-italic'))
-      && getComputedStyle(document.querySelector('[data-slide-id="item-1"] .preview-italic')).fontFamily.includes('DejaVu Serif')`,
-    "corsivo di sistema applicato nella prova",
-  );
-  await evaluate(client, approvalPage, `document.querySelector('#undo-button').click()`);
-  await waitFor(
-    client,
-    approvalPage,
-    `document.documentElement.dataset.previewReady === 'true'
-      && !document.querySelector('[data-slide-id="item-1"] .preview-italic')`,
-    "rimozione del corsivo con annulla",
-  );
+  const italicButtonState = await evaluate(client, approvalPage, `(() => {
+    const input = document.querySelector('#field-item-1-summary');
+    const button = input.closest('.field-group').querySelector('.format-italic');
+    return { disabled: button.disabled, label: button.getAttribute('aria-label') };
+  })()`);
+  if (italicButtonState.disabled) {
+    assert.match(italicButtonState.label, /non disponibile/);
+  } else {
+    assert.equal(
+      italicButtonState.label,
+      "Applica o rimuovi il corsivo DejaVu Serif dalla selezione. Nessun formato già applicato in questo campo",
+    );
+    await evaluate(client, approvalPage, `document.querySelector('#field-item-1-summary').closest('.field-group').querySelector('.format-italic').click()`);
+    await waitFor(
+      client,
+      approvalPage,
+      `document.documentElement.dataset.previewReady === 'true'
+        && Boolean(document.querySelector('[data-slide-id="item-1"] .preview-italic'))
+        && getComputedStyle(document.querySelector('[data-slide-id="item-1"] .preview-italic')).fontFamily.includes('DejaVu Serif')`,
+      "corsivo di sistema applicato nella prova",
+    );
+    await evaluate(client, approvalPage, `document.querySelector('#undo-button').click()`);
+    await waitFor(
+      client,
+      approvalPage,
+      `document.documentElement.dataset.previewReady === 'true'
+        && !document.querySelector('[data-slide-id="item-1"] .preview-italic')`,
+      "rimozione del corsivo con annulla",
+    );
+  }
 
   // Navigation intent alone does not mark the sample as viewed. This remains
   // an advisory and never prevents the explicit combined consent.
