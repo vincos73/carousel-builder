@@ -635,7 +635,12 @@ class ReviewServerHTTPTest(unittest.TestCase):
         approved_model = None
         for _ in range(40):
             status, candidate = json_request(self.api("/api/session"))
-            if status == 200 and candidate["applied_feedback_id"] == submitted["feedback_id"]:
+            if (
+                status == 200
+                and candidate["applied_feedback_id"] == submitted["feedback_id"]
+                and candidate["workflow_state"] == "prova_visuale_approvata"
+                and candidate["proof_approved"]
+            ):
                 approved_model = candidate
                 break
             self.assertIn(status, (200, 409), candidate)
@@ -681,10 +686,32 @@ class ReviewServerHTTPTest(unittest.TestCase):
             Path(resubmitted["archive_path"]).read_text(encoding="utf-8")
         )
         self.assertEqual(rebound_batch["approval_stage"], "visual_proof")
+        reapplied = None
+        for _ in range(40):
+            reapplied = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "apply_review.py"),
+                    str(self.manifest_path),
+                    resubmitted["archive_path"],
+                    "--session-dir",
+                    str(self.session_dir),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if reapplied.returncode == 0:
+                break
+            time.sleep(0.05)
+        self.assertIsNotNone(reapplied)
+        assert reapplied is not None
+        self.assertEqual(reapplied.returncode, 0, reapplied.stderr)
         rebound_model = None
         for _ in range(40):
             status, candidate = json_request(self.api("/api/session"))
-            if status == 200 and candidate["applied_feedback_id"] == resubmitted["feedback_id"]:
+            if status == 200 and candidate["proof_approved"]:
                 rebound_model = candidate
                 break
             self.assertIn(status, (200, 409), candidate)
