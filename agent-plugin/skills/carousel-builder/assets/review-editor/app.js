@@ -236,6 +236,7 @@
   let recoveryDrafts = [];
   let foreignFeedbackId = null;
   let submissionError = "";
+  let acknowledgedProcessingErrorId = null;
   let staleRevision = null;
   let staleWorkflowState = null;
   let staleApprovalCheckpoint = null;
@@ -287,8 +288,8 @@
     },
     {
       id: "corporate-modular",
-      label: "C · Istituzionale",
-      description: "Sistema istituzionale: un indice compatto ordina metodo, dati e processi senza sottrarre spazio al testo.",
+      label: "C · Frame",
+      description: "Sistema Frame: un foglio editoriale incastonato usa fondo scuro, superficie chiara e accento del brand.",
     },
   ];
 
@@ -1543,6 +1544,7 @@
     recoveryDrafts = [];
     foreignFeedbackId = null;
     submissionError = "";
+    acknowledgedProcessingErrorId = null;
     staleWorkflowState = null;
     staleApprovalCheckpoint = null;
     validationMode = false;
@@ -2581,7 +2583,9 @@
 
   function previewColors(index, kind) {
     const palette = previewBrand().palette || {};
-    const useDark = kind === "cover" || kind === "outro" || index % 2 === 0;
+    const usesFrameSheet = selectedVisualSystem === "corporate-modular"
+      && (kind !== "cover" || resolvedCoverMode() === "typographic");
+    const useDark = !usesFrameSheet && (kind === "cover" || kind === "outro" || index % 2 === 0);
     const accent = safeColor(palette.accent || palette.primary || palette.accent_primary, "#6b3f5d");
     const backgroundDark = safeColor(palette.background_dark, "#2d2e2f");
     const backgroundLight = safeColor(palette.background_light, "#f8f7f4");
@@ -2768,10 +2772,12 @@
       preview.style.setProperty("--preview-light-text", colors.textOnLight);
       preview.style.setProperty("--preview-accent-text", colors.accentText);
       preview.dataset.kind = slide.kind;
+      preview.dataset.coverMode = slide.kind === "cover" ? resolvedCoverMode() : "internal";
       preview.dataset.surface = colors.surface;
       preview.dataset.constellationPosition = index % 2 === 0 ? "high" : "low";
       preview.dataset.productionSource = "approved-preview";
       preview.classList.add(`visual-system-${selectedVisualSystem}`);
+      preview.classList.toggle("typographic-cover", slide.kind === "cover" && resolvedCoverMode() === "typographic");
       preview.classList.toggle("has-real-italic", hasRealItalicFont());
       const coverVisual = selectedVisualProof()?.cover_visual || model.cover_visual;
       let coverMedia = null;
@@ -2806,9 +2812,13 @@
       const pageTotal = String(draftSlides.length).padStart(2, "0");
       const pageNumber = create("span", "preview-page", `${pageCurrent} / ${pageTotal}`);
       pageNumber.setAttribute("aria-label", `Pagina ${index + 1} di ${draftSlides.length}`);
+      const frameField = create("div", "preview-frame-field");
+      frameField.setAttribute("aria-hidden", "true");
       const constellation = create("div", "preview-constellation");
       constellation.setAttribute("aria-hidden", "true");
-      if (slide.kind !== "cover") {
+      const inheritsVisualSystem = slide.kind !== "cover"
+        || (slide.kind === "cover" && resolvedCoverMode() === "typographic");
+      if (inheritsVisualSystem) {
         for (const role of ["primary", "core", "ring", "moon", "satellite"]) {
           constellation.append(create("span", `preview-sphere preview-sphere-${role}`));
         }
@@ -2817,6 +2827,11 @@
       const brand = previewBrand();
       const signature = String(brand.signature || "").trim();
       const website = String(brand.website || "").trim();
+      const signatureMatchesWebsite = Boolean(
+        signature
+        && website
+        && signature.toLocaleLowerCase() === website.toLocaleLowerCase()
+      );
       const logoRole = logoRoleForSlide(slide, index);
       const logo = brand.logos?.[logoRole];
       const hasLogo = logo?.available === true && typeof logo.endpoint === "string" && logo.endpoint;
@@ -2826,10 +2841,12 @@
         image.src = api(logo.endpoint);
         image.alt = brand.name ? `Logo ${brand.name}` : "Logo del brand";
         previewBrandNode.append(image);
-      } else if (signature) previewBrandNode.append(create("span", "preview-signature", signature));
+      } else if (signature && !signatureMatchesWebsite) previewBrandNode.append(create("span", "preview-signature", signature));
       if (website) previewBrandNode.append(create("span", "preview-website", website));
-      previewBrandNode.hidden = logoMode === "hidden" ? !signature && !website : !hasLogo && !signature && !website;
-      if (slide.kind !== "cover") preview.append(constellation);
+      previewBrandNode.hidden = logoMode === "hidden"
+        ? (!signature || signatureMatchesWebsite) && !website
+        : !hasLogo && (!signature || signatureMatchesWebsite) && !website;
+      if (inheritsVisualSystem) preview.append(constellation, frameField);
       if (coverMedia) preview.append(coverMedia);
       preview.append(pageNumber, previewCopy, previewBrandNode);
       const form = create("div", "slide-form");
@@ -2990,6 +3007,7 @@
       "preview-summary",
       "preview-page",
       "preview-brand",
+      "preview-frame-field",
       "preview-logo",
       "preview-website",
       "preview-sphere-primary",
@@ -3613,6 +3631,7 @@
     awaitingFeedbackId = pendingSubmission.feedback_id;
     pendingSubmissionStartedAt = Date.now();
     pendingSubmissionAcknowledged = false;
+    acknowledgedProcessingErrorId = null;
     armPendingSubmissionWatchdog();
     submissionError = "";
     persistDraft({ immediate: true });
@@ -3749,6 +3768,7 @@
         pendingSubmission = null;
         pendingSubmissionStartedAt = null;
         pendingSubmissionAcknowledged = false;
+        acknowledgedProcessingErrorId = null;
         markRecoveryApplied(appliedFeedbackId);
         submissionError = "";
         validationMode = false;
@@ -3767,6 +3787,33 @@
           showToast("Prova visiva approvata. La produzione può iniziare.");
         } else {
           showToast("Le modifiche dirette sono state applicate. Controlla la nuova revisione.");
+        }
+        return;
+      }
+      const processingError = status.approval_processing_error;
+      const processingErrorId = typeof processingError?.feedback_id === "string"
+        ? processingError.feedback_id
+        : "";
+      const ownProcessingError = Boolean(processingErrorId && (
+        processingErrorId === awaitingFeedbackId
+        || processingErrorId === pendingSubmission?.feedback_id
+      ));
+      if (ownProcessingError) {
+        clearPendingSubmissionWatchdog();
+        awaitingFeedbackId = null;
+        pendingSubmissionAcknowledged = false;
+        const message = typeof processingError.message === "string" && processingError.message
+          ? processingError.message
+          : "L’applicazione automatica non è riuscita.";
+        submissionError = `${message} La richiesta è salvata: puoi ritentare con lo stesso identificativo.`;
+        persistDraft({ immediate: true });
+        releaseEditingLock();
+        renderWorkflowJourney();
+        updateChangeSummary();
+        renderValidationState({ focus: true });
+        if (acknowledgedProcessingErrorId !== processingErrorId) {
+          acknowledgedProcessingErrorId = processingErrorId;
+          showToast("Applicazione automatica bloccata: puoi ritentare.", true);
         }
         return;
       }

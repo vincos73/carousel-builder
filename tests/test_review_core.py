@@ -71,6 +71,7 @@ class WorkflowContractTest(unittest.TestCase):
             (" Editorial ", "editorial-frame"),
             ("geometrico", "editorial-halftone"),
             ("ISTITUZIONALE", "corporate-modular"),
+            ("frame", "corporate-modular"),
         ):
             with self.subTest(alias=alias):
                 self.assertEqual(

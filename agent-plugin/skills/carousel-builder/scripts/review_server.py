@@ -68,7 +68,7 @@ from manifest_contract import (  # noqa: E402
 
 MAX_BODY_BYTES = 1_000_000
 MAX_COMMENTS = 200
-EDITOR_VERSION = "2.13.2"
+EDITOR_VERSION = "2.14.0"
 RENDER_CONTRACT = "approved-preview-dom-v2"
 EMPHASIS_RANGE_SUFFIX = "_ranges"
 TYPOGRAPHY_DEFAULTS = {
@@ -132,7 +132,7 @@ PALETTE_COLOR_FIELDS = (
 VISUAL_STYLE_SYSTEMS = {
     "editorial-frame": "Editoriale",
     "editorial-halftone": "Geometrico",
-    "corporate-modular": "Istituzionale",
+    "corporate-modular": "Frame",
 }
 VISUAL_STYLE_ALTERNATES = {
     "editorial-frame": "corporate-modular",
@@ -170,6 +170,36 @@ def return_url_for_thread(thread_id: str | None) -> str | None:
     if not THREAD_ID_RE.fullmatch(normalized):
         raise ValueError("return-thread-id non valido")
     return f"codex://threads/{normalized}"
+
+
+def resolve_return_url(
+    explicit_thread_id: str | None,
+    *,
+    environ: dict[str, str] | None = None,
+) -> str | None:
+    """Resolve a safe Codex handoff and fail closed inside Codex Desktop."""
+    environment = os.environ if environ is None else environ
+    explicit_url = return_url_for_thread(explicit_thread_id)
+    environment_thread_id = environment.get("CODEX_THREAD_ID")
+    environment_url = None
+    if environment_thread_id:
+        try:
+            environment_url = return_url_for_thread(environment_thread_id)
+        except ValueError:
+            if explicit_url is None:
+                raise ValueError("CODEX_THREAD_ID non valido") from None
+
+    originator = environment.get("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "")
+    codex_desktop = originator.strip().casefold() == "codex desktop"
+    if codex_desktop and explicit_url and environment_url and explicit_url != environment_url:
+        raise ValueError("return-thread-id non coincide con il task Codex corrente")
+
+    return_url = explicit_url or environment_url
+    if codex_desktop and return_url is None:
+        raise ValueError(
+            "Codex Desktop richiede CODEX_THREAD_ID o --return-thread-id per l’handoff"
+        )
+    return return_url
 
 
 def valid_return_url(value: object) -> str | None:
@@ -358,6 +388,34 @@ def feedback_event(feedback_path: Path, feedback: dict) -> dict:
     }
 
 
+def set_approval_processing_error(
+    *,
+    session_dir: Path,
+    manifest_path: Path,
+    feedback_id: str,
+    message: str | None,
+) -> None:
+    """Persist an auto-apply failure so the browser can stop waiting and retry."""
+    state_path = session_dir / "session-state.json"
+    transaction_lock = InterprocessLock(session_dir / ".review-transaction.lock")
+    with transaction_lock:
+        if not path_entry_exists(state_path):
+            return
+        state = read_private_json(state_path)
+        validate_state_manifest(state, manifest_path)
+        if state.get("last_feedback_id") != feedback_id:
+            return
+        if message is None:
+            state.pop("approval_processing_error", None)
+        else:
+            state["approval_processing_error"] = {
+                "feedback_id": feedback_id,
+                "message": str(message)[:1_000],
+                "recorded_at": now_iso(),
+            }
+        atomic_write_json(state_path, state)
+
+
 def emit_event(value: dict) -> bool:
     """Best-effort event transport; durable session files remain authoritative."""
     try:
@@ -377,6 +435,19 @@ def auto_process_approval(
     feedback_id = safe_feedback_id(event.get("feedback_id"))
     archive_path = feedback_archive_path(session_dir, feedback_id)
     try:
+        set_approval_processing_error(
+            session_dir=session_dir,
+            manifest_path=manifest_path,
+            feedback_id=feedback_id,
+            message=None,
+        )
+    except (OSError, TypeError, ValueError, LockUnavailableError) as exc:
+        return {
+            "event": "approval_processing_error",
+            "feedback_id": feedback_id,
+            "error": f"Impossibile preparare il retry dell'approvazione: {exc}",
+        }
+    try:
         completed = subprocess.run(
             [
                 sys.executable,
@@ -393,6 +464,15 @@ def auto_process_approval(
             timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
+        try:
+            set_approval_processing_error(
+                session_dir=session_dir,
+                manifest_path=manifest_path,
+                feedback_id=feedback_id,
+                message=str(exc),
+            )
+        except (OSError, TypeError, ValueError, LockUnavailableError):
+            pass
         return {
             "event": "approval_processing_error",
             "feedback_id": feedback_id,
@@ -411,6 +491,19 @@ def auto_process_approval(
             "status": "error",
             "error": "process_review.py non ha restituito un oggetto JSON",
         }
+    try:
+        set_approval_processing_error(
+            session_dir=session_dir,
+            manifest_path=manifest_path,
+            feedback_id=feedback_id,
+            message=(
+                str(result.get("error") or "Applicazione automatica non riuscita")
+                if result.get("status") == "error"
+                else None
+            ),
+        )
+    except (OSError, TypeError, ValueError, LockUnavailableError):
+        pass
     workflow = result.get("workflow") if isinstance(result.get("workflow"), dict) else {}
     return {
         "event": (
@@ -467,6 +560,7 @@ def commit_feedback(
     atomic_write_json(feedback_path, feedback)
     next_state = dict(current_state)
     next_state.update(state_patch)
+    next_state.pop("approval_processing_error", None)
     atomic_write_json(state_path, next_state)
     return feedback_event(feedback_path, feedback)
 
@@ -548,6 +642,7 @@ def recover_feedback_commit(
     atomic_write_json(feedback_path, feedback)
     next_state = dict(current_state)
     next_state.update(state_patch)
+    next_state.pop("approval_processing_error", None)
     atomic_write_json(state_path, next_state)
     return feedback_event(feedback_path, feedback)
 
@@ -1752,7 +1847,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        return_url = return_url_for_thread(args.return_thread_id)
+        return_url = resolve_return_url(args.return_thread_id)
         manifest_path = absolute_input_path(args.manifest)
         session_dir = absolute_input_path(args.session_dir)
         reject_symlink_path(manifest_path, field="Il manifest")
@@ -1914,12 +2009,21 @@ def main() -> int:
                 )
                 last_id = current_state.get("last_feedback_id")
                 applied_id = current_state.get("applied_feedback_id")
+                processing_error = current_state.get("approval_processing_error")
+                if not (
+                    last_id
+                    and last_id != applied_id
+                    and isinstance(processing_error, dict)
+                    and processing_error.get("feedback_id") == last_id
+                ):
+                    processing_error = None
                 return {
                     **value,
                     "last_feedback_id": last_id,
                     "last_action": current_state.get("last_action"),
                     "applied_feedback_id": applied_id,
                     "feedback_pending": bool(last_id and last_id != applied_id),
+                    "approval_processing_error": processing_error,
                 }
             finally:
                 for lock in reversed(locks):
@@ -2335,6 +2439,8 @@ def main() -> int:
             "url": url,
             "session_dir": str(session_dir),
             "manifest": str(manifest_path),
+            "return_url": return_url,
+            "handoff_ready": return_url is not None,
         }
     )
     if recovered_event is not None:

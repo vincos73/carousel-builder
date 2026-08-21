@@ -8,7 +8,7 @@ Usare un sistema visivo stabile per l'intera sequenza. Il sistema decide composi
 | --- | --- | --- |
 | `editorial-frame` | Analisi, opinioni e tesi | **Editoriale**: cornice netta, ampio spazio tipografico e accento sobrio. |
 | `editorial-halftone` | Creatività, cultura e contenuti espressivi | **Geometrico**: costellazione laterale di cinque corpi circolari a scale diverse, con posizione verticale alternata e superfici chiare e scure. L’ID storico resta invariato per compatibilità. |
-| `corporate-modular` | Metodo, risultati, processi e dati | **Istituzionale**: indice modulare compatto, guida orizzontale sottile e gerarchia funzionale senza bande laterali o griglie estese. |
+| `corporate-modular` | Metodo, risultati, processi e dati | **Frame**: foglio editoriale incastonato in un campo che usa insieme fondo scuro, superficie chiara e accento del profilo. L’ID storico resta invariato per compatibilità. |
 
 Usare `editorial-frame` quando il contenuto sviluppa un ragionamento, `corporate-modular` per studi, dati, risultati, processi e confronti, `editorial-halftone` quando un contenuto creativo o culturale beneficia davvero di colore, energia e personalità. Nel sistema Geometrico confinare sempre i corpi alla fascia laterale, lasciare almeno il 70% della larghezza al testo e alternare la composizione in verticale tra slide consecutive.
 
@@ -16,13 +16,13 @@ Il percorso normale espone e valida un solo sistema consigliato. Se l'utente chi
 
 ## Firma strutturale obbligatoria
 
-Il valore `visual_style_system` è un contratto di composizione, non un'etichetta. Ogni sistema deve lasciare sulle card interne e sulla chiusura un segno riconoscibile anche senza leggere il nome del tema. La copertina è un template distinto e non riceve questi elementi strutturali:
+Il valore `visual_style_system` è un contratto di composizione, non un'etichetta. Ogni sistema deve lasciare un segno riconoscibile anche senza leggere il nome del tema. La copertina tipografica eredita la grammatica del sistema selezionato; la copertina con immagine resta invece un template split distinto:
 
-- `editorial-frame`: una cornice rettangolare perimetrale completa, continua e visibile sui quattro lati delle card interne e della chiusura, collocata dentro la safe area con spessore e distanza dal bordo coerenti. Non sostituirla con una sola linea superiore, una sottolineatura del logo o un bordo parziale. Non applicarla alla copertina.
-- `editorial-halftone`: la costellazione laterale di cinque corpi circolari a scale diverse deve essere visibile sulle card interne e sulla chiusura, confinata alla fascia laterale e alternata verticalmente tra slide consecutive. Non applicarla alla copertina. Una singola forma, una texture generica o il solo colore d'accento non identificano il sistema.
-- `corporate-modular`: l'indice modulare compatto e la guida orizzontale sottile devono comparire sulle card interne e sulla chiusura con posizione, proporzioni e ritmo coerenti. Non applicarli alla copertina. Una semplice griglia o una linea isolata non è sufficiente.
+- `editorial-frame`: una cornice rettangolare perimetrale completa, continua e visibile sui quattro lati delle card interne, della chiusura e della copertina tipografica, collocata dentro la safe area con spessore e distanza dal bordo coerenti. Non sostituirla con una sola linea superiore, una sottolineatura del logo o un bordo parziale. Non applicarla alla copertina con immagine.
+- `editorial-halftone`: la costellazione laterale di cinque corpi circolari a scale diverse deve essere visibile sulle card interne, sulla chiusura e sulla copertina tipografica, confinata alla fascia laterale e alternata verticalmente tra slide consecutive. Non applicarla alla copertina con immagine. Una singola forma, una texture generica o il solo colore d'accento non identificano il sistema.
+- `corporate-modular`: un foglio chiaro disassato deve essere incastonato in un campo scuro, con una campitura d’accento visibile dietro il foglio e l’attacco del contenuto evidenziato. Una regola verticale interna resta una variante opzionale. Applicare questa grammatica alle card interne, alla chiusura e alla copertina tipografica; la copertina con immagine resta split. La geometria del foglio e dell’accento deve restare riconoscibile anche in monocromia: il solo cambio di colore o una cornice perimetrale non sono sufficienti.
 
-La prova composta da copertina, card più densa e chiusura è accettabile soltanto se la copertina è libera dagli elementi strutturali e card interna e chiusura mostrano la firma obbligatoria, anche nell'anteprima a 480 px. Il batch finale deve usare la stessa geometria approvata. Se un renderer o adapter non rispetta entrambe le condizioni, non è compatibile con il sistema selezionato: cambiare produttore oppure usare il fallback `layout`, senza presentare una composizione generica come rendering finale.
+La prova composta da copertina, card più densa e chiusura è accettabile soltanto se la copertina con immagine resta libera dagli elementi strutturali, mentre la copertina tipografica, la card interna e la chiusura mostrano la grammatica obbligatoria, anche nell'anteprima a 480 px. Il batch finale deve usare la stessa geometria approvata. Se un renderer o adapter non rispetta entrambe le condizioni, non è compatibile con il sistema selezionato: cambiare produttore oppure usare il fallback `layout`, senza presentare una composizione generica come rendering finale.
 
 ## Invarianti
 
@@ -48,6 +48,6 @@ La struttura di ogni card, inclusa la copertina, resta deterministica. Un'immagi
 
 - `generated`: usarla solo se nella sessione esiste un generatore immagini;
 - `provided`: usare un'immagine fornita dall'utente;
-- `typographic`: costruire una copertina tipografica completa usando gerarchia, palette, font, logo e firma approvati, senza cornice, costellazione o indice modulare.
+- `typographic`: costruire una copertina tipografica completa usando gerarchia, palette, font, logo e firma approvati e la grammatica del sistema visivo selezionato.
 
 Usare `typographic` come default quando l'utente non esprime una preferenza. Se sceglie `generated` o `provided`, produrre o collegare l'asset dopo l'approvazione dei testi. La copertina usa allora una griglia split deterministica: area testuale a sinistra e immagine verticale nella colonna destra di circa il 45%, senza testo sovrapposto, trasparenza o gradiente compensativo. In assenza di generazione immagini, scegliere `provided` se è disponibile un asset adatto; altrimenti tornare esplicitamente a `typographic`. Non degradare le slide interne e non descrivere un segnaposto come immagine prodotta.

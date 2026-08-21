@@ -421,6 +421,55 @@ test("browser reale: i due consensi restano distinti e la prova visiva è read-f
     { cta: "Approva i testi", title: "Revisione di profilo e testi", current: "Profilo e testi" },
   );
 
+  await evaluate(client, page, `document.querySelector('[data-visual-system="corporate-modular"]').click()`);
+  await waitFor(client, page, "document.documentElement.dataset.previewReady === 'true'", "Frame pronto");
+  const frameLayout = await evaluate(client, page, `(() => {
+    const internalPreviews = [...document.querySelectorAll('.slide-preview:not([data-kind="cover"])')];
+    const firstPreview = internalPreviews[0];
+    const field = firstPreview.querySelector('.preview-frame-field');
+    const copy = firstPreview.querySelector('.preview-copy');
+    const fieldBox = field.getBoundingClientRect();
+    const copyBox = copy.getBoundingClientRect();
+    const style = getComputedStyle(firstPreview);
+    const color = (value) => {
+      const probe = document.createElement('span');
+      probe.style.color = value;
+      document.body.append(probe);
+      const normalized = getComputedStyle(probe).color;
+      probe.remove();
+      return normalized;
+    };
+    const attack = firstPreview.querySelector('.preview-title:not([hidden])')
+      || firstPreview.querySelector('.preview-title[hidden] + .preview-summary .preview-sentence:first-child')
+      || firstPreview.querySelector('.preview-title[hidden] + .preview-summary:not(.has-sentence-breaks)');
+    return {
+      label: document.querySelector('[data-visual-system="corporate-modular"]').textContent,
+      coverField: Boolean(document.querySelector('.slide-preview[data-kind="cover"] .preview-frame-field')),
+      visibleFields: internalPreviews.filter((preview) => getComputedStyle(preview.querySelector('.preview-frame-field')).display === 'block').length,
+      separated: fieldBox.right < copyBox.left,
+      darkField: style.backgroundColor === color(style.getPropertyValue('--preview-dark-bg')),
+      lightSheet: getComputedStyle(firstPreview, '::before').backgroundColor === color(style.getPropertyValue('--preview-light-bg')),
+      brandAccent: getComputedStyle(firstPreview, '::after').backgroundColor === color(style.getPropertyValue('--preview-accent')),
+      highlightedAttack: attack && getComputedStyle(attack).backgroundColor !== 'rgba(0, 0, 0, 0)',
+    };
+  })()`);
+  assert.match(frameLayout.label, /Frame/);
+  assert.equal(frameLayout.coverField, false);
+  assert.equal(frameLayout.visibleFields, 3);
+  assert.equal(frameLayout.separated, true);
+  assert.equal(frameLayout.darkField, true);
+  assert.equal(frameLayout.lightSheet, true);
+  assert.equal(frameLayout.brandAccent, true);
+  assert.equal(frameLayout.highlightedAttack, true);
+  if (process.env.UX_SCREENSHOT_DIR) {
+    await evaluate(client, page, `document.querySelector('[data-sequence-slide="item-1"]').click()`);
+    await waitFor(client, page, "document.querySelector('[data-sequence-slide=\"item-1\"][aria-current=\"step\"]')", "card Frame selezionata");
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    await captureReviewScreenshot(client, page, "proof-frame-desktop.png");
+  }
+  await evaluate(client, page, `document.querySelector('[data-visual-system="editorial-frame"]').click()`);
+  await waitFor(client, page, "document.documentElement.dataset.previewReady === 'true'", "ritorno editoriale pronto");
+
   await evaluate(client, page, `document.querySelector('#approve-button').click()`);
   await waitFor(client, page, "document.querySelector('#approval-dialog').open", "dialog primo consenso");
   assert.equal(

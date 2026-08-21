@@ -781,7 +781,7 @@ input:focus {
 
 /* The three proof systems are CSS geometry only. They inherit the profile's
    palette and fonts via the preview variables set by app.js. */
-.slide-preview.visual-system-editorial-frame:not([data-kind="cover"])::before {
+.slide-preview.visual-system-editorial-frame:is(:not([data-kind="cover"]), .typographic-cover)::before {
   inset: clamp(13px, 4.8cqw, 27px);
   border: clamp(1px, 0.42cqw, 2px) solid color-mix(in srgb, currentColor 72%, transparent);
   border-radius: 0;
@@ -794,7 +794,7 @@ input:focus {
   text-align: left;
 }
 
-.slide-preview.visual-system-editorial-frame:not([data-kind="cover"]) .preview-copy {
+.slide-preview.visual-system-editorial-frame:is(:not([data-kind="cover"]), .typographic-cover) .preview-copy {
   width: 88%;
 }
 
@@ -803,7 +803,7 @@ input:focus {
   font-style: normal;
 }
 
-.slide-preview.visual-system-editorial-frame:not([data-kind="cover"]) .preview-brand {
+.slide-preview.visual-system-editorial-frame:is(:not([data-kind="cover"]), .typographic-cover) .preview-brand {
   padding-top: clamp(8px, 2.2cqw, 13px);
   border-top: 1px solid color-mix(in srgb, currentColor 45%, transparent);
 }
@@ -816,7 +816,7 @@ input:focus {
   display: none;
 }
 
-.slide-preview.visual-system-editorial-halftone:not([data-kind="cover"]) .preview-constellation {
+.slide-preview.visual-system-editorial-halftone:is(:not([data-kind="cover"]), .typographic-cover) .preview-constellation {
   position: absolute;
   z-index: 0;
   inset: 0;
@@ -940,31 +940,50 @@ input:focus {
   text-shadow: 0 1px 5px rgba(0, 0, 0, 0.62);
 }
 
-.slide-preview.visual-system-corporate-modular:not([data-kind="cover"])::before {
-  inset: clamp(48px, 16cqw, 88px) auto auto clamp(20px, 6cqw, 34px);
-  width: clamp(8px, 2.8cqw, 14px);
-  height: clamp(8px, 2.8cqw, 14px);
+.preview-frame-field {
+  display: none;
+}
+
+.slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover) {
+  align-items: flex-start;
+  color: var(--preview-dark-text);
+  background: var(--preview-dark-bg);
+}
+
+.slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover)::before {
+  position: absolute;
+  z-index: 1;
+  inset: clamp(38px, 10cqw, 56px) clamp(34px, 9cqw, 50px) clamp(48px, 12cqw, 68px) clamp(27px, 7cqw, 39px);
   border: 0;
   border-radius: 0;
-  background: var(--preview-accent);
-  box-shadow: clamp(13px, 4.2cqw, 22px) 0 0 color-mix(in srgb, currentColor 42%, transparent);
+  background: var(--preview-light-bg);
+  content: "";
   opacity: 1;
 }
 
-.slide-preview.visual-system-corporate-modular:not([data-kind="cover"])::after {
+.slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover)::after {
   position: absolute;
-  top: clamp(70px, 23cqw, 126px);
-  right: clamp(20px, 6cqw, 34px);
-  left: clamp(20px, 6cqw, 34px);
-  height: 1px;
-  background: color-mix(in srgb, currentColor 24%, transparent);
+  z-index: 0;
+  right: 0;
+  bottom: 0;
+  width: 56%;
+  height: 15%;
+  background: var(--preview-accent);
   content: "";
 }
 
-.slide-preview.visual-system-corporate-modular:not([data-kind="cover"]) .preview-copy {
-  width: 100%;
+.slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover) .preview-frame-field {
+  display: none;
+}
+
+.slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover) .preview-copy {
+  z-index: 2;
+  width: 88%;
   max-width: none;
-  margin-top: clamp(18px, 6cqw, 33px);
+  margin-top: clamp(42px, 6cqw, 58px);
+  margin-right: clamp(8px, 1cqw, 14px);
+  margin-left: clamp(14px, 3cqw, 22px);
+  color: var(--preview-light-text);
 }
 
 .slide-preview.visual-system-corporate-modular .preview-title {
@@ -973,9 +992,35 @@ input:focus {
   letter-spacing: -0.035em;
 }
 
-.slide-preview.visual-system-corporate-modular:not([data-kind="cover"]) .preview-brand {
-  padding-top: clamp(8px, 2.2cqw, 13px);
-  border-top: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+.slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover) .preview-title:not([hidden]),
+.slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover) .preview-title[hidden] + .preview-summary:not(.has-sentence-breaks) {
+  width: auto;
+  padding: 0;
+  color: var(--preview-light-text);
+  background: transparent;
+}
+
+.slide-preview.visual-system-corporate-modular:not([data-kind="cover"])[data-kind="outro"] .preview-title:not([hidden]) {
+  width: auto;
+  padding: 0;
+  color: var(--preview-light-text);
+  background: transparent;
+  font-weight: 400 !important;
+}
+
+.slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover) .preview-page {
+  z-index: 2;
+  top: clamp(50px, 13cqw, 72px);
+  right: clamp(46px, 12cqw, 67px);
+  color: var(--preview-light-text);
+}
+
+.slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover) .preview-brand {
+  z-index: 2;
+  right: clamp(46px, 12cqw, 67px);
+  bottom: clamp(67px, 17cqw, 95px);
+  left: clamp(82px, 22cqw, 122px);
+  color: var(--preview-light-text);
   opacity: 1;
 }
 

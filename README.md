@@ -70,7 +70,7 @@ Tre i modelli di carosello disponibili. Il percorso normale ne consiglia uno; l'
 
 - **Editoriale**: minimal, caratterizzato da una cornice continua 
 - **Geometrico**: estroso, caratterizzato da forme circolari colorate
-- **Istituzionale**: essenziale, caratterizzato da linee di delimitazione e quadratini colorati
+- **Frame**: espressivo e ordinato, con un foglio chiaro incastonato tra fondo scuro e accento del brand
   
 ## Sistema visivo
 

@@ -158,6 +158,16 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertIn("recovery_submissions: recoverySubmissions", self.source)
         self.assertIn('id="export-recovery-button"', self.html)
 
+    def test_auto_apply_failure_stops_spinner_and_keeps_same_batch_retryable(self) -> None:
+        poll = self.source.split("async function pollStatus()", 1)[1].split(
+            "function clearPendingSelection", 1
+        )[0]
+        self.assertIn("approval_processing_error", poll)
+        self.assertIn("awaitingFeedbackId = null", poll)
+        self.assertIn("La richiesta è salvata: puoi ritentare con lo stesso identificativo.", poll)
+        self.assertIn("acknowledgedProcessingErrorId", self.source)
+        self.assertIn("const retryable = Boolean(submissionError && pendingSubmission)", self.source)
+
     def test_saved_recovery_is_quiet_until_a_real_conflict_needs_action(self) -> None:
         validation = self.source.split("function renderValidationState", 1)[1].split(
             "function refreshApprovalValidation", 1
@@ -714,6 +724,43 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         self.assertIn('visual-system-editorial-halftone[data-kind="cover"] .preview-copy', stylesheet)
         self.assertGreaterEqual(stylesheet.count("width: 88%;"), 3)
         self.assertIn("hyphens: none", stylesheet)
+
+    def test_frame_system_uses_all_brand_surfaces_and_an_inset_sheet(self) -> None:
+        self.assertIn('label: "C · Frame"', self.source)
+        self.assertIn('create("div", "preview-frame-field")', self.source)
+        self.assertIn('const usesFrameSheet = selectedVisualSystem === "corporate-modular"', self.source)
+        selector = '.slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover)'
+        self.assertIn(selector, self.stylesheet)
+        corporate_surface = self.stylesheet.split(selector + ' {', 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--preview-dark-bg);", corporate_surface)
+        corporate_sheet = self.stylesheet.split(selector + '::before', 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--preview-light-bg);", corporate_sheet)
+        corporate_accent = self.stylesheet.split(selector + '::after', 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--preview-accent);", corporate_accent)
+        frame_rule = self.stylesheet.split(selector + ' .preview-frame-field', 1)[1].split("}", 1)[0]
+        self.assertIn("display: none;", frame_rule)
+        corporate_copy = self.stylesheet.split(selector + ' .preview-copy', 1)[1].split("}", 1)[0]
+        self.assertIn("width: 88%;", corporate_copy)
+        self.assertIn("margin-left: clamp(14px, 3cqw, 22px);", corporate_copy)
+        self.assertIn("margin-top: clamp(42px, 6cqw, 58px);", corporate_copy)
+        self.assertIn("color: var(--preview-light-text);", corporate_copy)
+        title_rule = self.stylesheet.split(selector + ' .preview-title:not([hidden])', 1)[1].split("}", 1)[0]
+        self.assertIn("background: transparent;", title_rule)
+
+    def test_editorial_system_keeps_its_existing_footer_rule(self) -> None:
+        editorial_brand = self.stylesheet.split(
+            '.slide-preview.visual-system-editorial-frame:is(:not([data-kind="cover"]), .typographic-cover) .preview-brand',
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("border-top: 1px", editorial_brand)
+
+    def test_only_typographic_cover_inherits_the_visual_system(self) -> None:
+        self.assertIn('slide.kind !== "cover"\n        || (slide.kind === "cover" && resolvedCoverMode() === "typographic")', self.source)
+        self.assertIn("if (inheritsVisualSystem) preview.append(constellation, frameField);", self.source)
+        frame_field = self.source.split(
+            'const frameField = create("div", "preview-frame-field")', 1
+        )[1].split('const constellation = create("div", "preview-constellation")', 1)[0]
+        self.assertNotIn("preview.append", frame_field)
 
     def test_local_editor_starts_with_a_clean_proposal_and_advisory_fit(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")

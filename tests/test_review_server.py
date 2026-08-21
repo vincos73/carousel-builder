@@ -49,6 +49,24 @@ class ReturnUrlTest(unittest.TestCase):
                     review_server.return_url_for_thread(invalid)
                 self.assertIsNone(review_server.valid_return_url(invalid))
 
+    def test_resolves_codex_desktop_handoff_from_environment(self) -> None:
+        thread_id = "01a01e64-3e6e-7b71-950d-c425e032e34e"
+        environ = {
+            "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "Codex Desktop",
+            "CODEX_THREAD_ID": thread_id,
+        }
+        self.assertEqual(
+            review_server.resolve_return_url(None, environ=environ),
+            f"codex://threads/{thread_id}",
+        )
+
+    def test_codex_desktop_handoff_fails_closed_without_a_thread(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Codex Desktop richiede"):
+            review_server.resolve_return_url(
+                None,
+                environ={"CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "Codex Desktop"},
+            )
+
 
 class ManifestModelTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -287,6 +305,16 @@ class ManifestModelTest(unittest.TestCase):
             review_server.validate_manifest_contract(manifest)
         manifest = base_manifest()
         manifest["production"]["supported_style_systems"] = ["corporate-modular"]
+        model = self.model(manifest)
+        self.assertTrue(model["production"]["selected_style_supported"])
+        self.assertEqual(
+            model["production"]["supported_style_systems"],
+            ["corporate-modular", "editorial-frame", "editorial-halftone"],
+        )
+        manifest = base_manifest()
+        manifest["production"].update(
+            {"mode": "adapter", "supported_style_systems": ["corporate-modular"]}
+        )
         with self.assertRaisesRegex(ValueError, "deve includere"):
             self.model(manifest)
         for mode in ("renderer", "adapter"):
@@ -294,6 +322,46 @@ class ManifestModelTest(unittest.TestCase):
             manifest["production"].update({"mode": mode, "producer": ""})
             with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "producer"):
                 self.model(manifest)
+
+    def test_auto_apply_failure_is_persisted_for_browser_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest_path = root / "manifest.json"
+            session_dir = root / "session"
+            session_dir.mkdir()
+            feedback_id = str(uuid.uuid4())
+            write_json(manifest_path, {"schema_version": "1.4"})
+            review_server.atomic_write_json(
+                session_dir / "session-state.json",
+                {
+                    "manifest": str(manifest_path),
+                    "last_feedback_id": feedback_id,
+                    "applied_feedback_id": None,
+                },
+            )
+            failed = mock.Mock(
+                returncode=0,
+                stdout=json.dumps(
+                    {"status": "error", "error": "tema visuale non supportato"}
+                ),
+                stderr="",
+            )
+            with mock.patch.object(review_server.subprocess, "run", return_value=failed):
+                result = review_server.auto_process_approval(
+                    manifest_path=manifest_path,
+                    session_dir=session_dir,
+                    event={"feedback_id": feedback_id},
+                )
+            self.assertEqual(result["event"], "approval_processing_error")
+            state = review_server.read_private_json(session_dir / "session-state.json")
+            self.assertEqual(
+                state["approval_processing_error"],
+                {
+                    "feedback_id": feedback_id,
+                    "message": "tema visuale non supportato",
+                    "recorded_at": mock.ANY,
+                },
+            )
 
     def test_renderer_bundle_byte_changes_invalidate_fingerprint(self) -> None:
         manifest = base_manifest()
@@ -501,7 +569,7 @@ class ManifestModelTest(unittest.TestCase):
         )
         self.assertEqual(
             [option["label"] for option in proofs["options"]],
-            ["Editoriale", "Geometrico", "Istituzionale"],
+            ["Editoriale", "Geometrico", "Frame"],
         )
         self.assertEqual(proofs["identity"]["brand"]["name"], "Studio")
         self.assertEqual(proofs["identity"]["cover"]["mode"], "typographic")
@@ -709,7 +777,7 @@ class ManifestModelTest(unittest.TestCase):
         }
         model = self.model(manifest)
         profile = model["brand_profile"]
-        self.assertEqual(model["editor_version"], "2.13.2")
+        self.assertEqual(model["editor_version"], "2.14.0")
         self.assertEqual(profile["profile_type"], "carousel-brand")
         self.assertEqual(profile["visual_signature"]["style_system"], "editorial-halftone")
         self.assertEqual(profile["fonts"]["display"], {"family": "Studio Display", "source": "uploaded"})
