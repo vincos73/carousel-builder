@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -647,7 +648,16 @@ class ReviewServerHTTPTest(unittest.TestCase):
         )
         self.assertEqual(applied.returncode, 0, applied.stderr)
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-        status, approved_model = json_request(self.api("/api/session"))
+        approved_model = None
+        for _ in range(40):
+            status, candidate = json_request(self.api("/api/session"))
+            if status == 200:
+                approved_model = candidate
+                break
+            self.assertEqual(status, 409, candidate)
+            time.sleep(0.05)
+        self.assertIsNotNone(approved_model)
+        assert approved_model is not None
         self.assertEqual(status, 200, approved_model)
         self.assertTrue(approved_model["proof_approved"])
         self.assertEqual(

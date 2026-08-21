@@ -727,8 +727,12 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
     "Persistenza stato approvazione combinata",
   );
   assert.equal(sessionState.applied_feedback_id, approval.feedback_id);
-  assert.equal(sessionState.workflow_state, "prova_visuale_approvata");
-  const approvedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const approvedManifest = await readJsonWhen(
+    manifestPath,
+    (value) => value.workflow_state === "prova_visuale_approvata"
+      && value.proof?.approved === true,
+    "Completamento consenso combinato",
+  );
   assert.equal(approvedManifest.proof.approved, true);
   assert.deepEqual(approvedManifest.proof.browser, approval.proof_browser);
   const proofManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
