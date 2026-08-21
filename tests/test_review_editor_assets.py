@@ -146,6 +146,19 @@ class ReviewEditorAssetTest(unittest.TestCase):
         self.assertIn('const approvalLabel = delivered', self.source)
         self.assertIn("Generare il carosello?", self.source)
 
+    def test_fast_approval_recomputes_the_proof_sample_from_the_live_draft(self) -> None:
+        helper = self.source.split("function canonicalProofSlideIds(slides)", 1)[1].split(
+            "function unseenCanonicalProofSlideIds()", 1
+        )[0]
+        self.assertIn('slide?.kind === "item"', helper)
+        self.assertIn('String(slide.title || "").trim().length', helper)
+        self.assertIn('String(slide.summary || "").trim().length', helper)
+        self.assertIn('density(item) > density(densest)', helper)
+        self.assertIn('model?.workflow_state === "bozza"', helper)
+        self.assertIn('model?.approval_checkpoint === "profile_text"', helper)
+        self.assertIn("canonicalProofSlideIds(draftSlides)", helper)
+        self.assertIn("return serverIds", helper)
+
     def test_stale_pending_is_recovered_and_never_retried_against_a_new_base(self) -> None:
         hydrate = self.source.split("function hydrateDraft()", 1)[1].split("function fontStack", 1)[0]
         retry = self.source.split("async function sendPendingSubmission()", 1)[1].split("async function submit", 1)[0]

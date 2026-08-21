@@ -838,10 +838,29 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
     );
   }
 
+  // Editing the draft can change the densest canonical proof slide. The
+  // approval payload must follow the live draft instead of the server model
+  // that was loaded before the edit. A visual-system change must remain part
+  // of the same valid combined consent.
+  await evaluate(client, approvalPage, `(() => {
+    const input = document.querySelector('#field-item-1-summary');
+    input.value = 'Questa prima card modificata è ora nettamente più densa della seconda card.';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await evaluate(client, approvalPage, `document.querySelector('[data-visual-system="corporate-modular"]').click()`);
+  await waitFor(
+    client,
+    approvalPage,
+    `document.querySelector('.visual-system-option[aria-checked="true"]')?.dataset.visualSystem === 'corporate-modular'
+      && document.documentElement.dataset.previewReady === 'true'
+      && !document.querySelector('#approve-button').disabled`,
+    "sistema visuale modificato prima del consenso combinato",
+  );
+
   // Navigation intent alone does not mark the sample as viewed. This remains
   // an advisory and never prevents the explicit combined consent.
   await evaluate(client, approvalPage, `(() => {
-    for (const slideId of ['cover', 'item-2', 'outro']) {
+    for (const slideId of ['cover', 'item-1', 'outro']) {
       document.querySelector('[data-sequence-slide="' + slideId + '"]').click();
     }
     document.querySelector('#approve-button').click();
@@ -890,7 +909,7 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
 
   // Bring every required preview into the viewport and wait for the real
   // >= 50% IntersectionObserver confirmation before approving.
-  for (const slideId of ["cover", "item-2", "outro"]) {
+  for (const slideId of ["cover", "item-1", "outro"]) {
     await evaluate(client, approvalPage, `document.querySelector('[data-slide-id="${slideId}"] .slide-preview').scrollIntoView({ block: 'center' })`);
     await waitFor(
       client,
@@ -928,7 +947,8 @@ test("browser reale: consenso combinato, fresh production 480x600, riordino, sub
   const feedbackPath = path.join(sessionDirectory, "feedback.json");
   const approval = await readJsonWhen(feedbackPath, (value) => value.action === "approve", "Persistenza approvazione");
   assert.equal(approval.approval_scope, "profile_text_and_visual");
-  assert.deepEqual(approval.proof_slide_ids, ["cover", "item-2", "outro"]);
+  assert.deepEqual(approval.proof_slide_ids, ["cover", "item-1", "outro"]);
+  assert.equal(approval.visual_style_system, "corporate-modular");
   assert.equal(approval.style_system_verified, false);
   assert.equal(approval.proof_browser.engine, "chromium");
   assert.ok(Number.isInteger(approval.proof_browser.major) && approval.proof_browser.major > 0);
