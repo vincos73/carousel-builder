@@ -299,7 +299,7 @@ function manifestFixture() {
       },
     },
     items: [
-      { id: "item-1", layout: "editorial", title: "", summary: "Prima frase.", alt_text: "Prima card" },
+      { id: "item-1", layout: "editorial", title: "", summary: "Prima frase.", summary_accent: ["Prima frase."], alt_text: "Prima card" },
       { id: "item-2", layout: "editorial", title: "", summary: "Seconda frase più densa.", alt_text: "Seconda card" },
     ],
     outro: { enabled: true, title: "Chiusura", body: "Corpo della chiusura.", alt_text: "Chiusura" },
@@ -442,6 +442,7 @@ test("browser reale: i due consensi restano distinti e la prova visiva è read-f
     const attack = firstPreview.querySelector('.preview-title:not([hidden])')
       || firstPreview.querySelector('.preview-title[hidden] + .preview-summary .preview-sentence:first-child')
       || firstPreview.querySelector('.preview-title[hidden] + .preview-summary:not(.has-sentence-breaks)');
+    const highlightedAttack = attack?.querySelector('.preview-accent') || attack;
     return {
       label: document.querySelector('[data-visual-system="corporate-modular"]').textContent,
       coverField: Boolean(document.querySelector('.slide-preview[data-kind="cover"] .preview-frame-field')),
@@ -450,7 +451,7 @@ test("browser reale: i due consensi restano distinti e la prova visiva è read-f
       darkField: style.backgroundColor === color(style.getPropertyValue('--preview-dark-bg')),
       lightSheet: getComputedStyle(firstPreview, '::before').backgroundColor === color(style.getPropertyValue('--preview-light-bg')),
       brandAccent: getComputedStyle(firstPreview, '::after').backgroundColor === color(style.getPropertyValue('--preview-accent')),
-      highlightedAttack: attack && getComputedStyle(attack).backgroundColor !== 'rgba(0, 0, 0, 0)',
+      highlightedAttack: highlightedAttack && getComputedStyle(highlightedAttack).backgroundColor !== 'rgba(0, 0, 0, 0)',
     };
   })()`);
   assert.match(frameLayout.label, /Frame/);

@@ -973,7 +973,7 @@ input:focus {
 }
 
 .slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover) .preview-frame-field {
-  display: none;
+  display: block;
 }
 
 .slide-preview.visual-system-corporate-modular:is(:not([data-kind="cover"]), .typographic-cover) .preview-copy {

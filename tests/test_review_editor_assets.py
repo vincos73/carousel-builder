@@ -738,7 +738,7 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         corporate_accent = self.stylesheet.split(selector + '::after', 1)[1].split("}", 1)[0]
         self.assertIn("background: var(--preview-accent);", corporate_accent)
         frame_rule = self.stylesheet.split(selector + ' .preview-frame-field', 1)[1].split("}", 1)[0]
-        self.assertIn("display: none;", frame_rule)
+        self.assertIn("display: block;", frame_rule)
         corporate_copy = self.stylesheet.split(selector + ' .preview-copy', 1)[1].split("}", 1)[0]
         self.assertIn("width: 88%;", corporate_copy)
         self.assertIn("margin-left: clamp(14px, 3cqw, 22px);", corporate_copy)
