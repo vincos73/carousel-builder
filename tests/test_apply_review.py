@@ -173,6 +173,26 @@ class ApplyReviewTest(unittest.TestCase):
             "Usa la versione 1.2.\nPoi riavvia.\nFatto.",
         )
 
+    def test_literal_line_break_normalization_does_not_stale_accessibility(self) -> None:
+        manifest = base_manifest()
+        manifest["items"][0]["summary"] = r"Prima frase.\nSeconda frase."
+        manifest["items"][0]["alt_text"] = "Prima frase. Seconda frase."
+        manifest["accessibility"]["transcript"] = "Prima frase. Seconda frase."
+        result = self.apply(
+            manifest,
+            base_feedback(
+                self.full_batch(**{"item-1": "Prima frase.\nSeconda frase."})
+            ),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(
+            self.manifest()["items"][0]["summary"],
+            "Prima frase.\nSeconda frase.",
+        )
+        self.assertNotIn("item-1", payload["stale_alt_text"])
+        self.assertFalse(payload["stale_transcript"])
+
     def test_enforces_all_sentence_endings_without_splitting_abbreviations_or_urls(self) -> None:
         copy = (
             "Dott. Rossi usa la versione 1.2. Funziona? Sì! Certo… "
@@ -782,6 +802,20 @@ class ApplyReviewTest(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["stale_alt_text"], ["item-2"])
         self.assertTrue(payload["stale_transcript"])
+
+    def test_line_break_only_edits_do_not_stale_accessibility_copy(self) -> None:
+        manifest = base_manifest()
+        manifest["items"][0]["summary"] = "Prima parte: seconda parte."
+        batch = self.full_batch()
+        batch[1]["summary"] = "Prima parte:\nseconda parte."
+
+        result = self.apply(manifest, base_feedback(batch))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertIn("items", payload["changed"])
+        self.assertEqual(payload["stale_alt_text"], [])
+        self.assertFalse(payload["stale_transcript"])
 
     def test_leaves_a_manifest_without_optional_sections_untouched(self) -> None:
         manifest = base_manifest()

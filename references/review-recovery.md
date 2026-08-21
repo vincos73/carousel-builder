@@ -2,7 +2,7 @@
 
 Leggere questa reference soltanto dopo un'interruzione, una risposta HTTP persa, un conflitto fra schede o un errore di applicazione. Non usarla nel percorso normale.
 
-`session-state.json` è la fonte durevole. L'output del server è soltanto una notifica immediata. Riavviare `review_server.py` con lo stesso manifest e la stessa cartella di sessione: il journal completa un eventuale commit interrotto prima di accettare nuovi invii.
+`session-state.json` è la fonte durevole. L'output del server è soltanto una notifica immediata. Un timeout dell'agente o la chiusura del processo non annulla un'approvazione già persistita. Riavviare `review_server.py` con lo stesso manifest e la stessa cartella di sessione: il journal completa un eventuale commit interrotto prima di accettare nuovi invii. Eseguire quindi `carousel_status.py`, applicare l'eventuale batch pendente e riprendere dal `next_action` senza chiedere all'utente di approvare di nuovo.
 
 Il browser salva bozza e ID idempotente prima della POST, mantiene recovery append-only separate per scheda e rimuove il pending soltanto quando lo stesso `feedback_id` risulta applicato. Il server conserva i batch in `feedback-batches/`, mantiene `feedback.json` come alias verificato dell'ultimo batch e riemette all'avvio un batch pendente. Non ricreare né modificare manualmente questi file.
 

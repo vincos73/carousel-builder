@@ -946,7 +946,22 @@ def feedback_archive_path(session_dir: Path, feedback_id: object) -> Path:
 
 
 def sentence_line_breaks(value: str) -> str:
-    """Separate complete sentences after .?!… without splitting common abbreviations."""
+    """Normalize line breaks and separate sentences without splitting abbreviations."""
+
+    # A manifest author can accidentally double-escape JSON newlines, leaving
+    # the two visible characters backslash+n in the decoded copy. They are
+    # never a meaningful rendering token in carousel text, so normalize them
+    # before the draft reaches the editor. Keep this conditional so
+    # TrackingString tests still observe the normal fast path without an eager
+    # full copy.
+    if "\\n" in value or "\\r" in value or "\r" in value:
+        value = (
+            value.replace("\\r\\n", "\n")
+            .replace("\\n", "\n")
+            .replace("\\r", "\n")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+        )
 
     def replace(match: re.Match[str]) -> str:
         punctuation = match.group(1)

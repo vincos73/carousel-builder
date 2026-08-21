@@ -67,7 +67,7 @@ from manifest_contract import (  # noqa: E402
 
 MAX_BODY_BYTES = 1_000_000
 MAX_COMMENTS = 200
-EDITOR_VERSION = "2.12.6"
+EDITOR_VERSION = "2.13.1"
 RENDER_CONTRACT = "approved-preview-dom-v2"
 EMPHASIS_RANGE_SUFFIX = "_ranges"
 TYPOGRAPHY_DEFAULTS = {

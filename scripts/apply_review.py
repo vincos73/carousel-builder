@@ -279,6 +279,11 @@ def require_text(value: object, field: str) -> str:
     return value
 
 
+def accessibility_text(value: object) -> str:
+    """Normalize layout-only whitespace before accessibility staleness checks."""
+    return " ".join(sentence_line_breaks(value).split()) if isinstance(value, str) else ""
+
+
 EMPHASIS_KEYS = {
     "cover_title": ("cover_title_bold", "cover_title_italic", "cover_title_serif", "cover_title_accent", "cover_title_underline"),
     "cover_subtitle": ("cover_subtitle_bold", "cover_subtitle_italic", "cover_subtitle_serif", "cover_subtitle_accent", "cover_subtitle_underline"),
@@ -943,7 +948,13 @@ def main() -> int:
         )
         if cover_dropped:
             emphasis_dropped["cover"] = cover_dropped
-        if cover_copy_changed and manifest.get("cover_alt_text"):
+        cover_accessibility_copy_changed = (
+            accessibility_text(manifest.get("cover_title"))
+            != accessibility_text(new_cover)
+            or accessibility_text(manifest.get("cover_subtitle"))
+            != accessibility_text(new_cover_subtitle)
+        )
+        if cover_accessibility_copy_changed and manifest.get("cover_alt_text"):
             stale_alt_text.append("cover")
 
         new_items: list[dict] = []
@@ -987,7 +998,13 @@ def main() -> int:
             )
             if dropped:
                 emphasis_dropped[str(item_id)] = dropped
-            if text_changed and updated.get("alt_text"):
+            accessibility_copy_changed = (
+                accessibility_text(previous.get("title"))
+                != accessibility_text(updated.get("title"))
+                or accessibility_text(previous.get("summary"))
+                != accessibility_text(updated.get("summary"))
+            )
+            if accessibility_copy_changed and updated.get("alt_text"):
                 stale_alt_text.append(str(item_id))
             new_items.append(updated)
         if not new_items:
@@ -1004,6 +1021,16 @@ def main() -> int:
                 for item in new_items
             )
         )
+        items_accessibility_copy_or_order_changed = (
+            original_item_ids != new_item_ids
+            or any(
+                accessibility_text(by_id[str(item["id"])].get("title"))
+                != accessibility_text(item.get("title"))
+                or accessibility_text(by_id[str(item["id"])].get("summary"))
+                != accessibility_text(item.get("summary"))
+                for item in new_items
+            )
+        )
         item_emphasis_keys = EMPHASIS_KEYS["title"] + EMPHASIS_KEYS["summary"] + EMPHASIS_RANGE_KEYS["title"] + EMPHASIS_RANGE_KEYS["summary"]
         items_emphasis_changed = any(
             any(
@@ -1015,6 +1042,7 @@ def main() -> int:
 
         new_outro = None
         outro_copy_changed = False
+        outro_accessibility_copy_changed = False
         outro_emphasis_changed = False
         if outro_enabled:
             outro_slide = slides[-1]
@@ -1027,7 +1055,13 @@ def main() -> int:
                 manifest["outro"].get("title", "") != new_outro["title"]
                 or manifest["outro"].get("body", "") != new_outro["body"]
             )
-            if outro_copy_changed and new_outro.get("alt_text"):
+            outro_accessibility_copy_changed = (
+                accessibility_text(manifest["outro"].get("title"))
+                != accessibility_text(new_outro.get("title"))
+                or accessibility_text(manifest["outro"].get("body"))
+                != accessibility_text(new_outro.get("body"))
+            )
+            if outro_accessibility_copy_changed and new_outro.get("alt_text"):
                 stale_alt_text.append("outro")
             outro_dropped = sync_emphasis(
                 new_outro,
@@ -1193,8 +1227,14 @@ def main() -> int:
             rewind_target = "testi_approvati"
         review_reopened = rewind_target is not None
 
+        accessibility_copy_or_order_changed = bool(
+            cover_accessibility_copy_changed
+            or items_accessibility_copy_or_order_changed
+            or outro_accessibility_copy_changed
+            or new_reading_order is not None
+        )
         stale_transcript = bool(
-            editorial_changed
+            accessibility_copy_or_order_changed
             and accessibility is not None
             and accessibility.get("transcript")
         )
