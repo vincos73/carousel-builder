@@ -282,7 +282,7 @@ class ReviewServerHTTPTest(unittest.TestCase):
         }
         self.assertEqual(
             font_paths,
-            set(),
+            {"/assets/fonts/Orbitron-Variable.ttf"},
         )
         for path in font_paths:
             font_status, payload = request(f"{self.origin}{path}")

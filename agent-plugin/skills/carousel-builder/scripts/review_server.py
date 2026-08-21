@@ -2018,6 +2018,10 @@ def main() -> int:
                     assets_dir / "vincos-lockup-white.svg",
                     "image/svg+xml; charset=utf-8",
                 ),
+                "/assets/fonts/Orbitron-Variable.ttf": (
+                    assets_dir / "fonts" / "Orbitron-Variable.ttf",
+                    "font/ttf",
+                ),
             }
             static_asset = static_assets.get(parsed.path)
             if static_asset is not None:

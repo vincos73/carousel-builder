@@ -1,3 +1,11 @@
+@font-face {
+  font-family: "Carousel Orbitron";
+  src: url("/assets/fonts/Orbitron-Variable.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400 900;
+  font-display: swap;
+}
+
 :root {
   --ink: #162033;
   --muted: #667085;
@@ -2012,10 +2020,11 @@ input:focus {
   align-items: baseline;
   gap: 0.42em;
   color: var(--editor-plum-on-dark);
-  font-family: "Times New Roman", Times, serif;
-  font-size: clamp(22px, 1.7vw, 28px);
-  letter-spacing: -0.015em;
+  font-family: "Carousel Orbitron", Arial, sans-serif;
+  font-size: clamp(16px, 1.4vw, 21px);
+  letter-spacing: 0.045em;
   line-height: 1;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -2025,13 +2034,13 @@ input:focus {
 
 .product-title-primary {
   color: #e4bfd5;
-  font-weight: 400;
+  font-weight: 650;
 }
 
 .product-title-secondary {
   color: var(--editor-plum-on-dark);
-  font-weight: 400;
-  letter-spacing: -0.015em;
+  font-weight: 450;
+  letter-spacing: 0.085em;
 }
 
 .product-byline {

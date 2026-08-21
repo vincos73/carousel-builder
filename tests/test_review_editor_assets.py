@@ -250,9 +250,21 @@ assert.equal(fontAssetRequiresVerifiedLoad({ available: true }), true);
         self.assertIn('const titleWeight = slide.kind === "cover"', self.source)
         self.assertIn('numberValue(type.cover_weight, 500)', self.source)
         self.assertIn("fontLoadCache.get(key) === pending", self.source)
-        self.assertNotIn("@font-face", self.stylesheet)
+        self.assertIn('@font-face {\n  font-family: "Carousel Orbitron";', self.stylesheet)
+        self.assertIn('src: url("/assets/fonts/Orbitron-Variable.ttf") format("truetype");', self.stylesheet)
         self.assertIn('font-family: Arial, "Helvetica Neue", sans-serif;', self.stylesheet)
         self.assertIn('font-family: "Times New Roman", Times, serif;', self.stylesheet)
+
+    def test_product_wordmark_uses_bundled_orbitron_without_changing_ui_font(self) -> None:
+        self.assertIn('<span class="product-title-primary">Carousel</span>', self.html)
+        self.assertIn('<span class="product-title-secondary">Builder</span>', self.html)
+        wordmark = self.stylesheet.split(".product-title {", 1)[1].split("}", 1)[0]
+        self.assertIn('font-family: "Carousel Orbitron", Arial, sans-serif;', wordmark)
+        self.assertIn("text-transform: uppercase;", wordmark)
+        self.assertIn("font-size: clamp(16px, 1.4vw, 21px);", wordmark)
+        self.assertIn("font-family: Arial", self.stylesheet.split(":root {", 1)[1].split("}", 1)[0])
+        self.assertTrue((EDITOR_DIR / "fonts" / "Orbitron-Variable.ttf").is_file())
+        self.assertTrue((EDITOR_DIR / "fonts" / "Orbitron-OFL.txt").is_file())
 
     def test_foreign_pending_locks_without_claiming_or_discarding_local_draft(self) -> None:
         poll = self.source.split("async function pollStatus()", 1)[1].split("function clearPendingSelection", 1)[0]
@@ -558,11 +570,22 @@ assert.equal(geometryPartIsHidden(node(1, true), { display: "block", visibility:
         self.assertNotIn("*::before", reduced_motion)
 
     def test_root_and_agent_plugin_editors_match(self) -> None:
-        for name in ("app.js", "index.html", "styles.css", "vincos-lockup-white.svg"):
-            with self.subTest(name=name):
+        root_files = {
+            path.relative_to(EDITOR_DIR)
+            for path in EDITOR_DIR.rglob("*")
+            if path.is_file()
+        }
+        plugin_files = {
+            path.relative_to(PLUGIN_EDITOR_DIR)
+            for path in PLUGIN_EDITOR_DIR.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(root_files, plugin_files)
+        for relative_path in sorted(root_files):
+            with self.subTest(name=str(relative_path)):
                 self.assertEqual(
-                    (EDITOR_DIR / name).read_bytes(),
-                    (PLUGIN_EDITOR_DIR / name).read_bytes(),
+                    (EDITOR_DIR / relative_path).read_bytes(),
+                    (PLUGIN_EDITOR_DIR / relative_path).read_bytes(),
                 )
 
     def test_root_and_agent_plugin_exporters_match(self) -> None:
